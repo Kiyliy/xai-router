@@ -100,7 +100,8 @@ func (m *mockXAI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			jsonResp(w, 404, `{"error":"response not found"}`)
 			return
 		}
-		jsonResp(w, 200, fmt.Sprintf(`{"id":%q,"object":"response","status":"completed"}`, id))
+		// Like xAI, a retrieval echoes the original usage including its cost.
+		jsonResp(w, 200, fmt.Sprintf(`{"id":%q,"object":"response","status":"completed","usage":{"input_tokens":1000,"output_tokens":100,"cost_in_usd_ticks":15000000}}`, id))
 	case r.Method == "POST" && r.URL.Path == "/v1/videos/generations":
 		jsonResp(w, 200, fmt.Sprintf(`{"request_id":%q}`, m.newID("vid", key)))
 	case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/v1/videos/"):
@@ -431,7 +432,7 @@ func TestClientErrorReturnedVerbatim(t *testing.T) {
 	if err := json.Unmarshal(body, &parsed); err != nil || len(body) < 1500 {
 		t.Fatalf("error body truncated or invalid (%d bytes): %v", len(body), err)
 	}
-	if l := e.waitLogs(1)[0]; l.Attempts != 1 || l.Status != 400 {
+	if l := e.waitLogs(1)[0]; l.Attempts != 1 || l.Status != 400 || l.CostSource != "none" {
 		t.Fatalf("client error must not be retried: %+v", l)
 	}
 }
@@ -487,6 +488,12 @@ func TestResponsesBinding(t *testing.T) {
 	}
 	logs := e.waitLogs(18)
 	for _, l := range logs {
+		if strings.HasPrefix(l.Path, "/v1/responses/") {
+			if l.CostUSD != 0 || l.CostSource != "none" || l.PromptTokens != 0 {
+				t.Fatalf("retrieving a stored response must be free: %+v", l)
+			}
+			continue
+		}
 		if l.Path == "/v1/responses" && l.Model == "grok-4.3" && l.CostSource != "computed" {
 			t.Fatalf("responses cost: %+v", l)
 		}

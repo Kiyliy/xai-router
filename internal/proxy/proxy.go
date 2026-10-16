@@ -446,24 +446,31 @@ func (st *state) handleBody(r *http.Request, body []byte) {
 			st.log.RespText, st.log.ReasoningText = truncateStr(t, limit), truncateStr(rs, limit)
 		}
 	}
-	// Async jobs: the poll that returns the finished job carries the cost of
-	// the whole job. Charge it once, to whoever polls first.
-	if kind, id, ok := isAsyncPoll(r.Method, r.URL.Path); ok && u.HasCost {
+	kind, id, poll := isAsyncPoll(r.Method, r.URL.Path)
+	switch {
+	case r.Method == http.MethodGet && !poll:
+		// Retrievals (GET /v1/responses/{id}, files, batches…) echo the usage
+		// of the original request; they are free.
+		u = billing.Usage{}
+	case poll:
+		// The poll that returns a finished job carries the cost of the whole
+		// job. Pending polls are free, and a job is charged once, to the
+		// first poll that sees it finished.
+		done := st.log.Status == http.StatusOK && env.Status != "pending" &&
+			(u.HasCost || u.VideoSeconds > 0 || u.Images > 0 || u.PromptTokens > 0)
+		if !done {
+			u = billing.Usage{}
+			break
+		}
 		if b, err := st.h.DB.GetBinding(r.Context(), id); err == nil {
 			if st.log.Model == "" {
 				st.log.Model = b.Model
 			}
-			first, err := st.h.DB.MarkBindingBilled(r.Context(), id)
-			if err == nil && !first {
-				u.HasCost, u.CostTicks = false, 0
-				u.VideoSeconds, u.Images = 0, 0
-				st.log.Error = kind + " job already billed by an earlier poll"
+			if first, err := st.h.DB.MarkBindingBilled(r.Context(), id); err == nil && !first {
+				st.h.Log.Debug("async job already billed", "kind", kind, "id", id)
+				u = billing.Usage{}
 			}
 		}
-	}
-	if !u.HasCost && (env.Status == "pending" || r.Method == http.MethodGet) {
-		// Polls of pending jobs and plain GETs are free; don't price them.
-		u.VideoSeconds, u.Images = 0, 0
 	}
 	st.applyUsage(u)
 	if kind := createdResourceKind(r.Method, r.URL.Path, st.info.Deferred); kind != "" {
@@ -545,6 +552,9 @@ func (st *state) finish(r *http.Request) {
 	l := st.log
 	l.LatencyMs = time.Since(st.start).Milliseconds()
 	l.Attempts = st.attempts
+	if l.CostSource == "" {
+		l.CostSource = "none"
+	}
 	if l.Status == 0 {
 		l.Status = 499
 		if l.Error == "" {
