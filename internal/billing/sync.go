@@ -67,6 +67,12 @@ func (s *Syncer) Sync(ctx context.Context, baseURL, apiKey string, overwriteManu
 	var lang struct{ Models []xaiLanguageModel }
 	var img struct{ Models []xaiImageModel }
 	var vid, emb struct{ Models []xaiPlainModel }
+	var all struct {
+		Data []struct {
+			ID            string `json:"id"`
+			ContextLength int64  `json:"context_length"`
+		} `json:"data"`
+	}
 	for _, f := range []struct {
 		path string
 		dst  any
@@ -75,6 +81,7 @@ func (s *Syncer) Sync(ctx context.Context, baseURL, apiKey string, overwriteManu
 		{"/v1/image-generation-models", &img},
 		{"/v1/video-generation-models", &vid},
 		{"/v1/embedding-models", &emb},
+		{"/v1/models", &all},
 	} {
 		if err := s.get(ctx, baseURL+f.path, apiKey, f.dst); err != nil {
 			res.Error = err.Error()
@@ -89,7 +96,14 @@ func (s *Syncer) Sync(ctx context.Context, baseURL, apiKey string, overwriteManu
 	}
 	now := store.NowMs()
 	var incoming []*store.Model
+	ctxLen := map[string]int64{}
+	for _, m := range all.Data {
+		ctxLen[m.ID] = m.ContextLength
+	}
 	for _, m := range lang.Models {
+		if m.ContextLength == 0 {
+			m.ContextLength = ctxLen[m.ID]
+		}
 		raw, _ := json.Marshal(m)
 		incoming = append(incoming, &store.Model{ID: m.ID, Kind: "language", Aliases: m.Aliases, ContextLength: m.ContextLength,
 			InputTicks: m.PromptTextTokenPrice, CachedTicks: m.CachedPromptTokenPrice, ImageInputTicks: m.PromptImageTokenPrice,

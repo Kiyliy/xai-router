@@ -79,7 +79,7 @@ func TestLogsStatsAndCounters(t *testing.T) {
 	if err != nil || len(rows) != 1 || rows[0].Requests != 2 {
 		t.Fatalf("breakdown: %+v %v", rows, err)
 	}
-	series, err := db.StatsSeries(ctx, now-3600_000, 3600_000, "key")
+	series, err := db.StatsSeries(ctx, now-3600_000, 3600_000, 0, "key")
 	if err != nil || len(series) != 2 {
 		t.Fatalf("series: %+v %v", series, err)
 	}

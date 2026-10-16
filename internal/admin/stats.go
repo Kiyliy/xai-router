@@ -25,14 +25,9 @@ func rangeStart(r *http.Request) (string, int64, bool) {
 	if !ok {
 		return rg, 0, false
 	}
-	from := time.Now().Add(-d)
-	if d > time.Hour {
-		// Include the partial first hour so totals cover the whole window.
-		from = from.Truncate(time.Hour).Add(time.Hour)
-	} else {
-		from = from.Truncate(time.Hour)
-	}
-	return rg, from.UnixMilli(), true
+	// Stats are kept per hour, so the window starts at the beginning of the
+	// hour containing now-d: it covers at least d (and at most d+1h).
+	return rg, time.Now().Add(-d).Truncate(time.Hour).UnixMilli(), true
 }
 
 func aggJSON(a store.Agg) map[string]any {
@@ -172,6 +167,15 @@ func (s *Server) statsTimeseries(w http.ResponseWriter, r *http.Request) {
 	if group == "" {
 		group = "none"
 	}
+	// Day buckets follow the viewer's time zone (tz_offset_minutes east of
+	// UTC, e.g. 480 for UTC+8); hour buckets are zone independent.
+	var offset int64
+	if bucket == 86400_000 {
+		mins, _ := strconv.Atoi(q.Get("tz_offset_minutes"))
+		if mins >= -14*60 && mins <= 14*60 {
+			offset = int64(mins) * 60_000
+		}
+	}
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	if limit <= 0 {
 		limit = 6
@@ -181,14 +185,14 @@ func (s *Server) statsTimeseries(w http.ResponseWriter, r *http.Request) {
 	if bucket < 3600_000 {
 		rows, err = s.DB.StatsSeriesLogs(r.Context(), from, bucket, group)
 	} else {
-		rows, err = s.DB.StatsSeries(r.Context(), from, bucket, group)
+		rows, err = s.DB.StatsSeries(r.Context(), from, bucket, offset, group)
 	}
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_group", "group must be none, model, key or token")
 		return
 	}
 	// Buckets from the start of the range to now.
-	start := from / bucket * bucket
+	start := (from+offset)/bucket*bucket - offset
 	now := time.Now().UnixMilli()
 	var buckets []int64
 	for b := start; b <= now; b += bucket {

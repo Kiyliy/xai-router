@@ -6,6 +6,7 @@ package pool
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Kiyliy/xai-router/internal/config"
 	"github.com/Kiyliy/xai-router/internal/store"
@@ -28,6 +30,7 @@ const (
 	ActionRetry    = "retry"    // try the next key
 	ActionCooldown = "cooldown" // key paused (429 or breaker opened); next key
 	ActionDisable  = "disable"  // key auto-disabled; next key
+	ActionVerify   = "verify"   // looks like a dead key: verifying with GET /v1/api-key; next key
 )
 
 type entry struct {
@@ -41,8 +44,17 @@ type entry struct {
 
 func (e *entry) disabled() bool { return !e.key.Enabled || e.key.AutoDisabled }
 
+// Verifier checks a key out of band (GET /v1/api-key). It returns whether
+// the key is unusable and why.
+type Verifier func(ctx context.Context, k *store.Key) (dead bool, reason string)
+
 // Pool is safe for concurrent use.
 type Pool struct {
+	// Verify confirms suspected dead keys before they are disabled. When nil,
+	// suspected keys are only skipped for the current request.
+	Verify    Verifier
+	verifying map[int64]time.Time
+
 	db       *store.DB
 	settings *config.Holder
 	log      *slog.Logger
@@ -102,7 +114,8 @@ func (p *Pool) Candidates(boundKeyID int64) []*store.Key {
 	now := p.now()
 	if boundKeyID != 0 {
 		if e := p.entries[boundKeyID]; e != nil {
-			return []*store.Key{e.key}
+			k := *e.key
+			return []*store.Key{&k}
 		}
 		return nil
 	}
@@ -139,7 +152,8 @@ func (p *Pool) Candidates(boundKeyID int64) []*store.Key {
 			weightedShuffle(group)
 		}
 		for _, e := range group {
-			out = append(out, e.key)
+			k := *e.key // callers get a snapshot; the pool mutates its own copy
+			out = append(out, &k)
 		}
 	}
 	if len(out) == 0 && len(resting) > 0 {
@@ -147,7 +161,8 @@ func (p *Pool) Candidates(boundKeyID int64) []*store.Key {
 			return later(a.cooldownUntil, a.breakerUntil).Compare(later(b.cooldownUntil, b.breakerUntil))
 		})
 		for _, e := range resting {
-			out = append(out, e.key)
+			k := *e.key
+			out = append(out, &k)
 		}
 	}
 	return out
@@ -227,13 +242,15 @@ type Outcome struct {
 	Header  http.Header
 	NetErr  error
 	Timeout bool
+	Echo    []string // client-supplied values the upstream may echo (model name…)
 }
 
 // Verdict is what the proxy should do after an attempt.
 type Verdict struct {
-	Action string
-	Reason string
-	Retry  bool // try the next key
+	Action  string
+	Reason  string
+	Retry   bool // try the next key
+	Penalty bool // counts towards the circuit breaker
 }
 
 // Report classifies an attempt and updates the key's health.
@@ -256,6 +273,17 @@ func (p *Pool) Report(id int64, o Outcome) Verdict {
 			e.cooldownUntil = time.Time{}
 			persist = p.persistState(e)
 		}
+	case ActionVerify:
+		if p.Verify != nil {
+			if p.verifying == nil {
+				p.verifying = map[int64]time.Time{}
+			}
+			if last, busy := p.verifying[id]; !busy || now.Sub(last) > time.Minute {
+				p.verifying[id] = now
+				k := *e.key
+				go p.verify(&k)
+			}
+		}
 	case ActionDisable:
 		e.key.AutoDisabled = true
 		e.key.StatusReason = v.Reason
@@ -271,11 +299,20 @@ func (p *Pool) Report(id int64, o Outcome) Verdict {
 		persist = p.persistState(e)
 		p.log.Info("key cooling down", "key_id", id, "key", e.key.Name, "for", d.String(), "reason", v.Reason)
 	case ActionRetry:
+		if !v.Penalty {
+			break
+		}
 		e.consecFails++
 		if e.consecFails >= s.BreakerThreshold {
 			e.breakerUntil = now.Add(time.Duration(s.BreakerSeconds) * time.Second)
 			v.Action = ActionCooldown
 			v.Reason = fmt.Sprintf("circuit open after %d consecutive failures: %s", e.consecFails, v.Reason)
+			// Persist as a cooldown so filters and restarts see it too.
+			if e.breakerUntil.After(e.cooldownUntil) {
+				e.cooldownUntil = e.breakerUntil
+			}
+			e.key.StatusReason = v.Reason
+			persist = p.persistState(e)
 			p.log.Info("key circuit open", "key_id", id, "key", e.key.Name, "reason", v.Reason)
 		}
 	}
@@ -284,6 +321,21 @@ func (p *Pool) Report(id int64, o Outcome) Verdict {
 		persist()
 	}
 	return v
+}
+
+func (p *Pool) verify(k *store.Key) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	dead, reason := p.Verify(ctx, k)
+	if !dead {
+		p.log.Info("suspected key verified healthy", "key_id", k.ID, "key", k.Name)
+		return
+	}
+	if err := p.Disable(ctx, k.ID, reason); err != nil {
+		p.log.Error("disable key", "key_id", k.ID, "err", err)
+		return
+	}
+	p.log.Warn("key auto-disabled", "key_id", k.ID, "key", k.Name, "reason", reason)
 }
 
 func (p *Pool) persistState(e *entry) func() {
@@ -311,34 +363,118 @@ func classify(s *config.Settings, o Outcome) Verdict {
 		if o.Timeout {
 			reason = "upstream timeout"
 		}
-		return Verdict{Action: ActionRetry, Reason: reason, Retry: true}
+		return Verdict{Action: ActionRetry, Reason: reason, Retry: true, Penalty: true}
 	}
 	if o.Status < 400 {
 		return Verdict{Action: ActionSuccess}
 	}
-	snippet := strings.TrimSpace(o.Body)
-	if len(snippet) > 200 {
-		snippet = snippet[:200] + "…"
-	}
+	// Upstream errors often echo client input (e.g. "the model <model> does
+	// not exist"), so keywords are matched against the error message with
+	// the client-supplied values removed, never against the raw body.
+	msg := ErrorMessage(o.Body, o.Echo)
+	snippet := truncateRunes(msg, 200)
 	label := strconv.Itoa(o.Status)
-	if kw := config.MatchKeyword(o.Body, s.DisableKeywords); kw != "" {
-		return Verdict{Action: ActionDisable, Reason: fmt.Sprintf("HTTP %s: %s", label, snippet), Retry: true}
+	reason := fmt.Sprintf("HTTP %s: %s", label, snippet)
+	switch o.Status {
+	case http.StatusUnauthorized:
+		return Verdict{Action: ActionDisable, Reason: reason, Retry: true}
+	case http.StatusPaymentRequired, http.StatusForbidden, http.StatusTooManyRequests:
+		// Only account-level statuses can mark a key dead.
+		if kw := config.MatchKeyword(msg, s.DisableKeywords); kw != "" {
+			return Verdict{Action: ActionDisable, Reason: reason, Retry: true}
+		}
 	}
-	switch {
-	case o.Status == http.StatusUnauthorized:
-		return Verdict{Action: ActionDisable, Reason: fmt.Sprintf("HTTP 401: %s", snippet), Retry: true}
-	case o.Status == http.StatusTooManyRequests:
-		return Verdict{Action: ActionCooldown, Reason: fmt.Sprintf("rate limited (429): %s", snippet), Retry: true}
+	if o.Status == http.StatusTooManyRequests {
+		return Verdict{Action: ActionCooldown, Reason: "rate limited (429): " + snippet, Retry: true}
+	}
+	if kw := config.MatchKeyword(msg, s.DisableKeywords); kw != "" {
+		// e.g. 400 "Incorrect API key provided". The status could also come
+		// from a bad request whose input is echoed, so the key is only
+		// disabled after an out-of-band check confirms it.
+		return Verdict{Action: ActionVerify, Reason: reason, Retry: true}
 	}
 	if s.IsRetryStatus(o.Status) {
-		return Verdict{Action: ActionRetry, Reason: fmt.Sprintf("HTTP %s: %s", label, snippet), Retry: true}
+		// Server errors count towards the circuit breaker; client-class
+		// statuses (403 etc.) may be caused by the request itself, so they
+		// only move on to the next key.
+		return Verdict{Action: ActionRetry, Reason: reason, Retry: true, Penalty: o.Status >= 500 || o.Status == 408}
 	}
-	if o.Status >= 400 && o.Status < 500 {
-		if kw := config.MatchKeyword(o.Body, s.RetryKeywords); kw != "" {
+	if o.Status < 500 {
+		if kw := config.MatchKeyword(msg, s.RetryKeywords); kw != "" {
 			return Verdict{Action: ActionRetry, Reason: fmt.Sprintf("HTTP %s matched %q: %s", label, kw, snippet), Retry: true}
 		}
 	}
-	return Verdict{Action: ActionReturn, Reason: fmt.Sprintf("HTTP %s", label)}
+	return Verdict{Action: ActionReturn, Reason: reason}
+}
+
+// ErrorMessage extracts the human-readable message of an error body
+// ({"error":"…"}, {"error":{"message":"…"}}, {"message":"…"}, {"code":"…"}),
+// falling back to the raw text, and removes the given client-supplied
+// strings (case-insensitively).
+func ErrorMessage(body string, echo []string) string {
+	msg := strings.TrimSpace(body)
+	var v struct {
+		Error   any    `json:"error"`
+		Message string `json:"message"`
+		Code    any    `json:"code"`
+	}
+	if json.Unmarshal([]byte(msg), &v) == nil {
+		var parts []string
+		switch e := v.Error.(type) {
+		case string:
+			parts = append(parts, e)
+		case map[string]any:
+			for _, k := range []string{"message", "type", "code"} {
+				if s, ok := e[k].(string); ok && s != "" {
+					parts = append(parts, s)
+				}
+			}
+		}
+		if v.Message != "" {
+			parts = append(parts, v.Message)
+		}
+		if c, ok := v.Code.(string); ok && c != "" {
+			parts = append(parts, c)
+		}
+		if len(parts) > 0 {
+			msg = strings.Join(parts, " | ")
+		}
+	}
+	for _, e := range echo {
+		if len(e) < 2 {
+			continue
+		}
+		msg = replaceFold(msg, e, "<client input>")
+	}
+	return msg
+}
+
+func replaceFold(s, old, repl string) string {
+	lo, lold := strings.ToLower(s), strings.ToLower(old)
+	if len(lo) != len(s) { // non-ASCII case folding changed lengths; fall back
+		return strings.ReplaceAll(s, old, repl)
+	}
+	var b strings.Builder
+	for {
+		i := strings.Index(lo, lold)
+		if i < 0 {
+			b.WriteString(s)
+			return b.String()
+		}
+		b.WriteString(s[:i])
+		b.WriteString(repl)
+		s, lo = s[i+len(old):], lo[i+len(old):]
+	}
+}
+
+func truncateRunes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + "…"
 }
 
 func retryAfter(h http.Header) time.Duration {

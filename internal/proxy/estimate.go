@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 
+	"github.com/Kiyliy/xai-router/internal/billing"
 	"github.com/Kiyliy/xai-router/internal/store"
 )
 
@@ -24,6 +25,12 @@ const (
 func (st *state) estimate(method, path string) int64 {
 	if method != "POST" {
 		return 0
+	}
+	switch path {
+	case "/v1/tts":
+		return st.info.TextChars * billing.TTSTicksPerChar
+	case "/v1/stt":
+		return billing.STTRestTicksPerHour // assume up to one hour of audio
 	}
 	m := st.h.Prices.Lookup(st.info.Model)
 	if m == nil {

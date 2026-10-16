@@ -9,6 +9,7 @@ const (
 	RealtimeTicksPerText   = 40_000_000    // speech to speech: $0.004 / text input
 	TTSTicksPerChar        = 150_000       // text to speech: $15.00 / 1M characters
 	STTStreamTicksPerHour  = 2_000_000_000 // streaming speech to text: $0.20 / hour
+	STTRestTicksPerHour    = 1_000_000_000 // speech to text (REST): $0.10 / hour
 )
 
 // WSUsage is what the gateway measured during a WebSocket session.

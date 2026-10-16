@@ -158,7 +158,8 @@ func (s *Server) logCurl(w http.ResponseWriter, r *http.Request) {
 	if l.Stream {
 		b.WriteString(" -N")
 	}
-	b.WriteString(" \\\n  -H " + shellQuote("Authorization: Bearer $XR_API_KEY"))
+	// Double quotes so the shell expands $XR_API_KEY.
+	b.WriteString(" \\\n  -H \"Authorization: Bearer $XR_API_KEY\"")
 	hdrs := headersMap(l.ReqHeaders)
 	keys := make([]string, 0, len(hdrs))
 	for k := range hdrs {

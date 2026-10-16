@@ -90,7 +90,7 @@ func TestCooldownDisableBreaker(t *testing.T) {
 	if v := p.Report(1, Outcome{Status: 429, Body: "slow down", Header: h}); v.Action != ActionCooldown || !v.Retry {
 		t.Fatalf("429 verdict %+v", v)
 	}
-	if v := p.Report(2, Outcome{Status: 400, Body: `{"error":"Incorrect API key provided"}`}); v.Action != ActionDisable {
+	if v := p.Report(2, Outcome{Status: 401, Body: `{"error":"Incorrect API key provided"}`}); v.Action != ActionDisable {
 		t.Fatalf("bad key verdict %+v", v)
 	}
 	got := ids(p.Candidates(0))
@@ -150,6 +150,11 @@ func TestClassify(t *testing.T) {
 		{Outcome{Status: 429, Body: "slow down"}, ActionCooldown},
 		{Outcome{Status: 503}, ActionRetry},
 		{Outcome{Status: 400, Body: "quota exceeded"}, ActionRetry},
+		// Dead-key wording on a 400 is verified out of band, not trusted.
+		{Outcome{Status: 400, Body: `{"code":"invalid-argument","error":"Incorrect API key provided: xa***01"}`}, ActionVerify},
+		// Echoed client input never matches keywords.
+		{Outcome{Status: 404, Body: `{"error":"The model incorrect api key provided does not exist"}`, Echo: []string{"Incorrect API key provided"}}, ActionReturn},
+		{Outcome{Status: 403, Body: `{"error":"model no credits blocked is not allowed"}`, Echo: []string{"no credits blocked"}}, ActionRetry},
 		{Outcome{NetErr: errors.New("dial tcp: refused")}, ActionRetry},
 	}
 	for _, c := range cases {
@@ -195,5 +200,38 @@ func TestBoundKey(t *testing.T) {
 	}
 	if got := p.Candidates(99); len(got) != 0 {
 		t.Fatalf("unknown bound key: %v", got)
+	}
+}
+
+func TestClientErrorsDoNotTripBreaker(t *testing.T) {
+	p, _ := newPool(t, &store.Key{Key: "a"})
+	for i := 0; i < 10; i++ {
+		if v := p.Report(1, Outcome{Status: 403, Body: "forbidden for this model"}); v.Action != ActionRetry || v.Penalty {
+			t.Fatalf("403 verdict %+v", v)
+		}
+	}
+	if st := p.State(1); !st.CooldownUntil.IsZero() || st.AutoDisabled {
+		t.Fatalf("client errors opened the breaker: %+v", st)
+	}
+}
+
+func TestVerifyBeforeDisable(t *testing.T) {
+	p, _ := newPool(t, &store.Key{Key: "a"}, &store.Key{Key: "b"})
+	calls := make(chan int64, 4)
+	p.Verify = func(_ context.Context, k *store.Key) (bool, string) {
+		calls <- k.ID
+		return k.ID == 1, "verified: invalid"
+	}
+	body := `{"error":"Incorrect API key provided"}`
+	p.Report(1, Outcome{Status: 400, Body: body})
+	p.Report(2, Outcome{Status: 400, Body: body})
+	<-calls
+	<-calls
+	deadline := time.Now().Add(2 * time.Second)
+	for !p.State(1).AutoDisabled && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !p.State(1).AutoDisabled || p.State(2).AutoDisabled {
+		t.Fatalf("key1 %+v key2 %+v", p.State(1), p.State(2))
 	}
 }

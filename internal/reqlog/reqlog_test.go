@@ -1,9 +1,15 @@
 package reqlog
 
 import (
+	"context"
+	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/Kiyliy/xai-router/internal/config"
+	"github.com/Kiyliy/xai-router/internal/store"
 )
 
 func TestSanitizeBase64(t *testing.T) {
@@ -55,5 +61,37 @@ func TestHeadersJSONMasksSecrets(t *testing.T) {
 	}
 	if MaskSecret("short") != "****" {
 		t.Fatal("short secrets must be fully masked")
+	}
+}
+
+func TestWriterKeepsAccountingWhenQueueFull(t *testing.T) {
+	db, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	tok := &store.Token{Name: "t", Hash: "h", Prefix: "p", Enabled: true}
+	if err := db.CreateToken(ctx, tok); err != nil {
+		t.Fatal(err)
+	}
+	w := NewWriter(db, config.NewHolder(config.DefaultSettings()), slog.New(slog.NewTextHandler(io.Discard, nil)), 2)
+	for i := 0; i < 50; i++ { // the channel holds 2; the rest overflow
+		w.Enqueue(&store.Log{RequestID: "r", CreatedAt: store.NowMs(), Method: "POST", Path: "/v1/chat/completions",
+			Status: 200, TokenID: tok.ID, CostTicks: 10, HasBodies: true, ReqBody: strings.Repeat("x", 100)})
+	}
+	if w.Dropped() == 0 {
+		t.Fatal("expected bodies to be discarded under pressure")
+	}
+	if err := w.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := db.GetToken(ctx, tok.ID)
+	if got.UsedTicks != 500 || got.Requests != 50 {
+		t.Fatalf("accounting lost: used %d requests %d", got.UsedTicks, got.Requests)
+	}
+	_, n, _ := db.ListLogs(ctx, store.LogFilter{Limit: 100})
+	if n != 50 {
+		t.Fatalf("records lost: %d", n)
 	}
 }

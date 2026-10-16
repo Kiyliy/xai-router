@@ -223,6 +223,12 @@ func (db *DB) DeleteAdminToken(ctx context.Context, id int64) error {
 	return nil
 }
 
+// DeleteAllAdminTokens revokes every admin API token.
+func (db *DB) DeleteAllAdminTokens(ctx context.Context) error {
+	_, err := db.W.ExecContext(ctx, `DELETE FROM admin_tokens`)
+	return err
+}
+
 // CreateSession stores a login session.
 func (db *DB) CreateSession(ctx context.Context, hash string, expiresAt int64) error {
 	now := NowMs()

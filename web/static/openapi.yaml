@@ -105,6 +105,7 @@ paths:
               properties:
                 old_password: { type: string }
                 new_password: { type: string, minLength: 8 }
+                revoke_admin_tokens: { type: boolean, default: false, description: Also revoke every admin API token }
       responses:
         "204": { description: Changed }
         "400": { $ref: "#/components/responses/Error" }
@@ -509,6 +510,7 @@ paths:
         - { name: interval, in: query, schema: { type: string, enum: [5m, hour, day] }, description: "Default: 5m for 1h, hour up to 7d, day for 30d/90d. 5m is computed from raw logs and limited to ranges up to 24h." }
         - { name: group, in: query, schema: { type: string, enum: [none, model, key, token], default: none } }
         - { name: limit, in: query, schema: { type: integer, default: 6 }, description: Max series when grouped; the rest are merged into "other" }
+        - { name: tz_offset_minutes, in: query, schema: { type: integer, default: 0 }, description: "Viewer's UTC offset in minutes (e.g. 480 for UTC+8); day buckets start at local midnight" }
       responses:
         "200":
           description: OK
@@ -819,6 +821,7 @@ components:
         video_seconds: { type: number }
         cost_usd: { type: number }
         cost_source: { type: string, enum: [upstream, computed, none] }
+        websocket: { type: boolean, description: The request was a WebSocket session (status 101) }
     LogDetail:
       allOf:
         - $ref: "#/components/schemas/LogSummary"
@@ -834,6 +837,24 @@ components:
             response_text: { type: string, description: For streams, the assembled assistant text }
             reasoning_text: { type: string }
             truncated: { type: boolean }
+            websocket_session:
+              type: object
+              nullable: true
+              description: Present for WebSocket sessions. response_body then holds the first messages (→ client, ← upstream).
+              properties:
+                duration_ms: { type: integer }
+                client_messages: { type: integer }
+                server_messages: { type: integer }
+                client_bytes: { type: integer }
+                server_bytes: { type: integer }
+                close_code: { type: integer }
+                close_reason: { type: string }
+                closed_by: { type: string, description: "client, upstream or gateway (quota exhausted)" }
+                subprotocol: { type: string }
+                text_inputs: { type: integer, description: Realtime text inputs (billed $0.004 each) }
+                tts_chars: { type: integer, description: Characters sent for streaming TTS (billed $15 / 1M) }
+                audio_seconds: { type: number, description: Audio transcribed by streaming STT (billed $0.20 / hour) }
+                logged_messages: { type: integer }
             upstream_attempts:
               type: array
               items:
@@ -844,7 +865,7 @@ components:
                   key_name: { type: string }
                   status: { type: integer, description: 0 = network error }
                   error: { type: string }
-                  action: { type: string, enum: [success, retry, return, cooldown, disable], description: What the pool did after this attempt }
+                  action: { type: string, enum: [success, retry, return, cooldown, disable, verify], description: "What the pool did after this attempt. verify = the error looked like a dead key; the key is checked with GET /v1/api-key and disabled only if that confirms it." }
                   ttfb_ms: { type: integer }
                   latency_ms: { type: integer }
                   started_at: { type: string, format: date-time }
@@ -933,4 +954,10 @@ components:
         trusted_proxies: { type: array, items: { type: string }, description: CIDRs whose X-Forwarded-For / X-Real-IP is trusted for client IP }
         expose_debug: { type: boolean, default: false, description: Serve /debug/pprof (admin auth still required) }
         inject_stream_usage: { type: boolean, default: true, description: Add stream_options.include_usage to streaming chat requests so usage can be billed }
+        ws_log_messages: { type: integer, default: 50, description: Messages of each WebSocket session kept in the log (0 = statistics only) }
+        unpriced_models:
+          type: string
+          enum: [block_quota_tokens, allow]
+          default: block_quota_tokens
+          description: Whether tokens with a USD quota may call models that have no known price (their cost could not be charged)
         anthropic_stream_fix: { type: boolean, default: true, description: "Add the missing `index` field to content_block events of /v1/messages streams (xAI omits it, which breaks Anthropic SDK streaming)" }

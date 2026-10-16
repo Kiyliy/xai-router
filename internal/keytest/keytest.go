@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Kiyliy/xai-router/internal/billing"
 	"github.com/Kiyliy/xai-router/internal/config"
@@ -152,6 +153,28 @@ func (t *Tester) Test(ctx context.Context, k *store.Key, probe bool) Result {
 	return res
 }
 
+// Verify is a cheap, free check used by the pool to confirm a key that
+// looked dead during a request (GET /v1/api-key only).
+func (t *Tester) Verify(ctx context.Context, k *store.Key) (bool, string) {
+	st, body, err := t.do(ctx, http.MethodGet, strings.TrimRight(k.BaseURL, "/")+"/v1/api-key", k.Key, nil)
+	if err != nil {
+		return false, ""
+	}
+	if st == http.StatusOK {
+		var info APIKeyInfo
+		if json.Unmarshal(body, &info) == nil && (info.TeamBlocked || info.APIKeyBlocked || info.APIKeyDisabled) {
+			return true, "verified: API key or team is blocked/disabled"
+		}
+		return false, ""
+	}
+	status, msg := classify(st, body)
+	switch status {
+	case "invalid", "blocked", "no_credits":
+		return true, "verified: " + msg
+	}
+	return false, ""
+}
+
 // apply stores the result and updates pool state: dead keys are disabled,
 // healthy keys that had been auto-disabled are re-enabled.
 func (t *Tester) apply(ctx context.Context, k *store.Key, res Result) {
@@ -259,6 +282,9 @@ func (t *Tester) do(ctx context.Context, method, url, key string, body []byte) (
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
 	}
 	return s[:n] + "…"
 }

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Kiyliy/xai-router/internal/netutil"
 	"github.com/Kiyliy/xai-router/internal/secret"
 	"github.com/Kiyliy/xai-router/internal/store"
 )
@@ -45,7 +46,7 @@ func ResetPassword(ctx context.Context, db *store.DB, pw string) error {
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	ip := remoteIP(r)
+	ip := netutil.ClientIP(r, s.Settings.Get().TrustedProxies)
 	if s.limiter.blocked(ip) {
 		writeErr(w, http.StatusTooManyRequests, "too_many_attempts", "too many failed logins; try again in a few minutes")
 		return
@@ -61,7 +62,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		s.internalErr(w, err)
 		return
 	}
-	if in.Password == "" || !secret.CheckPassword(in.Password, hash) {
+	if in.Password == "" || !s.checkPassword(r.Context(), in.Password, hash) {
 		s.limiter.fail(ip)
 		s.Log.Warn("failed admin login", "ip", ip)
 		writeErr(w, http.StatusUnauthorized, "invalid_password", "wrong password")
@@ -78,6 +79,20 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"token": tok, "expires_at": exp.UTC()})
 }
 
+// pbkdf2Slots bounds concurrent password checks (each is ~100ms of CPU), so
+// a flood of login attempts cannot exhaust the machine.
+var pbkdf2Slots = make(chan struct{}, 2)
+
+func (s *Server) checkPassword(ctx context.Context, pw, hash string) bool {
+	select {
+	case pbkdf2Slots <- struct{}{}:
+	case <-ctx.Done():
+		return false
+	}
+	defer func() { <-pbkdf2Slots }()
+	return secret.CheckPassword(pw, hash)
+}
+
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	if c := credFrom(r); c != nil && c.Type == "session" {
 		_ = s.DB.DeleteSession(r.Context(), c.Hash)
@@ -92,8 +107,9 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Old string `json:"old_password"`
-		New string `json:"new_password"`
+		Old          string `json:"old_password"`
+		New          string `json:"new_password"`
+		RevokeTokens bool   `json:"revoke_admin_tokens"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -107,7 +123,7 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 		s.internalErr(w, err)
 		return
 	}
-	if !secret.CheckPassword(in.Old, hash) {
+	if !s.checkPassword(r.Context(), in.Old, hash) {
 		writeErr(w, http.StatusUnauthorized, "invalid_password", "current password is wrong")
 		return
 	}
@@ -123,6 +139,12 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 	if err := s.DB.DeleteSessionsExcept(r.Context(), keep); err != nil {
 		s.internalErr(w, err)
 		return
+	}
+	if in.RevokeTokens {
+		if err := s.DB.DeleteAllAdminTokens(r.Context()); err != nil {
+			s.internalErr(w, err)
+			return
+		}
 	}
 	s.Log.Info("admin password changed")
 	w.WriteHeader(http.StatusNoContent)

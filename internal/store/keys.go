@@ -94,13 +94,15 @@ max_concurrency, rpm_limit, notes, created_at, updated_at) VALUES (?,?,?,?,?,?,?
 	return nil
 }
 
-// UpdateKey saves the editable fields of k.
+// UpdateKey saves the admin-editable fields of k. Runtime state
+// (auto-disable, cooldown) is owned by the pool and written with SetKeyState,
+// so an edit cannot undo a concurrent automatic change.
 func (db *DB) UpdateKey(ctx context.Context, k *Key) error {
 	k.UpdatedAt = NowMs()
 	res, err := db.W.ExecContext(ctx, `UPDATE keys SET name=?, key=?, base_url=?, priority=?, weight=?, enabled=?,
-auto_disabled=?, status_reason=?, cooldown_until=?, max_concurrency=?, rpm_limit=?, notes=?, updated_at=? WHERE id=?`,
-		k.Name, k.Key, k.BaseURL, k.Priority, k.Weight, boolInt(k.Enabled), boolInt(k.AutoDisabled), k.StatusReason,
-		k.CooldownUntil, k.MaxConcurrency, k.RPMLimit, k.Notes, k.UpdatedAt, k.ID)
+max_concurrency=?, rpm_limit=?, notes=?, updated_at=? WHERE id=?`,
+		k.Name, k.Key, k.BaseURL, k.Priority, k.Weight, boolInt(k.Enabled), k.MaxConcurrency, k.RPMLimit, k.Notes,
+		k.UpdatedAt, k.ID)
 	if isUnique(err) {
 		return ErrConflict
 	}

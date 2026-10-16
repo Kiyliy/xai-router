@@ -21,37 +21,119 @@ import (
 )
 
 // Writer batches logs into the database from a single goroutine.
+//
+// Each log also carries usage accounting (token spend, key spend, hourly
+// stats), so logs are never silently dropped: when the queue is full or the
+// queued bodies exceed the memory budget, the bodies are discarded but the
+// record (and its accounting) is kept; failed batches are retried row by row
+// and finally as accounting-only updates.
 type Writer struct {
 	db       *store.DB
 	settings *config.Holder
 	log      *slog.Logger
 	ch       chan *store.Log
-	dropped  atomic.Int64
+	dropped  atomic.Int64 // bodies discarded because of back-pressure
+	failed   atomic.Int64 // logs whose row could not be stored (accounting kept)
+	bytes    atomic.Int64 // body bytes currently queued
 	wg       sync.WaitGroup
+
+	mu       sync.Mutex
+	overflow []*store.Log // body-less logs that did not fit in the channel
+	stopped  bool
+
 	// OnFlush is called after each successful batch (used to refresh caches).
 	OnFlush func(n int)
 }
+
+// maxQueuedBodyBytes bounds memory used by bodies waiting to be written.
+const maxQueuedBodyBytes = 256 << 20
 
 // NewWriter creates a writer with the given queue capacity.
 func NewWriter(db *store.DB, settings *config.Holder, log *slog.Logger, queue int) *Writer {
 	return &Writer{db: db, settings: settings, log: log, ch: make(chan *store.Log, queue)}
 }
 
-// Enqueue submits a log without blocking the request path. When the queue is
-// full the log is dropped and counted (see Dropped).
-func (w *Writer) Enqueue(l *store.Log) {
-	select {
-	case w.ch <- l:
-	default:
-		w.dropped.Add(1)
+func bodySize(l *store.Log) int64 {
+	return int64(len(l.ReqBody) + len(l.RespBody) + len(l.RespText) + len(l.ReasoningText) + len(l.ReqHeaders) + len(l.RespHeaders))
+}
+
+func stripBodies(l *store.Log) {
+	if l.HasBodies {
+		l.ReqBody = "<body discarded: log queue under pressure>"
+		l.RespBody, l.RespText, l.ReasoningText = "", "", ""
+		l.Truncated = true
 	}
 }
 
-// QueueLen returns the number of pending logs.
-func (w *Writer) QueueLen() int { return len(w.ch) }
+// Enqueue submits a log without blocking the request path.
+func (w *Writer) Enqueue(l *store.Log) {
+	w.mu.Lock()
+	stopped := w.stopped
+	w.mu.Unlock()
+	if stopped { // shutting down: nobody drains the queue any more
+		w.write([]*store.Log{l})
+		return
+	}
+	if w.bytes.Load()+bodySize(l) > maxQueuedBodyBytes {
+		stripBodies(l)
+		w.dropped.Add(1)
+	}
+	size := bodySize(l)
+	w.bytes.Add(size)
+	select {
+	case w.ch <- l:
+		return
+	default:
+	}
+	// Channel full: keep the record (and its accounting) without bodies.
+	stripBodies(l)
+	w.dropped.Add(1)
+	w.bytes.Add(bodySize(l) - size)
+	w.mu.Lock()
+	w.overflow = append(w.overflow, l)
+	w.mu.Unlock()
+}
 
-// Dropped returns how many logs were dropped because the queue was full.
-func (w *Writer) Dropped() int64 { return w.dropped.Load() }
+// QueueLen returns the number of pending logs.
+func (w *Writer) QueueLen() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return len(w.ch) + len(w.overflow)
+}
+
+// Dropped returns how many logs lost their bodies because of back-pressure
+// or could not be stored at all (their usage was still accounted).
+func (w *Writer) Dropped() int64 { return w.dropped.Load() + w.failed.Load() }
+
+// write stores a batch, falling back to one row at a time and finally to
+// accounting only, so that usage is never lost.
+func (w *Writer) write(batch []*store.Log) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := w.db.InsertLogs(ctx, batch); err == nil {
+		if w.OnFlush != nil {
+			w.OnFlush(len(batch))
+		}
+		return
+	} else if len(batch) == 1 {
+		w.log.Error("write request log", "err", err)
+	} else {
+		w.log.Error("write request logs; retrying one by one", "count", len(batch), "err", err)
+	}
+	for _, l := range batch {
+		if len(batch) > 1 {
+			if err := w.db.InsertLogs(ctx, []*store.Log{l}); err == nil {
+				continue
+			}
+		}
+		l.NoRecord = true
+		w.failed.Add(1)
+		if err := w.db.InsertLogs(ctx, []*store.Log{l}); err != nil {
+			w.log.Error("usage accounting lost", "request_id", l.RequestID, "token_id", l.TokenID,
+				"cost_ticks", l.CostTicks, "err", err)
+		}
+	}
+}
 
 // Run consumes the queue until ctx is cancelled and the queue is drained.
 func (w *Writer) Run(ctx context.Context) {
@@ -60,17 +142,20 @@ func (w *Writer) Run(ctx context.Context) {
 	const maxBatch = 200
 	batch := make([]*store.Log, 0, maxBatch)
 	flush := func() {
+		w.mu.Lock()
+		over := w.overflow
+		w.overflow = nil
+		w.mu.Unlock()
+		batch = append(batch, over...)
 		if len(batch) == 0 {
 			return
 		}
-		fctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		err := w.db.InsertLogs(fctx, batch)
-		cancel()
-		if err != nil {
-			w.log.Error("write request logs", "count", len(batch), "err", err)
-		} else if w.OnFlush != nil {
-			w.OnFlush(len(batch))
+		var size int64
+		for _, l := range batch {
+			size += bodySize(l)
 		}
+		w.write(batch)
+		w.bytes.Add(-size)
 		batch = batch[:0]
 	}
 	ticker := time.NewTicker(500 * time.Millisecond)
@@ -85,6 +170,9 @@ func (w *Writer) Run(ctx context.Context) {
 		case <-ticker.C:
 			flush()
 		case <-ctx.Done():
+			w.mu.Lock()
+			w.stopped = true // late logs are written synchronously
+			w.mu.Unlock()
 			for {
 				select {
 				case l := <-w.ch:
@@ -112,6 +200,10 @@ func (w *Writer) Flush(ctx context.Context) error {
 		case l := <-w.ch:
 			batch = append(batch, l)
 		default:
+			w.mu.Lock()
+			batch = append(batch, w.overflow...)
+			w.overflow = nil
+			w.mu.Unlock()
 			if len(batch) == 0 {
 				return nil
 			}

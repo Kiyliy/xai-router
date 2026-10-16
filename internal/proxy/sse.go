@@ -61,7 +61,9 @@ func (p *sseParser) line(line []byte) {
 		if p.hasData {
 			p.data = append(p.data, '\n')
 		}
-		p.data = append(p.data, value...)
+		if len(p.data) < maxSSEEvent { // bound memory for a stream without blank lines
+			p.data = append(p.data, value...)
+		}
 		p.hasData = true
 	}
 }
@@ -81,6 +83,9 @@ func (p *sseParser) Close() {
 	}
 	p.dispatch()
 }
+
+// maxSSEEvent bounds the bytes buffered for a single SSE event.
+const maxSSEEvent = 8 << 20
 
 // capture keeps the head and tail of a byte stream within a size budget, so
 // that both the first events and the final usage event of a long stream end
@@ -136,6 +141,11 @@ type messagesFixer struct {
 func (f *messagesFixer) Feed(b []byte) []byte {
 	f.buf = append(f.buf, b...)
 	var out []byte
+	if _, sep := eventEnd(f.buf); sep == 0 && len(f.buf) > maxSSEEvent {
+		// No event boundary in sight: give up fixing and pass bytes through.
+		out, f.buf = f.buf, nil
+		return out
+	}
 	for {
 		end, sep := eventEnd(f.buf)
 		if end < 0 {

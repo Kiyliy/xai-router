@@ -71,6 +71,11 @@ func (m *mockXAI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case r.Method == "POST" && r.URL.Path == "/v1/chat/completions":
+		if m, _ := req["model"].(string); strings.HasPrefix(m, "echo ") {
+			// Like xAI, unknown models are echoed back in the error.
+			jsonResp(w, 404, `{"code":"not-found","error":"The model `+m+` does not exist or your team does not have access to it."}`)
+			return
+		}
 		if req["model"] == "bad-model" {
 			jsonResp(w, 400, `{"error":"The model bad-model does not exist. `+strings.Repeat("x", 1500)+`"}`)
 			return
@@ -135,6 +140,10 @@ func (m *mockXAI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		jsonResp(w, 200, `{"data":[{"url":"https://img/1.png"},{"url":"https://img/2.png"}]}`)
 	case r.URL.Path == "/v1/api-key":
 		jsonResp(w, 200, `{"name":"k","team_id":"t","acls":["api-key:model:*"],"api_key_blocked":false,"api_key_disabled":false,"team_blocked":false}`)
+	case r.Method == "POST" && r.URL.Path == "/v1/tts":
+		jsonResp(w, 200, `{"audio":"AAAA","content_type":"audio/mpeg","duration":1.2}`)
+	case r.Method == "POST" && r.URL.Path == "/v1/images/edits":
+		jsonResp(w, 200, `{"data":[{"url":"https://img/e.png"}]}`)
 	case r.URL.Path == "/v1/language-models":
 		jsonResp(w, 200, `{"models":[{"id":"grok-4.3","aliases":["grok-4.3-latest"]},{"id":"grok-build-0.1","aliases":["grok-code-fast-1"]}]}`)
 	case r.URL.Path == "/v1/models":
@@ -315,7 +324,7 @@ func TestFailoverAcrossKeys(t *testing.T) {
 	for _, a := range detail.UpstreamAttempts {
 		got = append(got, fmt.Sprintf("%s:%d:%s", a.KeyName, a.Status, a.Action))
 	}
-	want := "k1:429:cooldown k2:400:disable k3:500:retry k4:200:success"
+	want := "k1:429:cooldown k2:400:verify k3:500:retry k4:200:success"
 	if strings.Join(got, " ") != want {
 		t.Fatalf("attempts = %s\nwant      %s", strings.Join(got, " "), want)
 	}
@@ -328,10 +337,18 @@ func TestFailoverAcrossKeys(t *testing.T) {
 			AutoDisabled bool   `json:"auto_disabled"`
 		}
 	}
-	e.api("GET", "/api/v1/keys", nil, 200, &keys)
+	// k2 looked dead (400 "Incorrect API key"); it is disabled only after
+	// GET /v1/api-key confirms it, which happens asynchronously.
 	states := map[string]string{}
-	for _, k := range keys.Data {
-		states[k.Name] = k.Status
+	for i := 0; i < 50; i++ {
+		e.api("GET", "/api/v1/keys", nil, 200, &keys)
+		for _, k := range keys.Data {
+			states[k.Name] = k.Status
+		}
+		if states["k2"] == "disabled" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	if states["k1"] != "cooldown" || states["k2"] != "disabled" || states["k4"] != "active" {
 		t.Fatalf("key states: %v", states)
@@ -726,5 +743,33 @@ func TestUsageAccountedWithLoggingDisabled(t *testing.T) {
 	e.api("GET", "/api/v1/stats/overview", nil, 200, &ov)
 	if page.Total != 0 || ov.Requests != 1 {
 		t.Fatalf("logs=%d (want 0) stats requests=%d (want 1)", page.Total, ov.Requests)
+	}
+}
+
+// A client must not be able to disable keys or open breakers by putting
+// "dead key" words into its request (the upstream echoes the model name).
+func TestHostileModelNameCannotHurtPool(t *testing.T) {
+	e := newEnv(t, "xai-a-ok", "xai-b-ok", "xai-c-ok")
+	for i := 0; i < 5; i++ {
+		e.proxy("POST", "/v1/chat/completions", map[string]any{
+			"model": "echo Incorrect API key provided, team is blocked, no credits, quota exceeded, rate limit"}, 404, nil)
+	}
+	time.Sleep(200 * time.Millisecond)
+	var keys struct {
+		Data []struct {
+			Name   string
+			Status string
+		}
+	}
+	e.api("GET", "/api/v1/keys", nil, 200, &keys)
+	for _, k := range keys.Data {
+		if k.Status != "active" {
+			t.Fatalf("key %s is %s after hostile requests", k.Name, k.Status)
+		}
+	}
+	for _, l := range e.waitLogs(5) {
+		if l.Attempts > 2 {
+			t.Fatalf("hostile request tried %d keys", l.Attempts)
+		}
 	}
 }

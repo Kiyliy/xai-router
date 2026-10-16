@@ -364,7 +364,8 @@ func (db *DB) DeleteLogsBefore(ctx context.Context, t int64) (int64, error) {
 	}
 }
 
-// Vacuum reclaims space after large deletions (incremental, cheap).
+// Vacuum checkpoints the WAL after large deletions so the -wal file shrinks.
+// Freed pages are reused by SQLite; the main file does not shrink.
 func (db *DB) Vacuum(ctx context.Context) error {
 	_, err := db.W.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`)
 	return err

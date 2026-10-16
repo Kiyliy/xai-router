@@ -105,6 +105,7 @@ func New(ctx context.Context, o Options) (*App, error) {
 	a.Proxy = &proxy.Handler{DB: db, Pool: a.Pool, Prices: a.Prices, Logs: a.Logs, Settings: a.Settings,
 		Client: client, Log: log, Quota: a.Quota}
 	tester := &keytest.Tester{DB: db, Pool: a.Pool, Prices: a.Prices, Settings: a.Settings, Client: client, Log: log}
+	a.Pool.Verify = tester.Verify
 	a.Admin = &admin.Server{DB: db, Pool: a.Pool, Prices: a.Prices, Settings: a.Settings, Logs: a.Logs, Log: log,
 		Quota:  a.Quota,
 		Syncer: &billing.Syncer{DB: db, Table: a.Prices, Client: client}, Tester: tester,
@@ -157,6 +158,11 @@ func (a *App) routes(static fs.FS) http.Handler {
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 				return
 			}
+			// No directory listings (only "/" serves index.html).
+			if r.URL.Path != "/" && strings.HasSuffix(r.URL.Path, "/") {
+				http.NotFound(w, r)
+				return
+			}
 			h := w.Header()
 			h.Set("X-Content-Type-Options", "nosniff")
 			h.Set("X-Frame-Options", "DENY")
@@ -176,12 +182,10 @@ func (a *App) routes(static fs.FS) http.Handler {
 	return a.accessLog(mux)
 }
 
-// The console only loads its own files, plus Swagger UI from jsDelivr on the
-// API docs page.
-const consoleCSP = "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; " +
-	"style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: blob: https:; " +
-	"font-src 'self' data: https://cdn.jsdelivr.net; connect-src 'self'; frame-ancestors 'none'; " +
-	"base-uri 'self'; form-action 'self'"
+// The console only loads its own files (Swagger UI is vendored).
+const consoleCSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+	"img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; " +
+	"base-uri 'self'; form-action 'self'; object-src 'none'"
 
 var staticTypes = map[string]string{
 	".html": "text/html; charset=utf-8",

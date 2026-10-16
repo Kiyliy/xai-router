@@ -117,8 +117,9 @@ type SeriesRow struct {
 }
 
 // StatsSeries aggregates per bucket (bucketMs = 3600000 or 86400000) and
-// optional group ("" = none). Day buckets are aligned to UTC midnight.
-func (db *DB) StatsSeries(ctx context.Context, from, bucketMs int64, by string) ([]SeriesRow, error) {
+// optional group ("" = none). Buckets are aligned to midnight in the zone
+// offsetMs east of UTC (e.g. +8h for China).
+func (db *DB) StatsSeries(ctx context.Context, from, bucketMs, offsetMs int64, by string) ([]SeriesRow, error) {
 	col := "''"
 	if by != "" && by != "none" {
 		c, err := groupColumn(by)
@@ -127,7 +128,8 @@ func (db *DB) StatsSeries(ctx context.Context, from, bucketMs int64, by string) 
 		}
 		col = c
 	}
-	q := `SELECT (hour / ` + strconv.FormatInt(bucketMs, 10) + `) * ` + strconv.FormatInt(bucketMs, 10) + ` AS b, ` + col +
+	bs, off := strconv.FormatInt(bucketMs, 10), strconv.FormatInt(offsetMs, 10)
+	q := `SELECT ((hour + ` + off + `) / ` + bs + `) * ` + bs + ` - ` + off + ` AS b, ` + col +
 		` AS g, ` + aggCols + ` FROM stats_hourly WHERE hour >= ? GROUP BY b, g ORDER BY b`
 	rows, err := db.R.QueryContext(ctx, q, from)
 	if err != nil {

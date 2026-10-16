@@ -37,6 +37,7 @@ type Settings struct {
 	InjectStreamUsage        bool     `json:"inject_stream_usage"`
 	AnthropicStreamFix       bool     `json:"anthropic_stream_fix"`
 	WSLogMessages            int      `json:"ws_log_messages"`
+	UnpricedModels           string   `json:"unpriced_models"`
 }
 
 // DefaultSettings returns the factory defaults.
@@ -75,6 +76,7 @@ func DefaultSettings() Settings {
 		InjectStreamUsage:        true,
 		AnthropicStreamFix:       true,
 		WSLogMessages:            50,
+		UnpricedModels:           "block_quota_tokens",
 	}
 }
 
@@ -83,6 +85,13 @@ func (s *Settings) Validate() error {
 	s.UpstreamBaseURL = strings.TrimRight(strings.TrimSpace(s.UpstreamBaseURL), "/")
 	if u, err := url.Parse(s.UpstreamBaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return fmt.Errorf("upstream_base_url must be an http(s) URL")
+	}
+	switch s.UnpricedModels {
+	case "":
+		s.UnpricedModels = "block_quota_tokens"
+	case "block_quota_tokens", "allow":
+	default:
+		return fmt.Errorf("unpriced_models must be block_quota_tokens or allow")
 	}
 	switch s.SelectionStrategy {
 	case "weighted", "random", "round_robin":

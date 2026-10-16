@@ -40,6 +40,7 @@ func (s *Server) keyJSON(k *store.Key) map[string]any {
 	if k.LastTest != "" {
 		var lt keytest.Result
 		if json.Unmarshal([]byte(k.LastTest), &lt) == nil {
+			lt.KeyName = k.Name // the key may have been renamed since
 			lastTest = lt
 		}
 	}

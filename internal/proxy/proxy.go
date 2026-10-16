@@ -10,6 +10,8 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"mime"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"strconv"
@@ -19,6 +21,7 @@ import (
 
 	"github.com/Kiyliy/xai-router/internal/billing"
 	"github.com/Kiyliy/xai-router/internal/config"
+	"github.com/Kiyliy/xai-router/internal/netutil"
 	"github.com/Kiyliy/xai-router/internal/pool"
 	"github.com/Kiyliy/xai-router/internal/quota"
 	"github.com/Kiyliy/xai-router/internal/reqlog"
@@ -27,7 +30,7 @@ import (
 )
 
 const (
-	maxNonStreamBody = 512 << 20 // upstream non-streaming responses are buffered up to this size
+	maxNonStreamBody = 64 << 20 // non-streaming responses up to this size are buffered and inspected
 	maxErrorBody     = 4 << 20
 )
 
@@ -68,6 +71,8 @@ type reqInfo struct {
 	Quality            string
 	Resolution         string
 	MaxTokens          int64
+	TextChars          int64 // characters of "text" (text to speech)
+	Ambiguous          bool  // the model could not be determined reliably
 	N                  int64
 	Duration           int64
 	ServiceTier        string
@@ -87,6 +92,13 @@ type state struct {
 	res        *quota.Reservation
 	jobID      string // async job created by this request (quota hold)
 	preCharged int64  // cost already booked against the quota (WebSocket sessions)
+	lastErrSig string // last client-class upstream error (status + message)
+}
+
+// echo lists client-supplied values that upstream errors may repeat back;
+// they are ignored when classifying errors.
+func (st *state) echo() []string {
+	return []string{st.info.Model, st.info.PreviousResponseID}
 }
 
 func (st *state) markTTFB() {
@@ -111,7 +123,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Method:    r.Method,
 		Path:      r.URL.Path,
 		Query:     r.URL.RawQuery,
-		ClientIP:  clientIP(r, s.TrustedProxies),
+		ClientIP:  netutil.ClientIP(r, s.TrustedProxies),
 		UserAgent: truncateStr(r.UserAgent(), 300),
 	}
 	w.Header().Set("X-Request-Id", st.log.RequestID)
@@ -156,9 +168,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	st.info = parseRequest(r.Header.Get("Content-Type"), st.reqBody)
 	st.log.Model, st.log.Stream = st.info.Model, st.info.Stream
 
-	// 3. Token policy: model allow-list.
-	if st.info.Model != "" && !h.modelAllowed(tok, st.info.Model) {
-		st.fail(w, errf(http.StatusForbidden, "model_not_allowed", "this token is not allowed to use model %q", st.info.Model))
+	// 3. Token policy: model allow-list, disabled and unpriced models.
+	if e := h.admit(st, r); e != nil {
+		st.fail(w, e)
 		return
 	}
 
@@ -186,6 +198,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if bound == nil && st.info.PreviousResponseID != "" {
 		bound, _ = h.DB.GetBinding(r.Context(), st.info.PreviousResponseID)
+	}
+	if bound != nil && !ownsResource(tok.ID, bound.TokenID) {
+		// Another token's response, job or file: indistinguishable from a
+		// missing one.
+		st.fail(w, errf(http.StatusNotFound, "not_found", "resource not found"))
+		return
 	}
 	var boundKey int64
 	if bound != nil {
@@ -312,7 +330,17 @@ func (st *state) attempt(w http.ResponseWriter, r *http.Request, lease *pool.Lea
 
 	if resp.StatusCode >= 400 {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-		v := st.h.Pool.Report(k.ID, pool.Outcome{Status: resp.StatusCode, Body: string(errBody), Header: resp.Header})
+		v := st.h.Pool.Report(k.ID, pool.Outcome{Status: resp.StatusCode, Body: string(errBody), Header: resp.Header,
+			Echo: st.echo()})
+		// The same client-class error from two keys is the request's fault,
+		// not the keys': stop and return it.
+		if v.Retry && !v.Penalty && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+			sig := strconv.Itoa(resp.StatusCode) + " " + pool.ErrorMessage(string(errBody), st.echo())
+			if sig == st.lastErrSig {
+				v.Retry, v.Action = false, pool.ActionReturn
+			}
+			st.lastErrSig = sig
+		}
 		if v.Retry && canRetry {
 			record(resp.StatusCode, v.Reason, v.Action)
 			return false, &upstreamError{status: resp.StatusCode, header: resp.Header, body: errBody, err: v.Reason}
@@ -341,7 +369,27 @@ func (st *state) attempt(w http.ResponseWriter, r *http.Request, lease *pool.Lea
 		return true, nil
 	}
 	// Non-streaming: buffer the body so usage can be read, then forward it.
-	full, rerr := io.ReadAll(io.LimitReader(resp.Body, maxNonStreamBody))
+	full, rerr := io.ReadAll(io.LimitReader(resp.Body, maxNonStreamBody+1))
+	if rerr == nil && len(full) > maxNonStreamBody {
+		// Too large to inspect (e.g. a file download): pass it through
+		// unbuffered instead of truncating it. Usage is not read. The request
+		// timeout keeps bounding the transfer.
+		w.WriteHeader(resp.StatusCode)
+		st.markTTFB()
+		n, err := w.Write(full)
+		if err == nil {
+			var m int64
+			m, err = io.Copy(w, resp.Body)
+			n += int(m)
+		}
+		if err != nil {
+			st.log.Error = "relaying large response: " + err.Error()
+		}
+		record(resp.StatusCode, "", pool.ActionSuccess)
+		st.log.RespBody = fmt.Sprintf("<%d+ byte response passed through without inspection>", n)
+		st.log.Truncated = true
+		return true, nil
+	}
 	timer.Stop()
 	if rerr != nil {
 		if r.Context().Err() != nil {
@@ -511,12 +559,39 @@ func (st *state) handleBody(r *http.Request, body []byte) {
 		}
 	}
 	st.applyUsage(u)
+	st.applyVoiceREST(r, body)
 	if kind := createdResourceKind(r.Method, r.URL.Path, st.info.Deferred); kind != "" {
 		id := env.ID
 		if kind == KindVideo || kind == KindImage || kind == KindDeferred {
 			id = firstNonEmpty(env.RequestID, env.ID)
 		}
 		st.bind(kind, id)
+	}
+}
+
+// applyVoiceREST prices the REST voice endpoints, which report no cost:
+// text to speech per input character, speech to text per audio hour.
+func (st *state) applyVoiceREST(r *http.Request, body []byte) {
+	if r.Method != http.MethodPost || st.log.Status != http.StatusOK || st.log.CostSource == "upstream" {
+		return
+	}
+	switch r.URL.Path {
+	case "/v1/tts":
+		st.log.CostTicks = st.info.TextChars * billing.TTSTicksPerChar
+	case "/v1/stt":
+		var v struct {
+			Duration float64 `json:"duration"`
+		}
+		if json.Unmarshal(body, &v) != nil || v.Duration <= 0 {
+			return
+		}
+		st.log.CostTicks = int64(v.Duration * billing.STTRestTicksPerHour / 3600)
+	default:
+		return
+	}
+	st.log.CostSource = "computed"
+	if st.log.CostTicks == 0 {
+		st.log.CostSource = "none"
 	}
 }
 
@@ -698,10 +773,22 @@ func (h *Handler) modelAllowed(tok *store.Token, model string) bool {
 
 func parseRequest(contentType string, body []byte) reqInfo {
 	var ri reqInfo
-	if len(body) == 0 || !strings.Contains(strings.ToLower(contentType), "json") && body[0] != '{' {
+	trimmed := bytes.TrimLeft(body, " \t\r\n")
+	if len(trimmed) == 0 {
 		return ri
 	}
+	if mt, params, err := mime.ParseMediaType(contentType); err == nil && strings.HasPrefix(mt, "multipart/") {
+		return parseMultipart(params["boundary"], body)
+	}
+	if trimmed[0] != '{' {
+		return ri
+	}
+	body = trimmed
+	if countTopLevelKey(body, "model") > 1 {
+		ri.Ambiguous = true
+	}
 	var v struct {
+		Text                string          `json:"text"`
 		Model               string          `json:"model"`
 		Stream              bool            `json:"stream"`
 		PreviousResponseID  string          `json:"previous_response_id"`
@@ -719,7 +806,7 @@ func parseRequest(contentType string, body []byte) reqInfo {
 	if json.Unmarshal(body, &v) != nil {
 		return ri
 	}
-	ri = reqInfo{Model: v.Model, Stream: v.Stream, PreviousResponseID: v.PreviousResponseID, Deferred: v.Deferred,
+	ri = reqInfo{Ambiguous: ri.Ambiguous, TextChars: int64(utf8.RuneCountInString(v.Text)), Model: v.Model, Stream: v.Stream, PreviousResponseID: v.PreviousResponseID, Deferred: v.Deferred,
 		Quality: v.Quality, N: v.N, ServiceTier: v.ServiceTier,
 		MaxTokens: max(v.MaxTokens, v.MaxCompletionTokens, v.MaxOutputTokens)}
 	_ = json.Unmarshal(v.Resolution, &ri.Resolution)
@@ -728,6 +815,61 @@ func parseRequest(contentType string, body []byte) reqInfo {
 		ri.Duration = flexInt(v.Seconds)
 	}
 	return ri
+}
+
+// parseMultipart reads the "model" form field of a multipart body (image
+// edits, speech to text) without buffering file parts.
+func parseMultipart(boundary string, body []byte) reqInfo {
+	var ri reqInfo
+	if boundary == "" {
+		ri.Ambiguous = true
+		return ri
+	}
+	mr := multipart.NewReader(bytes.NewReader(body), boundary)
+	models := 0
+	for {
+		p, err := mr.NextPart()
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				ri.Ambiguous = true
+			}
+			break
+		}
+		if p.FormName() == "model" && p.FileName() == "" {
+			v, _ := io.ReadAll(io.LimitReader(p, 256))
+			ri.Model = strings.TrimSpace(string(v))
+			models++
+		}
+		p.Close()
+	}
+	if models > 1 {
+		ri.Ambiguous = true
+	}
+	return ri
+}
+
+// countTopLevelKey counts occurrences of key among the top-level members of
+// a JSON object (duplicates are resolved differently by different parsers).
+func countTopLevelKey(body []byte, key string) int {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return 0
+	}
+	n := 0
+	for dec.More() {
+		t, err := dec.Token()
+		if err != nil {
+			return n
+		}
+		if k, ok := t.(string); ok && k == key {
+			n++
+		}
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			return n
+		}
+	}
+	return n
 }
 
 // flexInt reads a JSON number or numeric string ("8").
@@ -792,50 +934,6 @@ func setCORS(w http.ResponseWriter) {
 	h.Set("Access-Control-Max-Age", "86400")
 }
 
-// clientIP returns the client address, honouring X-Forwarded-For / X-Real-IP
-// only when the direct peer is a trusted proxy.
-func clientIP(r *http.Request, trusted []string) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	peer := net.ParseIP(host)
-	if peer == nil || !ipTrusted(peer, trusted) {
-		return host
-	}
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.Split(xff, ",")
-		// Walk from the right, skipping trusted proxies.
-		for i := len(parts) - 1; i >= 0; i-- {
-			ip := net.ParseIP(strings.TrimSpace(parts[i]))
-			if ip == nil {
-				break
-			}
-			if !ipTrusted(ip, trusted) || i == 0 {
-				return ip.String()
-			}
-		}
-	}
-	if xr := net.ParseIP(strings.TrimSpace(r.Header.Get("X-Real-Ip"))); xr != nil {
-		return xr.String()
-	}
-	return host
-}
-
-func ipTrusted(ip net.IP, trusted []string) bool {
-	for _, t := range trusted {
-		if strings.Contains(t, "/") {
-			if _, n, err := net.ParseCIDR(t); err == nil && n.Contains(ip) {
-				return true
-			}
-		} else if p := net.ParseIP(t); p != nil && p.Equal(ip) {
-			return true
-		}
-	}
-	return false
-}
-
-// truncateStr cuts s to at most n bytes without splitting a UTF-8 sequence.
 func truncateStr(s string, n int) string {
 	if len(s) <= n {
 		return s
