@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,6 +35,7 @@ Usage:
   xai-router                    start the server
   xai-router reset-password     set a new random admin password and print it
   xai-router version            print version information
+  xai-router healthcheck        probe /healthz of a running server (for containers)
 
 Environment:
   XR_LISTEN          listen address (default ":8080")
@@ -57,6 +59,8 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "healthcheck":
+			os.Exit(healthcheck())
 		case "help", "--help", "-h":
 			fmt.Print(usage)
 			return
@@ -165,4 +169,28 @@ func resetPassword() error {
 	fmt.Println("New admin password:", pw)
 	fmt.Println("All sessions were signed out. Change the password in the console under Settings.")
 	return nil
+}
+
+// healthcheck probes the local server; used by the container HEALTHCHECK
+// because the runtime image has no shell or curl.
+func healthcheck() int {
+	env, err := config.LoadEnv()
+	if err != nil {
+		return 1
+	}
+	addr := env.Listen
+	if strings.HasPrefix(addr, ":") {
+		addr = "127.0.0.1" + addr
+	}
+	c := http.Client{Timeout: 4 * time.Second}
+	resp, err := c.Get("http://" + addr + "/healthz")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 1
+	}
+	return 0
 }
