@@ -27,12 +27,18 @@ xai-router 位于你的应用和 `https://api.x.ai` 之间。把任意 OpenAI / 
   `GET/DELETE /v1/responses/{id}`、`/compact`）、`/v1/messages`（Anthropic 兼容，支持 `x-api-key`）、
   图片（生成、编辑、deferred）、视频（生成、续写、编辑、轮询）、TTS/STT、文件、集合、批处理、模型列表、
   tokenize、embeddings 等。未知的 `/v1/*`、`/v2/*` 路径原样透传。SSE 流式响应逐 chunk 转发并立即 flush。
+- **WebSocket**：`/v1/realtime`（实时语音）、流式 `/v1/tts`、`/v1/stt` 以及其他所有带 `Upgrade` 的请求，
+  走同样的令牌校验、key 选择和换 key 流程。会话日志记录连接时长、双向消息数与字节数、关闭码与原因以及前 N 条消息；
+  按官方语音价格计费，令牌额度用完时自动断开。浏览器可以用 `xai-client-secret.<令牌>` 子协议传令牌。
 - **Key 池**：按优先级分组，组内加权随机 / 随机 / 轮询；遇到 401/403/429/5xx、网络错误或命中可配置的错误关键词时自动换 key。
   被限流的 key 进入冷却（遵循 `Retry-After`），连续失败的 key 触发熔断，无效、被封或余额耗尽的 key 自动禁用，
-  原因直接显示在后台。可按 key 设置并发上限和每分钟请求数上限。
-- **资源绑定**：异步视频/图片任务、deferred 对话、已存储的 response、文件、批处理和集合，后续访问总是使用创建它的那个 key。
+  原因直接显示在后台（可疑错误会先用免费的 `GET /v1/api-key` 复核，客户端无法通过在自己的输入里写"invalid key"
+  之类的词让正常 key 被禁用）。可按 key 设置并发上限和每分钟请求数上限。
+- **资源绑定**：异步视频/图片任务、deferred 对话、已存储的 response、文件、批处理和集合，后续访问总是使用创建它的那个 key，并且只有创建它的令牌能访问。
 - **客户端令牌**：可签发任意多个 `sk-xr-…` 令牌，每个令牌可设置名称、美元额度、过期时间、模型白名单
-  （支持别名和 `grok-4*` 通配）以及启用开关，分别统计用量。管理员凭据与客户端令牌完全分开。
+  （支持别名和 `grok-4*` 通配）以及启用开关，分别统计用量。额度是严格的：每个请求发出前先按最坏情况预扣，
+  结束后按实际费用结算，并发请求不会超额。模型列表接口（`/v1/models`、`/v1/language-models` 等）只返回该令牌允许的模型。
+  管理员凭据与客户端令牌完全分开。
 - **精确计费**：上游返回 `cost_in_usd_ticks` 时直接采用；否则按价格表计算——缓存输入、推理 token、图片输入、
   ≥200k 长上下文档位、Priority 档、服务端工具调用、按张/按秒的图片视频价格。全部用整数 tick 记账
   （1 美元 = 10¹⁰ tick），合计分毫不差。模型和官方价格自动从 xAI 同步，也可手动触发。
@@ -47,7 +53,8 @@ xai-router 位于你的应用和 `https://api.x.ai` 之间。把任意 OpenAI / 
 - **管理 API 全部开放**：后台的所有操作都通过带版本号的 REST API（`/api/v1`）完成，错误格式统一，
   提供 [OpenAPI 3 规范](web/static/openapi.yaml)，后台内也能直接浏览。
 - **安全默认值**：未设置管理员密码时自动随机生成并只打印一次；令牌以 SHA-256 哈希存储并常量时间比较；
-  请求体大小限制同样作用于 chunked 请求；不向上游透传 Cookie 等客户端头；调试接口默认关闭；优雅退出时等待流式请求结束。
+  请求体大小限制同样作用于 chunked 请求；不向上游透传 Cookie 等客户端头；后台使用严格 CSP，不加载任何第三方脚本；调试接口默认关闭；优雅退出时等待流式请求结束。
+  带自动证书的 Caddy 部署方式见 [HTTPS 部署](docs/deploy-tls.md)。
 
 ## 截图
 
@@ -137,6 +144,26 @@ Anthropic SDK：`Anthropic(base_url="http://localhost:8080", api_key="sk-xr-..."
 视频是异步的：`POST /v1/videos/generations` 返回 `request_id`，再轮询 `GET /v1/videos/{request_id}`。
 网关会把每次轮询都发到提交任务的那个 key 上，并在返回完成结果时只计费一次。
 
+WebSocket 也一样，连网关而不是 `wss://api.x.ai`：
+
+```python
+import json, websocket  # pip install websocket-client
+
+ws = websocket.create_connection(
+    "wss://gateway.example.com/v1/realtime?model=grok-voice-latest",
+    header=["Authorization: Bearer sk-xr-..."],
+)
+ws.send(json.dumps({"type": "conversation.item.create", "item": {
+    "type": "message", "role": "user", "content": [{"type": "input_text", "text": "你好"}]}}))
+ws.send(json.dumps({"type": "response.create"}))
+```
+
+浏览器里无法设置请求头，可以把令牌放在子协议里：`new WebSocket(url, ["xai-client-secret.sk-xr-..."])`。
+
+网关自身返回的错误采用 OpenAI 格式 `{"error": {"message", "type": "xai_router_error", "code"}}`，例如
+`invalid_api_key`、`insufficient_quota`（429：本次请求的预扣费用超过剩余额度）、`model_not_allowed`、`model_required`、
+`model_disabled`、`model_not_priced`、`no_upstream_keys`。上游的错误原样返回。
+
 ## 管理 API
 
 所有接口都在 `/api/v1` 下，使用 `Authorization: Bearer <token>`：token 可以是 `POST /api/v1/auth/login`
@@ -196,11 +223,17 @@ Priority：响应中 service_tier = "priority" 时 × 2
 工具：web search $5/千次，X 帖子 $5/千条，X 用户 $10/千个，代码执行 $5/千次，集合检索 $2.5/千次
 图片：按张（grok-imagine-image-2.0 按画质 × 分辨率）
 视频：秒数 × 每秒价格，在任务完成时计费一次
+语音：xAI 不返回费用，按官方价格计算：实时语音每分钟 $0.08 + 每次文本输入 $0.004；
+      TTS 每百万字符 $15；STT 每小时 $0.10（REST）或 $0.20（流式）
 ```
 
 该公式已对照 xAI 真实返回验证（Chat Completions、Responses、Messages 三个接口），计算值与上游扣费精确到 tick 一致。
 不同接口的 token 口径不同（Chat 的推理 token 单独列出；Responses 的 `output_tokens` 已含推理；
 Messages 的 `input_tokens` 不含缓存命中），网关会先统一口径再计价。
+
+**额度。** 请求转发前，先按费用上限在令牌额度里预扣（按提示长度、`max_tokens`（未设置时按 4096）加 4096 个推理 token、
+图片张数 × 单价、视频秒数 × 单价等估算）。剩余额度不够预扣就返回 `insufficient_quota`；请求结束后用实际费用替换预扣额。
+所以并发请求加起来也不会超过额度。WebSocket 会话每 2 秒结算一次，额度用完即断开。
 
 ## 开发
 
