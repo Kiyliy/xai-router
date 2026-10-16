@@ -73,6 +73,8 @@ external services.
 | ![Logs](docs/screenshots/logs.png) | ![Log detail](docs/screenshots/log-detail.png) |
 | **Keys** | **Tokens** |
 | ![Keys](docs/screenshots/keys.png) | ![Tokens](docs/screenshots/tokens.png) |
+| **Models & pricing** | **Light theme** |
+| ![Models](docs/screenshots/models.png) | ![Overview, light theme](docs/screenshots/overview-light.png) |
 
 ## Quick start
 

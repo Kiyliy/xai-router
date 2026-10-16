@@ -56,6 +56,8 @@ xai-router 位于你的应用和 `https://api.x.ai` 之间。把任意 OpenAI / 
 | ![日志](docs/screenshots/logs.png) | ![日志详情](docs/screenshots/log-detail.png) |
 | **Key 管理** | **令牌** |
 | ![Key](docs/screenshots/keys.png) | ![令牌](docs/screenshots/tokens.png) |
+| **模型与价格** | **浅色主题** |
+| ![模型](docs/screenshots/models.png) | ![概览浅色](docs/screenshots/overview-light.png) |
 
 ## 快速开始
 
