@@ -166,6 +166,11 @@ restart (`docker compose pull && docker compose up -d`). Database migrations run
 on start, are idempotent, and keep all keys, tokens, logs and statistics; downgrading is not
 supported.
 
+From v0.2.0 on, upstream URLs must be `https://api.x.ai` or `https://*.api.x.ai` by default (SSRF
+protection). Keys that point elsewhere stay in the pool but are skipped with "blocked by upstream
+policy" until you allow their host under **Settings → Security** (`upstream_allowed_hosts`,
+`allow_insecure_upstreams`, `allow_private_upstreams`).
+
 ## Using the gateway
 
 Any OpenAI-compatible SDK works — just change the base URL and key.

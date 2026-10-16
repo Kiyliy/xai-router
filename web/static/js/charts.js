@@ -3,6 +3,40 @@ import { h, s } from './util.js';
 
 export const PALETTE = ['var(--c1)', 'var(--c2)', 'var(--c3)', 'var(--c4)', 'var(--c5)', 'var(--c6)', 'var(--c7)', 'var(--c8)'];
 
+// Stable series colours shared by every chart and table: a name hashes to a preferred palette
+// slot; the first name to claim a slot keeps it for the session, later names probe for a free
+// slot. So the same model is the same colour in the "By model" chart and the breakdown table.
+const colorMap = new Map();
+function hashStr(str) {
+  let x = 2166136261;
+  for (let i = 0; i < str.length; i++) { x ^= str.charCodeAt(i); x = Math.imul(x, 16777619); }
+  return x >>> 0;
+}
+export function colorFor(name, ns = 'model') {
+  if (name === 'other') return 'var(--c-other)';
+  if (name == null || name === '' || name === '(unknown)') return 'var(--c-other)';
+  const key = `${ns}:${name}`;
+  if (colorMap.has(key)) return colorMap.get(key);
+  const used = new Set([...colorMap.entries()].filter(([k]) => k.startsWith(`${ns}:`)).map(([, v]) => v));
+  const start = hashStr(String(name)) % PALETTE.length;
+  let c = PALETTE[start];
+  for (let i = 0; i < PALETTE.length; i++) {
+    const cand = PALETTE[(start + i) % PALETTE.length];
+    if (!used.has(cand)) { c = cand; break; }
+  }
+  colorMap.set(key, c);
+  return c;
+}
+
+/** True when most buckets are empty — bars read better than a spiky line there. */
+export function isSparse(seriesValues) {
+  const n = seriesValues[0] ? seriesValues[0].length : 0;
+  if (!n) return false;
+  let nz = 0;
+  for (let i = 0; i < n; i++) if (seriesValues.some((v) => (v[i] || 0) > 0)) nz++;
+  return nz / n < 0.5;
+}
+
 function niceStep(max, ticks) {
   const raw = max / ticks;
   const mag = Math.pow(10, Math.floor(Math.log10(raw)));

@@ -3,7 +3,7 @@ import { h, mount, relTime, fmtDuration, qsParse, qsBuild } from './util.js';
 import { icon, logo } from './icons.js';
 import { t, getLang, setLang } from './i18n.js';
 import { auth, onUnauthorized, get, post } from './api.js';
-import { toast, toastError, segmented, closeAllModals, closeMenus, busy } from './ui.js';
+import { toastError, segmented, closeAllModals, closeMenus, busy, confirmDialog, passwordInput, errorMessage } from './ui.js';
 import { applyTheme, cycleTheme, getThemePref } from './theme.js';
 import * as overview from './pages/overview.js';
 import * as keys from './pages/keys.js';
@@ -11,6 +11,7 @@ import * as tokens from './pages/tokens.js';
 import * as models from './pages/models.js';
 import * as logs from './pages/logs.js';
 import * as settings from './pages/settings.js';
+import { openPasswordDialog } from './pages/settings.js';
 import * as docs from './pages/docs.js';
 
 const ROUTES = {
@@ -24,7 +25,7 @@ const ROUTES = {
 };
 
 const app = document.getElementById('app');
-const state = { me: null, info: null, cleanup: null, controller: null, routeSeq: 0, shell: null, view: 'none' };
+const state = { me: null, info: null, cleanup: null, controller: null, routeSeq: 0, shell: null, view: 'none', guard: null, lastHash: '' };
 
 // ---------- routing ----------
 function parseHash() {
@@ -36,6 +37,7 @@ function parseHash() {
 
 function teardownPage() {
   closeMenus();
+  state.guard = null;
   if (state.controller) state.controller.abort();
   state.controller = null;
   if (typeof state.cleanup === 'function') { try { state.cleanup(); } catch (e) { console.error(e); } }
@@ -44,6 +46,7 @@ function teardownPage() {
 
 function route() {
   if (state.view !== 'shell') return;
+  state.lastHash = location.hash;
   const { name, params } = parseHash();
   if (!ROUTES[name]) { location.replace('#/overview'); return; }
   const seq = ++state.routeSeq;
@@ -71,7 +74,10 @@ function route() {
       if (seq !== state.routeSeq || parseHash().name !== name) return;
       const qs = qsBuild(obj);
       history.replaceState(null, '', `#/${name}${qs ? '?' + qs : ''}`);
+      state.lastHash = location.hash;
     },
+    // A page can register a "has unsaved changes" check; in-app navigation then asks first.
+    setGuard: (fn) => { if (seq === state.routeSeq) state.guard = fn; },
     info: () => state.info,
     refreshInfo: loadInfo,
   };
@@ -89,7 +95,7 @@ function themeIcon() { return { system: 'monitor', light: 'sun', dark: 'moon' }[
 function prefsButtons(compact = false) {
   const themeBtn = h('button', {
     class: 'btn btn-ghost btn-icon', title: t(`theme.${getThemePref()}`), 'aria-label': t('theme.toggle'),
-    onclick: () => { cycleTheme(); themeBtn.replaceChildren(icon(themeIcon(), 17)); themeBtn.title = t(`theme.${getThemePref()}`); toast(t(`theme.${getThemePref()}`), 'info', 1500); },
+    onclick: () => { cycleTheme(); themeBtn.replaceChildren(icon(themeIcon(), 17)); themeBtn.title = t(`theme.${getThemePref()}`); },
   }, icon(themeIcon(), 17));
   const langBtn = h('button', {
     class: `btn btn-ghost ${compact ? 'btn-icon' : 'btn-lang'}`, title: t('lang.toggle'), 'aria-label': t('lang.toggle'),
@@ -129,6 +135,12 @@ function renderShell() {
   mount(shell, sidebar, h('div', { class: 'sidebar-backdrop', onclick: () => shell.classList.remove('sidebar-open') }), main);
   mount(app, shell);
   state.shell = { shell, nav, title, subtitle, actions, content, banner, main };
+  const topbar = main.querySelector('.topbar');
+  const setTopVar = () => document.documentElement.style.setProperty('--topbar-real', `${topbar.offsetHeight}px`);
+  if (state.topRO) state.topRO.disconnect();
+  state.topRO = new ResizeObserver(setTopVar);
+  state.topRO.observe(topbar);
+  setTopVar();
   renderBanner();
 }
 
@@ -139,7 +151,7 @@ function renderBanner() {
     mount(slot, h('div', { class: 'banner banner-warning', role: 'alert' },
       icon('alert', 16),
       h('span', { class: 'banner-text' }, t('banner.changePassword')),
-      h('a', { class: 'btn btn-sm', href: '#/settings?section=password' }, t('banner.changePasswordBtn'))));
+      h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openPasswordDialog({ onDone: () => loadInfo() }) }, t('banner.changePasswordBtn'))));
   } else slot.replaceChildren();
 }
 
@@ -169,7 +181,9 @@ function showLogin(message) {
   document.title = `${t('auth.signIn')} · xai-router`;
   let mode = 'password';
   const err = h('div', { class: 'login-error', role: 'alert', hidden: !message }, message || '');
-  const inp = h('input', { class: 'input input-lg', type: 'password', autocomplete: 'current-password', placeholder: t('auth.passwordPlaceholder'), autofocus: true, required: true });
+  const pw = passwordInput({ class: 'input input-lg', autocomplete: 'current-password', placeholder: t('auth.passwordPlaceholder'), autofocus: true, required: true });
+  const inp = pw.input;
+  inp.addEventListener('input', () => { err.hidden = true; });
   const label = h('label', { class: 'field-label' }, t('auth.password'));
   const hint = h('div', { class: 'field-hint' }, '');
   const submit = h('button', { class: 'btn btn-primary btn-lg btn-block', type: 'submit' }, h('span', null, t('auth.signIn')));
@@ -179,6 +193,8 @@ function showLogin(message) {
     label.textContent = m === 'password' ? t('auth.password') : t('auth.adminToken');
     inp.placeholder = m === 'password' ? t('auth.passwordPlaceholder') : 'xra-…';
     inp.type = m === 'password' ? 'password' : 'text';
+    pw.toggle.hidden = m !== 'password';
+    pw.toggle.replaceChildren(icon('eye', 15));
     inp.autocomplete = m === 'password' ? 'current-password' : 'off';
     inp.classList.toggle('mono', m === 'token');
     hint.textContent = m === 'token' ? t('auth.tokenHint') : '';
@@ -202,7 +218,7 @@ function showLogin(message) {
           }
           await boot();
         } catch (ex) {
-          err.textContent = ex.status === 401 ? (mode === 'password' ? t('auth.badPassword') : t('auth.badToken')) : ex.status === 429 ? t('auth.tooMany') : ex.message;
+          err.textContent = ex.status === 401 ? (mode === 'password' ? t('auth.badPassword') : t('auth.badToken')) : ex.status === 429 ? t('auth.tooMany') : errorMessage(ex);
           err.hidden = false;
           inp.select();
         }
@@ -210,7 +226,7 @@ function showLogin(message) {
     },
   },
   segmented({ options: [{ value: 'password', label: t('auth.password'), icon: 'lock' }, { value: 'token', label: t('auth.adminToken'), icon: 'key' }], value: 'password', onChange: setMode, size: 'seg-block' }),
-  h('div', { class: 'field' }, label, inp, hint),
+  h('div', { class: 'field' }, label, pw, hint),
   err,
   submit);
   mount(app, h('div', { class: 'login' },
@@ -232,7 +248,7 @@ async function boot() {
   } catch (e) {
     if (e.status === 401) return; // handler shows login
     mount(app, h('div', { class: 'fatal' },
-      h('div', { class: 'fatal-card' }, icon('alert', 28), h('h2', null, t('app.unreachable')), h('p', { class: 'muted' }, e.message),
+      h('div', { class: 'fatal-card' }, icon('alert', 28), h('h2', null, t('app.unreachable')), h('p', { class: 'muted' }, errorMessage(e)),
         h('button', { class: 'btn btn-primary', onclick: boot }, icon('refresh', 15), h('span', null, t('common.retry'))))));
     return;
   }
@@ -242,7 +258,25 @@ async function boot() {
 }
 
 onUnauthorized(() => { if (state.view !== 'login') showLogin(t('auth.sessionExpired')); });
-window.addEventListener('hashchange', route);
+let guardBypass = false;
+async function onHashChange() {
+  if (state.view === 'shell' && !guardBypass && state.guard && location.hash !== state.lastHash) {
+    let dirty = false;
+    try { dirty = state.guard(); } catch { dirty = false; }
+    if (dirty) {
+      const target = location.hash;
+      history.replaceState(null, '', state.lastHash || '#/overview');
+      const ok = await confirmDialog({ title: t('guard.title'), message: t('guard.msg'), confirmText: t('guard.leave'), danger: true });
+      if (!ok) return;
+      guardBypass = true;
+      location.hash = target;
+      return;
+    }
+  }
+  guardBypass = false;
+  route();
+}
+window.addEventListener('hashchange', onHashChange);
 
 // live relative times + countdowns
 setInterval(() => {

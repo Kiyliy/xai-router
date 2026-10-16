@@ -1,7 +1,7 @@
 // Reusable UI primitives: toasts, modals/drawers, confirm, menus, pagination, inputs.
 import { h, copyText } from './util.js';
 import { icon } from './icons.js';
-import { t } from './i18n.js';
+import { t, hasT } from './i18n.js';
 
 // ---------- toasts ----------
 let toastRoot;
@@ -17,11 +17,61 @@ export function toast(message, type = 'info', timeout = 4200) {
   if (timeout) setTimeout(dismiss, timeout);
   return dismiss;
 }
+/**
+ * Human message for an error. Known server `error.code`s are mapped to translated text
+ * (with the server's detail interpolated where useful); unknown codes fall back to the
+ * server message.
+ */
+export function errorMessage(e) {
+  if (!e) return '';
+  const raw = e.message ? String(e.message) : String(e);
+  const code = e.code;
+  if (code === 'invalid_settings') {
+    const m = /^([a-z_]+) must be between (-?\d+) and (-?\d+)$/.exec(raw);
+    if (m) return t('err.settingsRange', { field: hasT(`settings.f.${m[1]}`) ? t(`settings.f.${m[1]}`) : m[1], a: m[2], b: m[3] });
+  }
+  if (code && hasT(`err.${code}`)) return t(`err.${code}`, { detail: raw });
+  if (code === 'network_error') return t('err.network_error', { detail: raw });
+  return raw;
+}
 export function toastError(e) {
   if (e && e.name === 'AbortError') return;
   if (e && e.status === 401) return; // handled globally
-  const msg = e && e.message ? e.message : String(e);
-  toast(e && e.code && e.code !== 'network_error' && !msg.includes(e.code) ? `${msg} (${e.code})` : msg, 'error', 6000);
+  const msg = errorMessage(e);
+  const mapped = e && e.code && hasT(`err.${e.code}`);
+  toast(e && e.code && !mapped && e.code !== 'network_error' && !msg.includes(e.code) ? `${msg} (${e.code})` : msg, 'error', 6000);
+}
+
+export const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
+
+/** On phones, tapping anywhere on a card row opens its ⋯ menu (unless a control was tapped). */
+export function tapToMenu(tr, menuBtn) {
+  tr.addEventListener('click', (e) => {
+    if (!isMobile() || !menuBtn) return;
+    if (e.target.closest('button, a, input, label, select, textarea, summary, details')) return;
+    menuBtn.click();
+  });
+  return tr;
+}
+
+/** Password input with a show/hide toggle. Returns the wrapper; `.input` is the <input>. */
+export function passwordInput(attrs = {}) {
+  const inp = h('input', { class: 'input', type: 'password', autocomplete: 'off', spellcheck: 'false', ...attrs });
+  const btn = h('button', {
+    type: 'button', class: 'pw-toggle', title: t('common.showSecret'), 'aria-label': t('common.showSecret'), 'aria-pressed': 'false', tabindex: '-1',
+    onclick: () => {
+      const show = inp.type === 'password';
+      inp.type = show ? 'text' : 'password';
+      btn.replaceChildren(icon(show ? 'eyeOff' : 'eye', 15));
+      btn.setAttribute('aria-pressed', show ? 'true' : 'false');
+      btn.title = show ? t('common.hideSecret') : t('common.showSecret');
+      inp.focus();
+    },
+  }, icon('eye', 15));
+  const wrap = h('div', { class: 'pw-wrap' }, inp, btn);
+  wrap.input = inp;
+  wrap.toggle = btn;
+  return wrap;
 }
 
 // ---------- overlay stack (modals + drawers) ----------
@@ -257,9 +307,9 @@ export function pagination({ page, pageSize, total, onChange, sizes = [10, 20, 5
 export function tagInput({ values = [], placeholder, suggestions = [], validate, mono = true } = {}) {
   let tags = [...values];
   const listId = `dl-${Math.random().toString(36).slice(2)}`;
-  const inp = h('input', { class: 'tag-entry', placeholder: placeholder || t('common.addTag'), list: suggestions.length ? listId : null });
+  const inp = h('input', { class: 'tag-entry', placeholder: placeholder || t('common.addTag'), list: listId });
   const wrap = h('div', { class: `tag-input ${mono ? 'mono' : ''}`, onclick: () => inp.focus() });
-  const dl = suggestions.length ? h('datalist', { id: listId }, suggestions.map((s) => h('option', { value: s }))) : null;
+  const dl = h('datalist', { id: listId }, suggestions.map((s) => h('option', { value: s })));
   const render = () => {
     wrap.replaceChildren(
       ...tags.map((tg, i) => h('span', { class: 'tag' }, tg, h('button', { type: 'button', class: 'tag-x', 'aria-label': t('common.remove'), onclick: (e) => { e.stopPropagation(); tags.splice(i, 1); render(); } }, icon('x', 11)))),
@@ -282,6 +332,7 @@ export function tagInput({ values = [], placeholder, suggestions = [], validate,
   render();
   wrap.getValues = () => { if (inp.value.trim()) commit(); return [...tags]; };
   wrap.setValues = (v) => { tags = [...v]; render(); };
+  wrap.setSuggestions = (list) => { suggestions = list || []; dl.replaceChildren(...suggestions.map((s) => h('option', { value: s }))); };
   wrap.peek = () => [...tags];
   return wrap;
 }

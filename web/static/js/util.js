@@ -170,6 +170,42 @@ export async function copyText(text) {
   return ok;
 }
 
+/** Trigger a client-side download of `text` (no server round-trip). */
+export function downloadText(filename, text, mime = 'application/json') {
+  const url = URL.createObjectURL(new Blob([text], { type: `${mime};charset=utf-8` }));
+  const a = h('a', { href: url, download: filename, style: { display: 'none' } });
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 1000);
+}
+
+/**
+ * Make an upstream status reason readable: "HTTP 400: {"code":"x","error":"Bad key"}" → "HTTP 400: Bad key".
+ * Returns { short, full }.
+ */
+export function readableReason(text) {
+  const full = text == null ? '' : String(text);
+  const i = full.indexOf('{');
+  if (i < 0) return { short: full, full };
+  let j = full.lastIndexOf('}');
+  let obj = null;
+  while (j > i && !obj) { try { obj = JSON.parse(full.slice(i, j + 1)); } catch { j = full.lastIndexOf('}', j - 1); } }
+  if (!obj || typeof obj !== 'object') return { short: full, full };
+  const pick = (o) => {
+    if (!o || typeof o !== 'object') return null;
+    for (const k of ['error', 'message', 'detail', 'msg']) {
+      const v = o[k];
+      if (typeof v === 'string' && v.trim()) return v.trim();
+      if (v && typeof v === 'object') { const inner = pick(v); if (inner) return inner; }
+    }
+    return null;
+  };
+  const msg = pick(obj);
+  if (!msg) return { short: full, full };
+  const prefix = full.slice(0, i).replace(/[\s:–-]+$/, '').trim();
+  return { short: prefix ? `${prefix}: ${msg}` : msg, full };
+}
+
 export function tryParseJSON(str) {
   if (typeof str !== 'string') return { ok: false };
   const t = str.trim();

@@ -7,7 +7,8 @@ import { effectiveTheme } from '../theme.js';
 
 // The only external resource in the console: Swagger UI, pinned, from jsDelivr.
 const SWAGGER_VERSION = '5.17.14';
-const CDN = `https://cdn.jsdelivr.net/npm/swagger-ui-dist@${SWAGGER_VERSION}`;
+// Vendored copy of swagger-ui-dist (see web/static/vendor/swagger-ui).
+const CDN = './vendor/swagger-ui';
 
 let swaggerPromise = null;
 function loadSwagger() {
@@ -15,11 +16,11 @@ function loadSwagger() {
   if (swaggerPromise) return swaggerPromise;
   swaggerPromise = new Promise((resolve, reject) => {
     if (!document.getElementById('swagger-css')) {
-      document.head.appendChild(h('link', { id: 'swagger-css', rel: 'stylesheet', href: `${CDN}/swagger-ui.css`, crossorigin: 'anonymous' }));
+      document.head.appendChild(h('link', { id: 'swagger-css', rel: 'stylesheet', href: `${CDN}/swagger-ui.css` }));
     }
-    const sc = h('script', { src: `${CDN}/swagger-ui-bundle.js`, crossorigin: 'anonymous' });
+    const sc = h('script', { src: `${CDN}/swagger-ui-bundle.js` });
     sc.onload = () => resolve(window.SwaggerUIBundle);
-    sc.onerror = () => { swaggerPromise = null; sc.remove(); reject(new Error('failed to load Swagger UI from cdn.jsdelivr.net')); };
+    sc.onerror = () => { swaggerPromise = null; sc.remove(); reject(new Error('failed to load Swagger UI')); };
     document.head.appendChild(sc);
   });
   return swaggerPromise;
@@ -28,11 +29,18 @@ function loadSwagger() {
 function snippets() {
   const origin = location.origin;
   const base = `${origin}/v1`;
-  const KEY = 'sk-xr-…';
+  // A placeholder that reads as a placeholder (no ellipsis that looks like truncation).
+  const KEY = 'sk-xr-YOUR_TOKEN';
   return {
     chat: {
       curl: `curl ${base}/chat/completions \\\n  -H "Authorization: Bearer ${KEY}" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "model": "grok-4.3",\n    "messages": [{"role": "user", "content": "What is the meaning of life?"}],\n    "stream": false\n  }'`,
       python: `from openai import OpenAI\n\nclient = OpenAI(base_url="${base}", api_key="${KEY}")\n\n# Non-streaming\nresp = client.chat.completions.create(\n    model="grok-4.3",\n    messages=[{"role": "user", "content": "What is the meaning of life?"}],\n)\nprint(resp.choices[0].message.content)\n\n# Streaming\nstream = client.chat.completions.create(\n    model="grok-4.3",\n    messages=[{"role": "user", "content": "Write a haiku about routers."}],\n    stream=True,\n)\nfor chunk in stream:\n    if chunk.choices and chunk.choices[0].delta.content:\n        print(chunk.choices[0].delta.content, end="", flush=True)`,
+      node: `import OpenAI from "openai";\n\nconst client = new OpenAI({ baseURL: "${base}", apiKey: process.env.XR_API_KEY ?? "${KEY}" });\n\n// Non-streaming\nconst resp = await client.chat.completions.create({\n  model: "grok-4.3",\n  messages: [{ role: "user", content: "What is the meaning of life?" }],\n});\nconsole.log(resp.choices[0].message.content);\n\n// Streaming\nconst stream = await client.chat.completions.create({\n  model: "grok-4.3",\n  messages: [{ role: "user", content: "Write a haiku about routers." }],\n  stream: true,\n});\nfor await (const chunk of stream) {\n  process.stdout.write(chunk.choices[0]?.delta?.content ?? "");\n}`,
+    },
+    anthropic: {
+      python: `import anthropic\n\n# The Anthropic SDK appends /v1/messages itself, so use the bare origin.\nclient = anthropic.Anthropic(base_url="${origin}", api_key="${KEY}")\n\nmsg = client.messages.create(\n    model="grok-4.3",\n    max_tokens=1024,\n    messages=[{"role": "user", "content": "What is the meaning of life?"}],\n)\nprint(msg.content[0].text)\n\n# Streaming\nwith client.messages.stream(\n    model="grok-4.3",\n    max_tokens=1024,\n    messages=[{"role": "user", "content": "Write a haiku about routers."}],\n) as stream:\n    for text in stream.text_stream:\n        print(text, end="", flush=True)`,
+      node: `import Anthropic from "@anthropic-ai/sdk";\n\n// The Anthropic SDK appends /v1/messages itself, so use the bare origin.\nconst client = new Anthropic({ baseURL: "${origin}", apiKey: process.env.XR_API_KEY ?? "${KEY}" });\n\nconst msg = await client.messages.create({\n  model: "grok-4.3",\n  max_tokens: 1024,\n  messages: [{ role: "user", content: "What is the meaning of life?" }],\n});\nconsole.log(msg.content[0].text);`,
+      curl: `curl ${base}/messages \\\n  -H "x-api-key: ${KEY}" \\\n  -H "anthropic-version: 2023-06-01" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "model": "grok-4.3",\n    "max_tokens": 1024,\n    "messages": [{"role": "user", "content": "What is the meaning of life?"}]\n  }'`,
     },
     responses: {
       curl: `curl ${base}/responses \\\n  -H "Authorization: Bearer ${KEY}" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "model": "grok-4.3",\n    "input": "Summarize the plot of Hamlet in two sentences."\n  }'`,
@@ -55,11 +63,15 @@ export function render(el, ctx) {
         h('span', { class: 'muted small' }, t('docs.baseUrl')),
         h('code', { class: 'mono inline-code' }, `${location.origin}/v1`),
         h('span', { class: 'muted small' }, t('docs.authWith')),
-        h('code', { class: 'mono inline-code' }, 'Authorization: Bearer sk-xr-…'),
+        h('code', { class: 'mono inline-code nowrap-code' }, 'Authorization: Bearer sk-xr-YOUR_TOKEN'),
         h('a', { class: 'link small', href: '#/tokens' }, t('docs.createToken'))),
       tabs([
         { id: 'chat-py', label: t('docs.chatPy'), render: () => codeBlock(sn.chat.python) },
+        { id: 'chat-node', label: t('docs.chatNode'), render: () => codeBlock(sn.chat.node) },
         { id: 'chat-curl', label: t('docs.chatCurl'), render: () => codeBlock(sn.chat.curl) },
+        { id: 'anth-py', label: t('docs.anthPy'), render: () => h('div', { class: 'stack-sm' }, h('p', { class: 'muted small docs-note' }, t('docs.anthNote')), codeBlock(sn.anthropic.python)) },
+        { id: 'anth-node', label: t('docs.anthNode'), render: () => h('div', { class: 'stack-sm' }, h('p', { class: 'muted small docs-note' }, t('docs.anthNote')), codeBlock(sn.anthropic.node)) },
+        { id: 'anth-curl', label: t('docs.anthCurl'), render: () => codeBlock(sn.anthropic.curl) },
         { id: 'resp-py', label: t('docs.respPy'), render: () => codeBlock(sn.responses.python) },
         { id: 'resp-curl', label: t('docs.respCurl'), render: () => codeBlock(sn.responses.curl) },
         { id: 'admin', label: t('docs.adminApi'), render: () => h('div', { class: 'stack-sm' }, h('p', { class: 'muted small' }, t('docs.adminApiDesc')), codeBlock(sn.admin)) },

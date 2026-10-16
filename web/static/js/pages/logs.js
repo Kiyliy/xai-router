@@ -1,20 +1,20 @@
 import {
   h, fmtInt, fmtUSD, fmtMs, fmtCompact, fmtBytes, fmtDateTime, fmtTimeShort, relTime, timeEl, debounce, tryParseJSON, highlightJSON,
-  statusClass, toLocalInput, fromLocalInput, copyText,
+  statusClass, toLocalInput, fromLocalInput, copyText, downloadText,
 } from '../util.js';
 import { icon } from '../icons.js';
 import { t } from '../i18n.js';
 import { get } from '../api.js';
 import {
   card, toast, toastError, openModal, badge, select, input, pagination, skeletonRows, tableEmptyRow, tableWrap,
-  segmented, switchEl, button, copyButton, busy, tabs, kv, spinner,
+  segmented, switchEl, button, copyButton, busy, tabs, kv, spinner, errorMessage,
 } from '../ui.js';
 
 const PRESETS = ['15m', '1h', '24h', '7d', 'all', 'custom'];
 const PRESET_MS = { '15m': 15 * 60e3, '1h': 3600e3, '24h': 86400e3, '7d': 7 * 86400e3 };
 const STATUS_OPTS = ['', 'success', 'error', '2xx', '4xx', '5xx', '429', 'custom'];
 const PATHS = ['/v1/chat/completions', '/v1/responses', '/v1/messages', '/v1/realtime', '/v1/tts', '/v1/stt', '/v1/completions', '/v1/embeddings', '/v1/images/generations', '/v1/images/edits', '/v1/videos/generations', '/v1/models'];
-const ACTION_VARIANT = { success: 'success', retry: 'warning', return: 'neutral', cooldown: 'warning', disable: 'danger' };
+const ACTION_VARIANT = { success: 'success', retry: 'warning', return: 'neutral', cooldown: 'warning', disable: 'danger', verify: 'warning' };
 
 function statusBadge(code) {
   return badge(code ? String(code) : 'ERR', statusClass(code), { class: 'badge-status mono' });
@@ -24,35 +24,69 @@ function methodTag(m) { return h('span', { class: `method method-${(m || 'GET').
 // ---------- detail view ----------
 function emptyPane(label) { return h('div', { class: 'pane-empty' }, icon('inbox', 18), h('span', null, label)); }
 
-function bodyView(text, { truncated } = {}) {
+/** "Expand" toggle for a bounded code pane: collapsed panes scroll inside, expanded ones grow with the drawer. */
+function expandToggle(pre) {
+  const btn = h('button', { type: 'button', class: 'pane-tool', 'aria-pressed': 'false' });
+  const paint = () => {
+    const on = pre.classList.contains('expanded');
+    btn.replaceChildren(icon(on ? 'shrink' : 'expand', 12), h('span', null, on ? t('logs.collapse') : t('logs.expand')));
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  };
+  btn.addEventListener('click', () => { pre.classList.toggle('expanded'); paint(); });
+  paint();
+  // Hide the toggle when the content already fits.
+  requestAnimationFrame(() => { if (pre.scrollHeight <= pre.clientHeight + 2 && !pre.classList.contains('expanded')) btn.hidden = true; });
+  return btn;
+}
+
+function bodyView(text, { truncated, note } = {}) {
   if (text == null || text === '') return emptyPane(t('logs.noBody'));
   const parsed = tryParseJSON(text);
   const pre = h('pre', { class: 'code code-body' });
   if (parsed.ok) pre.appendChild(highlightJSON(parsed.value)); else pre.textContent = text;
   const sz = new Blob([text]).size;
   return h('div', { class: 'pane-content' },
-    h('div', { class: 'pane-meta' }, h('span', null, parsed.ok ? 'JSON' : t('logs.raw')), h('span', null, `${fmtCompact(sz)} B`), truncated ? badge(t('logs.truncated'), 'warning') : null),
+    h('div', { class: 'pane-meta' }, h('span', null, parsed.ok ? 'JSON' : t('logs.raw')), h('span', null, `${fmtCompact(sz)} B`), truncated ? badge(t('logs.truncated'), 'warning') : null,
+      h('span', { class: 'pane-meta-spacer' }), expandToggle(pre)),
+    note || null,
     pre);
 }
+
+let sseFormatPref = (() => { try { return localStorage.getItem('xr.logs.sseFmt') === '1'; } catch { return false; } })();
 
 function sseView(text) {
   if (!text) return emptyPane(t('logs.noBody'));
   const pre = h('pre', { class: 'code code-body code-sse' });
   const lines = text.split('\n');
   const limit = 6000;
-  lines.slice(0, limit).forEach((line, i) => {
-    const m = /^(data|event|id|retry):\s?/.exec(line);
-    if (m) {
-      pre.appendChild(h('span', { class: 'sse-field' }, m[0]));
-      const rest = line.slice(m[0].length);
-      pre.appendChild(h('span', { class: rest === '[DONE]' ? 'sse-done' : 'sse-data' }, rest));
-    } else if (line.startsWith(':')) pre.appendChild(h('span', { class: 'sse-comment' }, line));
-    else pre.appendChild(document.createTextNode(line));
-    if (i < lines.length - 1) pre.appendChild(document.createTextNode('\n'));
-  });
-  if (lines.length > limit) pre.appendChild(h('span', { class: 'sse-comment' }, `\n… ${lines.length - limit} more lines (copy to see all)`));
+  const paint = () => {
+    pre.replaceChildren();
+    lines.slice(0, limit).forEach((line, i) => {
+      const m = /^(data|event|id|retry):\s?/.exec(line);
+      if (m) {
+        pre.appendChild(h('span', { class: 'sse-field' }, m[0]));
+        const rest = line.slice(m[0].length);
+        const parsed = sseFormatPref && m[1] === 'data' ? tryParseJSON(rest) : { ok: false };
+        if (parsed.ok) pre.appendChild(h('span', { class: 'sse-json' }, highlightJSON(parsed.value)));
+        else pre.appendChild(h('span', { class: rest === '[DONE]' ? 'sse-done' : 'sse-data' }, rest));
+      } else if (line.startsWith(':')) pre.appendChild(h('span', { class: 'sse-comment' }, line));
+      else pre.appendChild(document.createTextNode(line));
+      if (i < lines.length - 1) pre.appendChild(document.createTextNode('\n'));
+    });
+    if (lines.length > limit) pre.appendChild(h('span', { class: 'sse-comment' }, `\n… ${t('logs.moreLines', { n: lines.length - limit })}`));
+  };
+  paint();
   const events = lines.filter((l) => l.startsWith('data:')).length;
-  return h('div', { class: 'pane-content' }, h('div', { class: 'pane-meta' }, h('span', null, 'text/event-stream'), h('span', null, t('logs.eventsN', { n: events }))), pre);
+  const fmtBtn = h('button', { type: 'button', class: `pane-tool ${sseFormatPref ? 'on' : ''}`, 'aria-pressed': sseFormatPref ? 'true' : 'false', title: t('logs.formatEventsHint') },
+    icon('braces', 12), h('span', null, t('logs.formatEvents')));
+  fmtBtn.addEventListener('click', () => {
+    sseFormatPref = !sseFormatPref;
+    try { localStorage.setItem('xr.logs.sseFmt', sseFormatPref ? '1' : '0'); } catch { /* ignore */ }
+    fmtBtn.classList.toggle('on', sseFormatPref); fmtBtn.setAttribute('aria-pressed', sseFormatPref ? 'true' : 'false');
+    paint();
+  });
+  return h('div', { class: 'pane-content' }, h('div', { class: 'pane-meta' }, h('span', null, 'text/event-stream'), h('span', null, t('logs.eventsN', { n: events })),
+    h('span', { class: 'pane-meta-spacer' }), fmtBtn, expandToggle(pre)), pre);
 }
 
 function textView(d) {
@@ -98,7 +132,7 @@ function attemptsView(d) {
             h('span', { class: 'strong' }, a.key_name || (a.key_id != null ? `#${a.key_id}` : '—')),
             a.status ? statusBadge(a.status) : badge(t('logs.networkError'), 'danger'),
             a.action ? badge(t(`action.${a.action}`) || a.action, ACTION_VARIANT[a.action] || 'neutral', { class: 'badge-outline' }) : null,
-            h('span', { class: 'attempt-times mono muted' }, `+${fmtMs(offs[i])}`, ' · ', `TTFB ${fmtMs(a.ttfb_ms)}`, ' · ', fmtMs(a.latency_ms))),
+            h('span', { class: 'attempt-times mono muted' }, `+${fmtMs(offs[i])}`, ' · ', h('span', { title: t('logs.ttfbUpstreamHint') }, `${t('logs.ttfbUpstream')} ${fmtMs(a.ttfb_ms)}`), ' · ', fmtMs(a.latency_ms))),
           a.error ? h('div', { class: 'attempt-error' }, a.error) : null,
           h('div', { class: 'waterfall' }, h('div', { class: `wf-bar wf-${v}`, style: { left: `${left}%`, width: `${width}%` } }, h('div', { class: 'wf-ttfb', style: { width: `${ttfbW}%` } })))));
     }));
@@ -143,9 +177,14 @@ function wsSessionView(s) {
 }
 
 function detailView(d, ctx) {
+  // The gateway adds stream_options.include_usage to streaming chat completions (setting
+  // inject_stream_usage); the logged body is the client's original, so say so.
+  const isChat = /\/chat\/completions$/.test(d.path || '');
+  const usageNote = d.stream && isChat && ctx && ctx.injectUsage !== false
+    ? h('div', { class: 'pane-note' }, icon('info', 13), h('span', null, t('logs.includeUsageNote'))) : null;
   const stat = (label, value, sub, cls = '') => h('div', { class: `dstat ${cls}` }, h('div', { class: 'dstat-l' }, label), h('div', { class: 'dstat-v' }, value), sub ? h('div', { class: 'dstat-s' }, sub) : null);
   const reqTabs = [
-    { id: 'body', label: t('logs.body'), render: () => bodyView(d.request_body, { truncated: d.truncated }) },
+    { id: 'body', label: t('logs.body'), render: () => bodyView(d.request_body, { truncated: d.truncated, note: usageNote }) },
     { id: 'headers', label: t('logs.headers'), count: Object.keys(d.request_headers || {}).length, render: () => headersView(d.request_headers) },
   ];
   const resTabs = d.websocket
@@ -178,7 +217,7 @@ function detailView(d, ctx) {
     d.truncated ? h('div', { class: 'callout callout-warning' }, icon('alert', 16), h('span', null, t('logs.truncatedNotice'))) : null,
     h('div', { class: 'dstats' },
       stat(t('common.status'), statusBadge(d.status), d.status === 499 ? t('logs.clientGone') : null),
-      stat(t('common.latency'), fmtMs(d.latency_ms), `TTFB ${fmtMs(d.ttfb_ms)}`),
+      stat(t('common.latency'), fmtMs(d.latency_ms), h('span', { title: t('logs.ttfbClientHint') }, `${t('logs.ttfbClient')} ${fmtMs(d.ttfb_ms)}`)),
       stat(t('common.cost'), fmtUSD(d.cost_usd), d.cost_source ? badge(t(`costsrc.${d.cost_source}`) || d.cost_source, d.cost_source === 'upstream' ? 'success' : d.cost_source === 'computed' ? 'info' : 'neutral') : null),
       stat(t('ov.tokens'), fmtInt(d.total_tokens || 0), `${fmtCompact(d.prompt_tokens || 0)} → ${fmtCompact(d.completion_tokens || 0)}`),
       stat(t('logs.attempts'), String(d.attempts || (d.upstream_attempts || []).length || 0), (d.attempts || 1) > 1 ? t('logs.retried') : null, (d.attempts || 1) > 1 ? 'dstat-warn' : '')),
@@ -224,7 +263,7 @@ export function render(el, ctx) {
   const refreshBtn = button('', { icon: 'refresh', variant: 'ghost', size: 'icon', attrs: { title: t('common.refresh'), 'aria-label': t('common.refresh') }, onClick: () => load() });
   ctx.setActions(autoSw, refreshBtn);
 
-  const changed = () => { st.page = 1; syncParams(); load(); };
+  const changed = () => { st.page = 1; syncParams(); paintFilterToggle(); load(); };
   const fromIn = input({ type: 'datetime-local', value: toLocalInput(st.from), onchange: (e) => { st.from = fromLocalInput(e.target.value) || ''; changed(); } });
   const toIn = input({ type: 'datetime-local', value: toLocalInput(st.to), onchange: (e) => { st.to = fromLocalInput(e.target.value) || ''; changed(); } });
   const customRange = h('div', { class: 'custom-range', hidden: st.preset !== 'custom' }, fromIn, h('span', { class: 'muted' }, '→'), toIn);
@@ -261,10 +300,20 @@ export function render(el, ctx) {
   } });
   const lbl = (text, ctl) => h('label', { class: 'filter' }, h('span', { class: 'filter-label' }, text), ctl);
 
+  const filterToggle = h('button', { type: 'button', class: 'btn btn-sm filters-toggle', 'aria-expanded': 'false', onclick: () => {
+    const open = !filterBar.classList.contains('open');
+    filterBar.classList.toggle('open', open);
+    filterToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  } });
+  const paintFilterToggle = () => {
+    const n = [st.preset !== '24h', st.model, st.status, st.key_id, st.token_id, st.path].filter(Boolean).length;
+    filterToggle.replaceChildren(icon('filter', 14), h('span', null, n ? t('logs.filtersN', { n }) : t('logs.filters')));
+    filterToggle.classList.toggle('btn-active', n > 0);
+  };
   const filterBar = h('div', { class: 'filters' },
     h('div', { class: 'filters-row' },
       presetSel, customRange,
-      h('div', { class: 'search-input filters-q' }, icon('search', 15), qIn)),
+      h('div', { class: 'filters-q-row' }, h('div', { class: 'search-input filters-q' }, icon('search', 15), qIn), filterToggle)),
     h('div', { class: 'filters-row filters-grid' },
       lbl(t('common.model'), modelIn),
       lbl(t('common.status'), h('div', { class: 'row-sm' }, statusSel, customStatus)),
@@ -274,18 +323,26 @@ export function render(el, ctx) {
       h('div', { class: 'filter filter-reset' }, resetBtn)),
     dlModels, dlPaths);
 
-  const COLS = 10;
+  const COLS = 8;
   const tbody = h('tbody', null, skeletonRows(COLS, 10));
-  const table = h('table', { class: 'table table-logs' },
+  const table = h('table', { class: 'table table-logs table-cards' },
     h('thead', null, h('tr', null,
       h('th', null, t('logs.time')), h('th', null, t('logs.request')), h('th', null, t('common.model')), h('th', null, t('common.status')),
-      h('th', { class: 'num' }, t('logs.attemptsShort')), h('th', null, `${t('common.token')} / ${t('common.key')}`),
-      h('th', { class: 'num' }, 'TTFB'), h('th', { class: 'num' }, t('common.latency')), h('th', { class: 'num' }, t('ov.tokens')), h('th', { class: 'num' }, t('common.cost')))),
+      h('th', null, `${t('common.token')} / ${t('common.key')}`),
+      h('th', { class: 'num', title: t('logs.ttfbClientHint') }, t('common.latency')), h('th', { class: 'num' }, t('ov.tokens')), h('th', { class: 'num col-cost' }, t('common.cost')))),
     tbody);
   const pager = h('div');
   const countEl = h('span', { class: 'toolbar-count' });
   const liveDot = h('span', { class: 'live-dot', hidden: !st.auto, title: t('logs.autoRefresh') });
-  el.append(card({ flush: true, cls: 'card-logs', body: [filterBar, h('div', { class: 'toolbar toolbar-thin' }, countEl, liveDot, h('div', { class: 'toolbar-spacer' }), h('span', { class: 'muted small hide-sm' }, t('logs.clickHint'))), tableWrap(table, { maxHeight: 'calc(100vh - 330px)' }), pager] }));
+  const exportBtn = button(t('logs.exportJson'), { icon: 'download', size: 'sm', variant: 'ghost', attrs: { title: t('logs.exportHint') }, onClick: () => {
+    if (!st.rows.length) { toast(t('logs.exportEmpty'), 'info'); return; }
+    const d = new Date(); const p2 = (n) => String(n).padStart(2, '0');
+    const name = `xai-router-logs-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}-p${st.page}.json`;
+    downloadText(name, JSON.stringify({ exported_at: d.toISOString(), filters: query(), total: st.total, page: st.page, page_size: st.pageSize, data: st.rows }, null, 2));
+    toast(t('logs.exported', { n: st.rows.length }), 'success', 2500);
+  } });
+  el.append(card({ flush: true, cls: 'card-logs', body: [filterBar, h('div', { class: 'toolbar toolbar-thin' }, countEl, liveDot, h('div', { class: 'toolbar-spacer' }), h('span', { class: 'muted small hide-sm' }, t('logs.clickHint')), exportBtn), tableWrap(table, { maxHeight: 'calc(100vh - 330px)' }), pager] }));
+  paintFilterToggle();
 
   function row(r) {
     const tokTip = [`${t('tok.prompt')}: ${fmtInt(r.prompt_tokens)}`, `${t('tok.completion')}: ${fmtInt(r.completion_tokens)}`, `${t('tok.cached')}: ${fmtInt(r.cached_tokens)}`, `${t('tok.reasoning')}: ${fmtInt(r.reasoning_tokens)}`, r.image_tokens ? `${t('tok.image')}: ${fmtInt(r.image_tokens)}` : null, `${t('tok.total')}: ${fmtInt(r.total_tokens)}`].filter(Boolean).join('\n');
@@ -294,19 +351,19 @@ export function render(el, ctx) {
     else if (r.video_seconds) tokCell = h('span', null, `${r.video_seconds}s`);
     else if (r.total_tokens || r.prompt_tokens) tokCell = h('span', null, fmtCompact(r.prompt_tokens || 0), h('span', { class: 'muted' }, ' → '), fmtCompact(r.completion_tokens || 0));
     else tokCell = h('span', { class: 'muted' }, '—');
+    const retried = (r.attempts || 0) > 1;
     const tr = h('tr', { class: `clickable ${r.status >= 400 || !r.status ? 'row-err' : ''} ${r.id === st.openId ? 'row-active' : ''}`, 'data-id': r.id, onclick: () => openDetail(r.id) },
-      h('td', { class: 'nowrap' }, h('div', { class: 'mono', title: fmtDateTime(r.created_at) }, fmtTimeShort(r.created_at)), h('div', { class: 'cell-sub', 'data-rel': r.created_at }, relTime(r.created_at))),
-      h('td', { class: 'cell-req' }, h('div', { class: 'req-line' }, methodTag(r.method), h('span', { class: 'mono path' }, r.path)), r.error ? h('div', { class: 'cell-sub text-danger truncate', title: r.error }, r.error) : null),
-      h('td', null, h('div', { class: 'model-line' }, r.model ? h('span', { class: 'mono' }, r.model) : h('span', { class: 'muted' }, '—'), r.stream ? h('span', { class: 'stream-tag', title: t('logs.streamYes') }, icon('stream', 12), 'SSE') : null, r.websocket ? h('span', { class: 'stream-tag', title: 'WebSocket' }, icon('stream', 12), 'WS') : null)),
-      h('td', null, statusBadge(r.status)),
-      h('td', { class: 'num' }, (r.attempts || 0) > 1 ? badge(`×${r.attempts}`, 'warning', { title: t('logs.retriedN', { n: r.attempts }) }) : h('span', { class: 'muted' }, r.attempts ? '1' : '—')),
-      h('td', { class: 'truncate-cell' },
+      h('td', { class: 'nowrap m-meta m-time' }, h('div', { class: 'mono', title: fmtDateTime(r.created_at) }, fmtTimeShort(r.created_at)), h('div', { class: 'cell-sub', 'data-rel': r.created_at }, relTime(r.created_at))),
+      h('td', { class: 'cell-req m-title' }, h('div', { class: 'req-line' }, methodTag(r.method), h('span', { class: 'mono path', title: r.path }, r.path)), r.error ? h('div', { class: 'cell-sub text-danger truncate hide-m', title: r.error }, r.error) : null),
+      h('td', { class: 'cell-model m-meta' }, h('div', { class: 'model-line' }, r.model ? h('span', { class: 'mono model-name', title: r.model }, r.model) : h('span', { class: 'muted' }, '—'), r.stream ? h('span', { class: 'stream-tag', title: t('logs.streamYes') }, icon('stream', 12), 'SSE') : null, r.websocket ? h('span', { class: 'stream-tag', title: 'WebSocket' }, icon('stream', 12), 'WS') : null)),
+      h('td', { class: 'nowrap m-badge' }, statusBadge(r.status), retried ? badge(`×${r.attempts}`, 'warning', { class: 'badge-tries', title: t('logs.retriedN', { n: r.attempts }) }) : null),
+      h('td', { class: 'truncate-cell m-meta m-who' },
         h('div', { class: 'truncate', title: `${t('common.token')}: ${r.token_name || '—'}` }, r.token_name || h('span', { class: 'muted' }, '—')),
         h('div', { class: 'cell-sub truncate', title: `${t('common.key')}: ${r.key_name || '—'}` }, icon('key', 10), ' ', r.key_name || '—')),
-      h('td', { class: 'num mono' }, r.ttfb_ms ? fmtMs(r.ttfb_ms) : h('span', { class: 'muted' }, '—')),
-      h('td', { class: `num mono ${r.latency_ms > 30000 ? 'text-warning' : ''}` }, fmtMs(r.latency_ms)),
-      h('td', { class: 'num mono', title: tokTip }, tokCell),
-      h('td', { class: 'num mono' }, r.cost_usd ? fmtUSD(r.cost_usd) : h('span', { class: 'muted' }, '$0')));
+      h('td', { class: `num mono m-meta ${r.latency_ms > 30000 ? 'text-warning' : ''}` }, h('div', null, fmtMs(r.latency_ms)), r.ttfb_ms ? h('div', { class: 'cell-sub', title: t('logs.ttfbClientHint') }, `${t('logs.ttfbShort')} ${fmtMs(r.ttfb_ms)}`) : null),
+      h('td', { class: 'num mono m-meta', title: tokTip }, tokCell),
+      h('td', { class: 'num mono m-meta col-cost' }, r.cost_usd ? fmtUSD(r.cost_usd) : h('span', { class: 'muted' }, '$0')),
+      r.error ? h('td', { class: 'm-only-cell m-full' }, h('div', { class: 'cell-sub text-danger truncate', title: r.error }, r.error)) : null);
     return tr;
   }
 
@@ -332,9 +389,12 @@ export function render(el, ctx) {
       pager.replaceChildren(pagination({ page: st.page, pageSize: st.pageSize, total: st.total, onChange: (pg, ps) => { st.page = pg; st.pageSize = ps; try { localStorage.setItem('xr.logs.ps', ps); } catch { /* */ } syncParams(); load(); } }));
     } catch (e) {
       if (e.name === 'AbortError') return;
-      if (!silent) { toastError(e); tbody.replaceChildren(tableEmptyRow(COLS, { icon: 'alert', title: t('common.loadFailed'), desc: e.message })); }
+      if (!silent) { toastError(e); tbody.replaceChildren(tableEmptyRow(COLS, { icon: 'alert', title: t('common.loadFailed'), desc: errorMessage(e) })); }
     } finally { loading = false; refreshBtn.classList.remove('spin'); }
   }
+
+  let injectUsage = null;
+  get('/api/v1/settings', null, { signal: ctx.signal }).then((x) => { injectUsage = x ? x.inject_stream_usage !== false : null; }).catch(() => {});
 
   // --- selects data ---
   async function loadFilterData() {
@@ -381,11 +441,11 @@ export function render(el, ctx) {
       drawer.setTitle(`${d.method || 'GET'} ${d.path || ''}`);
       const sub = drawer.el.querySelector('.modal-subtitle');
       if (sub) sub.textContent = `${fmtDateTime(d.created_at)} · ${relTime(d.created_at)}${d.model ? ' · ' + d.model : ''}`;
-      drawer.setBody(detailView(d, { closeDetail: () => drawer && drawer.close() }));
+      drawer.setBody(detailView(d, { closeDetail: () => drawer && drawer.close(), injectUsage }));
       drawer.body.scrollTop = 0;
     } catch (e) {
       if (e.name === 'AbortError') return;
-      drawer && drawer.setBody(h('div', { class: 'drawer-loading' }, icon('alert', 22), h('span', null, e.message)));
+      drawer && drawer.setBody(h('div', { class: 'drawer-loading' }, icon('alert', 22), h('span', null, errorMessage(e))));
       toastError(e);
     }
   }

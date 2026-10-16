@@ -116,6 +116,12 @@ func (m *mockXAI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			for _, piece := range []string{"Hel", "lo", " wor", "ld"} {
 				fmt.Fprintf(w, "data: {\"id\":\"chat-1\",\"object\":\"chat.completion.chunk\",\"model\":\"grok-build-0.1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":%q}}]}\n\n", piece)
 				fl.Flush()
+				if r.Header.Get("X-Grok-Mock-Break") != "" {
+					// Upstream dies mid-stream: drop the connection.
+					conn, _, _ := w.(http.Hijacker).Hijack()
+					conn.Close()
+					return
+				}
 				time.Sleep(m.streamGap)
 			}
 			opts, _ := req["stream_options"].(map[string]any)

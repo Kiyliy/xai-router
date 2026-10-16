@@ -137,6 +137,10 @@ XR_ADMIN_PASSWORD='换成强密码' ./xai-router
 先备份数据目录（或数据卷），然后替换二进制、或拉取新镜像并重启（`docker compose pull && docker compose up -d`）。
 数据库迁移在启动时自动执行，可以重复执行，密钥、令牌、日志和统计都会保留；不支持降级。
 
+从 v0.2.0 开始，上游地址默认只能是 `https://api.x.ai` 或 `https://*.api.x.ai`（SSRF 防护）。指向其他地址的 key 会保留在池中，
+但会以"blocked by upstream policy"被跳过，直到你在 **设置 → 安全** 里放开对应的主机（`upstream_allowed_hosts`、
+`allow_insecure_upstreams`、`allow_private_upstreams`）。
+
 ## 调用网关
 
 任何 OpenAI 兼容 SDK 都可以，只需改 base URL 和 key：

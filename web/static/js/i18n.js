@@ -184,7 +184,67 @@ const en = {
   'docs.chatPy': 'Chat · Python', 'docs.chatCurl': 'Chat · curl', 'docs.respPy': 'Responses · Python', 'docs.respCurl': 'Responses · curl',
   'docs.adminApi': 'Admin API', 'docs.adminApiDesc': 'Everything in this console is available over the admin API, authenticated with a session or an xra- admin token.',
   'docs.loadingRef': 'Loading API reference…', 'docs.reference': 'Admin API reference', 'docs.referenceSub': 'Rendered from openapi.yaml with Swagger UI {v}',
-  'docs.loadFailed': 'Could not load Swagger UI (needs internet access to cdn.jsdelivr.net)',
+  'docs.loadFailed': 'Could not load the bundled Swagger UI',
+  // ---- UX pass: shared ----
+  'common.showSecret': 'Show', 'common.hideSecret': 'Hide', 'common.select': 'Select', 'common.selectAll': 'Select all on this page',
+  'common.selectedN': '{n} selected', 'common.clearSelection': 'Clear', 'common.bulkActions': 'Bulk actions', 'common.failedN': '{n} failed',
+  'common.bulkDone': 'Done — {n} item(s) updated', 'common.bulkDoneFailed': '{ok} of {total} succeeded, {n} failed',
+  'guard.title': 'Leave without saving?', 'guard.msg': 'You have unsaved changes on this page. They will be lost if you leave.', 'guard.leave': 'Discard and leave',
+  'range.90d': '90d',
+  'err.settingsRange': '{field} must be between {a} and {b}.',
+  'err.network_error': 'Network error — cannot reach the server ({detail}).',
+  'err.invalid_password': 'The password is incorrect.', 'err.too_many_attempts': 'Too many failed attempts. Please wait a few minutes and try again.',
+  'err.weak_password': 'The new password must be at least 8 characters.', 'err.invalid_settings': 'Invalid settings: {detail}',
+  'err.not_found': 'Not found: {detail}', 'err.conflict': 'Already exists: {detail}', 'err.invalid_key': 'Invalid key: {detail}',
+  'err.invalid_token': 'Invalid token: {detail}', 'err.invalid_model': 'Invalid model: {detail}',
+  'err.no_upstream_keys': 'No usable upstream key is available.', 'err.sync_failed': 'Model sync failed: {detail}',
+  'err.unauthorized': 'Not signed in or the session has expired.', 'err.invalid_json': 'The request body is not valid JSON.',
+  'err.too_large': 'The request body is too large.', 'err.invalid_range': 'Unsupported time range.', 'err.invalid_time': 'Invalid time: {detail}',
+  'err.invalid_name': 'A name is required.', 'err.invalid_id': 'Invalid ID.', 'err.invalid_interval': 'Invalid chart interval: {detail}', 'err.invalid_group': 'Invalid grouping: {detail}',
+  'err.ambiguous_model': 'The model name is ambiguous: {detail}', 'err.model_required': 'A model is required.',
+  'err.model_not_allowed': 'This token may not use that model.', 'err.model_disabled': 'This model is disabled by the administrator.',
+  'err.model_not_priced': 'This model has no known price, so tokens with a USD quota cannot use it.', 'err.insufficient_quota': 'The token has used up its quota.',
+  'err.internal_error': 'Internal server error: {detail}',
+  'test.msg.ok': 'Key is healthy.', 'test.msg.invalid': 'xAI rejected the key as invalid.', 'test.msg.blocked': 'The key or its team is blocked by xAI.',
+  'test.msg.no_credits': 'The team has no credits or hit its spending limit.', 'test.msg.rate_limited': 'Rate limited right now — the key itself looks fine.',
+  'test.msg.error': 'The test could not be completed (network or upstream error).',
+  'action.verify': 'verifying key',
+  // overview
+  'ov.resources': 'Resources', 'ov.keysUnit': 'keys', 'ov.tokensLine': 'Tokens: {n} / {total} enabled', 'ov.noModel': '(no model)', 'ov.other': 'Other', 'ov.deleted': '(deleted)',
+  // keys
+  'keys.routing': 'Routing', 'keys.usage': 'Usage', 'keys.reqShort': 'req', 'keys.errShort': 'err',
+  'keys.restore': 'Restore', 'keys.restoreHint': 'Clear the automatic disable and put the key back into rotation',
+  'keys.autoDisabledSwitch': 'Enabled by you, but the gateway disabled it automatically ({reason}). Use “Restore” to put it back into rotation.',
+  'keys.bulkTest': 'Test', 'keys.bulkTestTitle': 'Test {n} selected key(s)?', 'keys.bulkDeleteTitle': 'Delete {n} key(s)?', 'keys.bulkDeleteMsg': 'The selected keys will be removed from the pool. Historical logs are kept.',
+  // tokens
+  'tokens.enabledToast': 'Token “{name}” enabled', 'tokens.disabledToast': 'Token “{name}” disabled — requests are rejected',
+  'tokens.exhausted': 'Quota used up', 'tokens.loadingModels': 'Loading model suggestions…',
+  'tokens.dupName': 'A token named “{name}” already exists. Logs and stats show tokens by name, so a unique name is clearer.',
+  'tokens.dupInList': 'Another token has the same name', 'tokens.dupTitle': 'Duplicate token name', 'tokens.dupConfirm': '“{name}” is already used by another token. Create it anyway?', 'tokens.dupContinue': 'Use this name',
+  // models
+  'models.disabledHint': 'Disabled models are blocked: requests for them get 403 model_disabled.', 'models.disableBlock': 'Disable (block requests)',
+  'models.enabledToast': '{id} enabled', 'models.disabledToast': '{id} disabled — requests are now rejected', 'models.longShort': 'Long ctx',
+  // logs
+  'logs.ttfbClient': 'First byte to client', 'logs.ttfbClientHint': 'Time until the gateway sent the first response byte to the client',
+  'logs.ttfbShort': 'first byte', 'logs.ttfbUpstream': 'Upstream headers', 'logs.ttfbUpstreamHint': 'Time until the upstream returned response headers for this attempt',
+  'logs.expand': 'Expand', 'logs.collapse': 'Collapse', 'logs.formatEvents': 'Format events', 'logs.formatEventsHint': 'Pretty-print the JSON of each data: event',
+  'logs.moreLines': '{n} more lines (copy to see all)',
+  'logs.includeUsageNote': 'The gateway adds "stream_options": {"include_usage": true} to streaming chat requests before forwarding them (setting “Inject stream usage”). The body above is what the client sent.',
+  'logs.filters': 'Filters', 'logs.filtersN': 'Filters ({n})',
+  'logs.exportJson': 'Export JSON', 'logs.exportHint': 'Download the rows on this page as JSON', 'logs.exported': 'Exported {n} rows', 'logs.exportEmpty': 'Nothing to export on this page',
+  // settings
+  'settings.sections': 'Settings sections', 'settings.s.account': 'Account',
+  'settings.f.unpriced_models': 'Unpriced models', 'settings.h.unpriced_models': 'Whether tokens that have a USD quota may call models with no known price (their usage could not be charged against the quota).',
+  'settings.opt.block_quota_tokens': 'Block for tokens with a quota (recommended)', 'settings.opt.allow': 'Allow (usage is not charged)',
+  'settings.revokeAdminTokens': 'Revoke all admin API tokens too', 'settings.revokeAdminTokensHint': ' — scripts using xra- tokens stop working',
+  'settings.passwordChangedRevoked': 'Password changed; all admin API tokens were revoked',
+  'settings.addHost': 'Add host, e.g. *.example.com',
+  'settings.f.upstream_allowed_hosts': 'Allowed upstream hosts', 'settings.h.upstream_allowed_hosts': 'Key base URLs must point to one of these hosts (*.example.com matches subdomains). Empty = any public host.',
+  'settings.f.allow_insecure_upstreams': 'Allow http:// upstreams', 'settings.h.allow_insecure_upstreams': 'Accept plain-HTTP base URLs for keys. Keys and prompts then travel unencrypted.',
+  'settings.f.allow_private_upstreams': 'Allow private / loopback upstreams', 'settings.h.allow_private_upstreams': 'Accept loopback, private and link-local upstream addresses. This weakens SSRF protection — only enable it for a trusted local mock or proxy.',
+  // docs
+  'docs.chatNode': 'Chat · Node.js', 'docs.anthPy': 'Anthropic · Python', 'docs.anthNode': 'Anthropic · Node.js', 'docs.anthCurl': 'Anthropic · curl',
+  'docs.anthNote': 'The Anthropic SDK sends the token as x-api-key and appends /v1/messages itself, so pass the bare origin as the base URL.',
 };
 
 const zh = {
@@ -370,7 +430,67 @@ const zh = {
   'docs.chatPy': '对话 · Python', 'docs.chatCurl': '对话 · curl', 'docs.respPy': 'Responses · Python', 'docs.respCurl': 'Responses · curl',
   'docs.adminApi': '管理 API', 'docs.adminApiDesc': '控制台中的所有功能都可以通过管理 API 完成，使用会话或 xra- 管理令牌认证。',
   'docs.loadingRef': '正在加载 API 参考…', 'docs.reference': '管理 API 参考', 'docs.referenceSub': '由 Swagger UI {v} 渲染 openapi.yaml',
-  'docs.loadFailed': '无法加载 Swagger UI（需要能访问 cdn.jsdelivr.net）',
+  'docs.loadFailed': '无法加载内置的 Swagger UI',
+  // ---- UX pass: shared ----
+  'common.showSecret': '显示', 'common.hideSecret': '隐藏', 'common.select': '选择', 'common.selectAll': '选择本页全部',
+  'common.selectedN': '已选 {n} 项', 'common.clearSelection': '取消选择', 'common.bulkActions': '批量操作', 'common.failedN': '{n} 个失败',
+  'common.bulkDone': '完成 —— 已处理 {n} 项', 'common.bulkDoneFailed': '{total} 项中 {ok} 项成功，{n} 项失败',
+  'guard.title': '不保存就离开？', 'guard.msg': '此页面有未保存的更改，离开后这些更改将丢失。', 'guard.leave': '放弃并离开',
+  'range.90d': '90 天',
+  'err.settingsRange': '「{field}」必须在 {a} 到 {b} 之间。',
+  'err.network_error': '网络错误，无法连接服务器（{detail}）。',
+  'err.invalid_password': '密码错误。', 'err.too_many_attempts': '失败次数过多，请几分钟后再试。',
+  'err.weak_password': '新密码至少需要 8 个字符。', 'err.invalid_settings': '设置无效：{detail}',
+  'err.not_found': '未找到：{detail}', 'err.conflict': '已存在：{detail}', 'err.invalid_key': '密钥无效：{detail}',
+  'err.invalid_token': '令牌无效：{detail}', 'err.invalid_model': '模型无效：{detail}',
+  'err.no_upstream_keys': '没有可用的上游密钥。', 'err.sync_failed': '模型同步失败：{detail}',
+  'err.unauthorized': '未登录或会话已过期。', 'err.invalid_json': '请求体不是有效的 JSON。',
+  'err.too_large': '请求体过大。', 'err.invalid_range': '不支持的时间范围。', 'err.invalid_time': '时间格式无效：{detail}',
+  'err.invalid_name': '必须填写名称。', 'err.invalid_id': 'ID 无效。', 'err.invalid_interval': '图表时间粒度无效：{detail}', 'err.invalid_group': '分组方式无效：{detail}',
+  'err.ambiguous_model': '模型名称有歧义：{detail}', 'err.model_required': '必须指定模型。',
+  'err.model_not_allowed': '该令牌不允许使用此模型。', 'err.model_disabled': '该模型已被管理员禁用。',
+  'err.model_not_priced': '该模型没有已知价格，设有美元额度的令牌不能调用。', 'err.insufficient_quota': '令牌额度已用完。',
+  'err.internal_error': '服务器内部错误：{detail}',
+  'test.msg.ok': '密钥状态正常。', 'test.msg.invalid': 'xAI 判定该密钥无效。', 'test.msg.blocked': '该密钥或其团队已被 xAI 封禁。',
+  'test.msg.no_credits': '团队没有余额或已达到消费上限。', 'test.msg.rate_limited': '当前被限流 —— 密钥本身看起来正常。',
+  'test.msg.error': '测试未能完成（网络或上游错误）。',
+  'action.verify': '正在验证密钥',
+  // overview
+  'ov.resources': '资源', 'ov.keysUnit': '个密钥', 'ov.tokensLine': '令牌：已启用 {n} / {total}', 'ov.noModel': '（无模型）', 'ov.other': '其他', 'ov.deleted': '（已删除）',
+  // keys
+  'keys.routing': '路由', 'keys.usage': '用量', 'keys.reqShort': '次', 'keys.errShort': '错误',
+  'keys.restore': '恢复', 'keys.restoreHint': '清除自动禁用状态，让密钥重新参与轮换',
+  'keys.autoDisabledSwitch': '你已启用该密钥，但网关已自动禁用它（{reason}）。点击「恢复」让它重新参与轮换。',
+  'keys.bulkTest': '测试', 'keys.bulkTestTitle': '测试选中的 {n} 个密钥？', 'keys.bulkDeleteTitle': '删除 {n} 个密钥？', 'keys.bulkDeleteMsg': '选中的密钥将从密钥池中移除，历史日志会保留。',
+  // tokens
+  'tokens.enabledToast': '已启用令牌「{name}」', 'tokens.disabledToast': '已禁用令牌「{name}」，其请求将被拒绝',
+  'tokens.exhausted': '额度已用完', 'tokens.loadingModels': '正在加载模型建议…',
+  'tokens.dupName': '已存在名为「{name}」的令牌。日志和统计按名称显示令牌，建议使用唯一名称。',
+  'tokens.dupInList': '另一个令牌也使用了这个名称', 'tokens.dupTitle': '令牌名称重复', 'tokens.dupConfirm': '「{name}」已被其他令牌使用，仍然创建吗？', 'tokens.dupContinue': '仍使用此名称',
+  // models
+  'models.disabledHint': '禁用的模型会被拦截：请求将收到 403 model_disabled。', 'models.disableBlock': '禁用（拦截请求）',
+  'models.enabledToast': '已启用 {id}', 'models.disabledToast': '已禁用 {id}，相关请求将被拒绝', 'models.longShort': '长上下文',
+  // logs
+  'logs.ttfbClient': '首字节（到客户端）', 'logs.ttfbClientHint': '网关向客户端发出第一个响应字节所用的时间',
+  'logs.ttfbShort': '首字节', 'logs.ttfbUpstream': '上游响应头', 'logs.ttfbUpstreamHint': '本次尝试中上游返回响应头所用的时间',
+  'logs.expand': '展开', 'logs.collapse': '收起', 'logs.formatEvents': '格式化事件', 'logs.formatEventsHint': '把每个 data: 事件的 JSON 格式化显示',
+  'logs.moreLines': '还有 {n} 行（复制可查看全部）',
+  'logs.includeUsageNote': '网关在转发流式对话请求前会加入 "stream_options": {"include_usage": true}（设置「注入流式用量」）。上方显示的是客户端发送的原始内容。',
+  'logs.filters': '筛选', 'logs.filtersN': '筛选（{n}）',
+  'logs.exportJson': '导出 JSON', 'logs.exportHint': '将本页的日志行下载为 JSON', 'logs.exported': '已导出 {n} 行', 'logs.exportEmpty': '本页没有可导出的内容',
+  // settings
+  'settings.sections': '设置分组', 'settings.s.account': '账户',
+  'settings.f.unpriced_models': '无价格模型', 'settings.h.unpriced_models': '设有美元额度的令牌是否可以调用没有已知价格的模型（这类用量无法从额度中扣除）。',
+  'settings.opt.block_quota_tokens': '对有额度的令牌拦截（推荐）', 'settings.opt.allow': '允许（用量不计费）',
+  'settings.revokeAdminTokens': '同时吊销所有管理 API 令牌', 'settings.revokeAdminTokensHint': ' —— 使用 xra- 令牌的脚本将失效',
+  'settings.passwordChangedRevoked': '密码已修改，所有管理 API 令牌已吊销',
+  'settings.addHost': '添加主机，如 *.example.com',
+  'settings.f.upstream_allowed_hosts': '允许的上游主机', 'settings.h.upstream_allowed_hosts': '密钥的 Base URL 必须指向这些主机之一（*.example.com 匹配子域名）。留空 = 任意公网主机。',
+  'settings.f.allow_insecure_upstreams': '允许 http:// 上游', 'settings.h.allow_insecure_upstreams': '允许密钥使用明文 HTTP 的 Base URL，密钥和提示内容将不加密传输。',
+  'settings.f.allow_private_upstreams': '允许内网 / 回环上游', 'settings.h.allow_private_upstreams': '允许回环、私有和链路本地地址作为上游。这会削弱 SSRF 防护 —— 仅在使用可信的本地模拟服务或代理时开启。',
+  // docs
+  'docs.chatNode': '对话 · Node.js', 'docs.anthPy': 'Anthropic · Python', 'docs.anthNode': 'Anthropic · Node.js', 'docs.anthCurl': 'Anthropic · curl',
+  'docs.anthNote': 'Anthropic SDK 通过 x-api-key 发送令牌，并会自动拼接 /v1/messages，所以 Base URL 只填域名即可。',
 };
 
 const DICTS = { en, zh };
@@ -386,6 +506,9 @@ export function setLang(l) {
   lang = l === 'zh' ? 'zh' : 'en';
   try { localStorage.setItem(KEY, lang); } catch { /* ignore */ }
 }
+
+/** True when `key` exists in the current (or English) dictionary. */
+export function hasT(key) { return DICTS[lang][key] !== undefined || en[key] !== undefined; }
 
 const warned = new Set();
 export function t(key, params) {
