@@ -159,7 +159,7 @@ function detailView(d, ctx) {
       stat(t('common.latency'), fmtMs(d.latency_ms), `TTFB ${fmtMs(d.ttfb_ms)}`),
       stat(t('common.cost'), fmtUSD(d.cost_usd), d.cost_source ? badge(t(`costsrc.${d.cost_source}`) || d.cost_source, d.cost_source === 'upstream' ? 'success' : d.cost_source === 'computed' ? 'info' : 'neutral') : null),
       stat(t('ov.tokens'), fmtInt(d.total_tokens || 0), `${fmtCompact(d.prompt_tokens || 0)} → ${fmtCompact(d.completion_tokens || 0)}`),
-      stat(t('logs.attempts'), String(d.attempts || (d.upstream_attempts || []).length || 1), (d.attempts || 1) > 1 ? t('logs.retried') : null, (d.attempts || 1) > 1 ? 'dstat-warn' : '')),
+      stat(t('logs.attempts'), String(d.attempts || (d.upstream_attempts || []).length || 0), (d.attempts || 1) > 1 ? t('logs.retried') : null, (d.attempts || 1) > 1 ? 'dstat-warn' : '')),
     h('div', { class: 'detail-grid' },
       h('div', { class: 'detail-block' }, h('h4', null, t('logs.request')), kv([
         [t('common.model'), d.model ? h('span', { class: 'mono' }, d.model) : null],
@@ -276,7 +276,7 @@ export function render(el, ctx) {
       h('td', { class: 'cell-req' }, h('div', { class: 'req-line' }, methodTag(r.method), h('span', { class: 'mono path' }, r.path)), r.error ? h('div', { class: 'cell-sub text-danger truncate', title: r.error }, r.error) : null),
       h('td', null, h('div', { class: 'model-line' }, r.model ? h('span', { class: 'mono' }, r.model) : h('span', { class: 'muted' }, '—'), r.stream ? h('span', { class: 'stream-tag', title: t('logs.streamYes') }, icon('stream', 12), 'SSE') : null)),
       h('td', null, statusBadge(r.status)),
-      h('td', { class: 'num' }, (r.attempts || 1) > 1 ? badge(`×${r.attempts}`, 'warning', { title: t('logs.retriedN', { n: r.attempts }) }) : h('span', { class: 'muted' }, '1')),
+      h('td', { class: 'num' }, (r.attempts || 0) > 1 ? badge(`×${r.attempts}`, 'warning', { title: t('logs.retriedN', { n: r.attempts }) }) : h('span', { class: 'muted' }, r.attempts ? '1' : '—')),
       h('td', { class: 'truncate-cell' },
         h('div', { class: 'truncate', title: `${t('common.token')}: ${r.token_name || '—'}` }, r.token_name || h('span', { class: 'muted' }, '—')),
         h('div', { class: 'cell-sub truncate', title: `${t('common.key')}: ${r.key_name || '—'}` }, icon('key', 10), ' ', r.key_name || '—')),
