@@ -36,6 +36,7 @@ type Settings struct {
 	ExposeDebug              bool     `json:"expose_debug"`
 	InjectStreamUsage        bool     `json:"inject_stream_usage"`
 	AnthropicStreamFix       bool     `json:"anthropic_stream_fix"`
+	WSLogMessages            int      `json:"ws_log_messages"`
 }
 
 // DefaultSettings returns the factory defaults.
@@ -73,6 +74,7 @@ func DefaultSettings() Settings {
 		TrustedProxies:           []string{"127.0.0.1/32", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"},
 		InjectStreamUsage:        true,
 		AnthropicStreamFix:       true,
+		WSLogMessages:            50,
 	}
 }
 
@@ -119,6 +121,7 @@ func (s *Settings) Validate() error {
 		{"log_retention_days", &s.LogRetentionDays, 0, 3650},
 		{"model_sync_interval_hours", &s.ModelSyncIntervalHours, 0, 8760},
 		{"task_binding_ttl_hours", &s.TaskBindingTTLHours, 1, 8760},
+		{"ws_log_messages", &s.WSLogMessages, 0, 10000},
 	}
 	for _, c := range checks {
 		if *c.v < c.min || *c.v > c.max {

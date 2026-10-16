@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"strconv"
@@ -19,6 +20,7 @@ import (
 	"github.com/Kiyliy/xai-router/internal/billing"
 	"github.com/Kiyliy/xai-router/internal/config"
 	"github.com/Kiyliy/xai-router/internal/pool"
+	"github.com/Kiyliy/xai-router/internal/quota"
 	"github.com/Kiyliy/xai-router/internal/reqlog"
 	"github.com/Kiyliy/xai-router/internal/secret"
 	"github.com/Kiyliy/xai-router/internal/store"
@@ -38,6 +40,8 @@ type Handler struct {
 	Settings *config.Holder
 	Client   *http.Client
 	Log      *slog.Logger
+	Quota    *quota.Ledger
+	ws       wsRegistry
 }
 
 // NewTransport returns the upstream HTTP transport.
@@ -63,19 +67,26 @@ type reqInfo struct {
 	Deferred           bool
 	Quality            string
 	Resolution         string
+	MaxTokens          int64
+	N                  int64
+	Duration           int64
+	ServiceTier        string
 }
 
 // state collects everything about one client request for the log.
 type state struct {
-	h        *Handler
-	s        *config.Settings
-	start    time.Time
-	log      *store.Log
-	token    *store.Token
-	info     reqInfo
-	reqBody  []byte
-	ttfbSet  bool
-	attempts []store.Attempt
+	h          *Handler
+	s          *config.Settings
+	start      time.Time
+	log        *store.Log
+	token      *store.Token
+	info       reqInfo
+	reqBody    []byte
+	ttfbSet    bool
+	attempts   []store.Attempt
+	res        *quota.Reservation
+	jobID      string // async job created by this request (quota hold)
+	preCharged int64  // cost already booked against the quota (WebSocket sessions)
 }
 
 func (st *state) markTTFB() {
@@ -115,6 +126,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	st.token = tok
 	st.log.TokenID, st.log.TokenName = tok.ID, tok.Name
 
+	if isWebSocket(r) {
+		st.serveWebSocket(w, r)
+		return
+	}
+	// Model detail endpoints for models outside the token's allow-list look
+	// like unknown models.
+	if id := modelDetailID(r.Method, r.URL.Path); id != "" && !h.modelAllowed(tok, id) {
+		st.fail(w, errf(http.StatusNotFound, "model_not_found", "the model %s does not exist", id))
+		return
+	}
+
 	// 2. Read the body with a hard limit (applies to chunked bodies too).
 	if r.Body != nil && r.Body != http.NoBody {
 		r.Body = http.MaxBytesReader(w, r.Body, s.MaxBodyBytes())
@@ -140,13 +162,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. Ask the upstream to report usage on streaming chat requests.
+	// 4. Reserve the request's worst-case cost against the token's quota, so
+	// concurrent requests cannot overspend it.
+	est := st.estimate(r.Method, r.URL.Path)
+	if st.res = h.Quota.Reserve(tok, est); st.res == nil {
+		left := h.Quota.Remaining(tok)
+		st.fail(w, errf(http.StatusTooManyRequests, "insufficient_quota",
+			"this API key's remaining quota ($%.6f) does not cover this request (up to $%.6f reserved); quota is $%.2f",
+			billing.TicksToUSD(left), billing.TicksToUSD(est), billing.TicksToUSD(tok.QuotaTicks)))
+		return
+	}
+
+	// 5. Ask the upstream to report usage on streaming chat requests.
 	outBody := st.reqBody
 	if st.info.Stream && s.InjectStreamUsage && r.URL.Path == "/v1/chat/completions" {
 		outBody = injectStreamUsage(outBody)
 	}
 
-	// 5. Pick keys: resources created by a key must be read with that key.
+	// 6. Pick keys: resources created by a key must be read with that key.
 	var bound *store.Binding
 	if kind, id := referencedResource(r.Method, r.URL.Path); kind != "" {
 		bound, _ = h.DB.GetBinding(r.Context(), id)
@@ -169,7 +202,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 6. Try keys in order.
+	// 7. Try keys in order.
 	var lastErr *upstreamError
 	tried, busy := 0, 0
 	for _, k := range candidates {
@@ -322,6 +355,7 @@ func (st *state) attempt(w http.ResponseWriter, r *http.Request, lease *pool.Lea
 		st.log.KeyID, st.log.KeyName, st.log.Status = 0, "", 0
 		return false, &upstreamError{status: http.StatusBadGateway, err: v.Reason}
 	}
+	full = st.filterModelList(r, full)
 	w.Header().Set("Content-Length", strconv.Itoa(len(full)))
 	w.WriteHeader(resp.StatusCode)
 	st.markTTFB()
@@ -466,9 +500,13 @@ func (st *state) handleBody(r *http.Request, body []byte) {
 			if st.log.Model == "" {
 				st.log.Model = b.Model
 			}
-			if first, err := st.h.DB.MarkBindingBilled(r.Context(), id); err == nil && !first {
+			first, err := st.h.DB.MarkBindingBilled(r.Context(), id)
+			if err == nil && !first {
 				st.h.Log.Debug("async job already billed", "kind", kind, "id", id)
 				u = billing.Usage{}
+			}
+			if first {
+				st.h.Quota.ReleaseHold(id)
 			}
 		}
 	}
@@ -495,6 +533,9 @@ func (st *state) applyUsage(u billing.Usage) {
 func (st *state) bind(kind, id string) {
 	if id == "" || st.log.KeyID == 0 {
 		return
+	}
+	if kind == KindVideo || kind == KindImage || kind == KindDeferred {
+		st.jobID = id
 	}
 	ttl := time.Duration(st.s.TaskBindingTTLHours) * time.Hour
 	b := &store.Binding{ResourceID: id, Kind: kind, KeyID: st.log.KeyID, TokenID: st.log.TokenID,
@@ -552,6 +593,12 @@ func (st *state) finish(r *http.Request) {
 	if l.CostSource == "" {
 		l.CostSource = "none"
 	}
+	if st.jobID != "" && l.Success() {
+		ttl := time.Duration(s.TaskBindingTTLHours) * time.Hour
+		st.res.Hold(st.jobID, l.CostTicks, ttl)
+	} else {
+		st.res.Settle(l.CostTicks - st.preCharged)
+	}
 	if l.Status == 0 {
 		l.Status = 499
 		if l.Error == "" {
@@ -604,6 +651,9 @@ func (h *Handler) authenticate(r *http.Request) (*store.Token, error) {
 	if raw == "" {
 		raw = strings.TrimSpace(r.Header.Get("X-Api-Key"))
 	}
+	if raw == "" && isWebSocket(r) {
+		raw, _, _ = wsProtocols(r.Header)
+	}
 	if raw == "" {
 		return nil, errf(http.StatusUnauthorized, "missing_api_key",
 			"missing API key: send 'Authorization: Bearer <token>' (or 'x-api-key')")
@@ -652,19 +702,50 @@ func parseRequest(contentType string, body []byte) reqInfo {
 		return ri
 	}
 	var v struct {
-		Model              string          `json:"model"`
-		Stream             bool            `json:"stream"`
-		PreviousResponseID string          `json:"previous_response_id"`
-		Deferred           bool            `json:"deferred"`
-		Quality            string          `json:"quality"`
-		Resolution         json.RawMessage `json:"resolution"`
+		Model               string          `json:"model"`
+		Stream              bool            `json:"stream"`
+		PreviousResponseID  string          `json:"previous_response_id"`
+		Deferred            bool            `json:"deferred"`
+		Quality             string          `json:"quality"`
+		Resolution          json.RawMessage `json:"resolution"`
+		MaxTokens           int64           `json:"max_tokens"`
+		MaxCompletionTokens int64           `json:"max_completion_tokens"`
+		MaxOutputTokens     int64           `json:"max_output_tokens"`
+		N                   int64           `json:"n"`
+		Duration            json.RawMessage `json:"duration"`
+		Seconds             json.RawMessage `json:"seconds"`
+		ServiceTier         string          `json:"service_tier"`
 	}
 	if json.Unmarshal(body, &v) != nil {
 		return ri
 	}
-	ri = reqInfo{Model: v.Model, Stream: v.Stream, PreviousResponseID: v.PreviousResponseID, Deferred: v.Deferred, Quality: v.Quality}
+	ri = reqInfo{Model: v.Model, Stream: v.Stream, PreviousResponseID: v.PreviousResponseID, Deferred: v.Deferred,
+		Quality: v.Quality, N: v.N, ServiceTier: v.ServiceTier,
+		MaxTokens: max(v.MaxTokens, v.MaxCompletionTokens, v.MaxOutputTokens)}
 	_ = json.Unmarshal(v.Resolution, &ri.Resolution)
+	ri.Duration = flexInt(v.Duration)
+	if ri.Duration == 0 {
+		ri.Duration = flexInt(v.Seconds)
+	}
 	return ri
+}
+
+// flexInt reads a JSON number or numeric string ("8").
+func flexInt(raw json.RawMessage) int64 {
+	if len(raw) == 0 {
+		return 0
+	}
+	var f float64
+	if json.Unmarshal(raw, &f) == nil {
+		return int64(math.Ceil(f))
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		if f, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {
+			return int64(math.Ceil(f))
+		}
+	}
+	return 0
 }
 
 // injectStreamUsage sets stream_options.include_usage=true unless the client

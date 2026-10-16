@@ -20,6 +20,7 @@ import (
 	"github.com/Kiyliy/xai-router/internal/keytest"
 	"github.com/Kiyliy/xai-router/internal/pool"
 	"github.com/Kiyliy/xai-router/internal/proxy"
+	"github.com/Kiyliy/xai-router/internal/quota"
 	"github.com/Kiyliy/xai-router/internal/reqlog"
 	"github.com/Kiyliy/xai-router/internal/store"
 )
@@ -42,6 +43,7 @@ type App struct {
 	Pool     *pool.Pool
 	Prices   *billing.Table
 	Logs     *reqlog.Writer
+	Quota    *quota.Ledger
 	Admin    *admin.Server
 	Proxy    *proxy.Handler
 	Log      *slog.Logger
@@ -99,10 +101,12 @@ func New(ctx context.Context, o Options) (*App, error) {
 		}
 	}
 	a.Logs = reqlog.NewWriter(db, a.Settings, log, 10000)
+	a.Quota = quota.New()
 	a.Proxy = &proxy.Handler{DB: db, Pool: a.Pool, Prices: a.Prices, Logs: a.Logs, Settings: a.Settings,
-		Client: client, Log: log}
+		Client: client, Log: log, Quota: a.Quota}
 	tester := &keytest.Tester{DB: db, Pool: a.Pool, Prices: a.Prices, Settings: a.Settings, Client: client, Log: log}
 	a.Admin = &admin.Server{DB: db, Pool: a.Pool, Prices: a.Prices, Settings: a.Settings, Logs: a.Logs, Log: log,
+		Quota:  a.Quota,
 		Syncer: &billing.Syncer{DB: db, Table: a.Prices, Client: client}, Tester: tester,
 		Build: o.Build, Started: time.Now()}
 	a.handler = a.routes(o.StaticFS)
@@ -248,6 +252,7 @@ func (a *App) syncLoop(ctx context.Context) {
 			return
 		case <-t.C:
 		}
+		a.Quota.ExpireHolds(time.Now())
 		if h := a.Settings.Get().ModelSyncIntervalHours; h > 0 && a.syncDue(ctx, time.Duration(h)*time.Hour) {
 			if _, err := a.Admin.RunSync(ctx, false); err != nil {
 				a.Log.Debug("scheduled model sync skipped", "reason", err)

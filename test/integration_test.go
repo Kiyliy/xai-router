@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +32,7 @@ type mockXAI struct {
 	lastHdr   map[string]http.Header
 	hits      map[string]int // key -> requests
 	streamGap time.Duration
+	wsSeen    []wsSeen
 }
 
 func newMock() *mockXAI {
@@ -59,6 +61,10 @@ func (m *mockXAI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		jsonResp(w, 500, `{"error":"internal"}`)
 		return
 	}
+	if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		m.serveMockWS(w, r, key)
+		return
+	}
 	var req map[string]any
 	_ = json.Unmarshal(body, &req)
 	withCost := !strings.HasSuffix(key, "-nocost")
@@ -69,8 +75,14 @@ func (m *mockXAI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			jsonResp(w, 400, `{"error":"The model bad-model does not exist. `+strings.Repeat("x", 1500)+`"}`)
 			return
 		}
+		if d := r.Header.Get("X-Grok-Mock-Delay-Ms"); d != "" {
+			ms, _ := strconv.Atoi(d)
+			time.Sleep(time.Duration(ms) * time.Millisecond)
+		}
 		usage := `"usage":{"prompt_tokens":188,"completion_tokens":9,"total_tokens":370,"prompt_tokens_details":{"text_tokens":188,"cached_tokens":128},"completion_tokens_details":{"reasoning_tokens":173}`
-		if withCost {
+		if c := r.Header.Get("X-Grok-Mock-Cost"); c != "" {
+			usage += `,"cost_in_usd_ticks":` + c
+		} else if withCost {
 			usage += `,"cost_in_usd_ticks":4496000`
 		}
 		usage += "}"
@@ -123,6 +135,8 @@ func (m *mockXAI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		jsonResp(w, 200, `{"data":[{"url":"https://img/1.png"},{"url":"https://img/2.png"}]}`)
 	case r.URL.Path == "/v1/api-key":
 		jsonResp(w, 200, `{"name":"k","team_id":"t","acls":["api-key:model:*"],"api_key_blocked":false,"api_key_disabled":false,"team_blocked":false}`)
+	case r.URL.Path == "/v1/language-models":
+		jsonResp(w, 200, `{"models":[{"id":"grok-4.3","aliases":["grok-4.3-latest"]},{"id":"grok-build-0.1","aliases":["grok-code-fast-1"]}]}`)
 	case r.URL.Path == "/v1/models":
 		jsonResp(w, 200, `{"object":"list","data":[{"id":"grok-4.3","object":"model"},{"id":"grok-build-0.1","object":"model"}]}`)
 	default:
@@ -511,14 +525,15 @@ func TestTokenPolicies(t *testing.T) {
 	}
 	e.api("POST", "/api/v1/tokens", map[string]any{"name": "limited", "allowed_models": []string{"grok-4*"},
 		"quota_usd": 0.0001}, 201, &lim)
+	// Strict quota: the request's worst-case cost is reserved up front and a
+	// $0.0001 quota cannot cover it.
+	e.do("POST", "/v1/chat/completions", lim.Token, map[string]any{"model": "grok-4.3", "messages": []any{}}, 429, nil)
+	e.api("PATCH", fmt.Sprintf("/api/v1/tokens/%d", lim.ID), map[string]any{"quota_usd": 1}, 200, nil)
 	req := map[string]any{"model": "grok-build-0.1", "messages": []any{}}
 	e.do("POST", "/v1/chat/completions", lim.Token, req, 403, nil)
 	// Aliases resolve to the canonical id; wildcard allows grok-4.3.
 	e.do("POST", "/v1/chat/completions", lim.Token, map[string]any{"model": "grok-4.3-latest", "messages": []any{}}, 200, nil)
-	e.waitLogs(2)
-	// Quota now exhausted (cost $0.00045 > $0.0001).
-	time.Sleep(100 * time.Millisecond)
-	e.do("POST", "/v1/chat/completions", lim.Token, map[string]any{"model": "grok-4.3", "messages": []any{}}, 429, nil)
+	e.waitLogs(3)
 	// Disable and expire.
 	e.api("PATCH", fmt.Sprintf("/api/v1/tokens/%d", lim.ID), map[string]any{"reset_usage": true, "enabled": false}, 200, nil)
 	e.do("POST", "/v1/chat/completions", lim.Token, map[string]any{"model": "grok-4.3"}, 403, nil)

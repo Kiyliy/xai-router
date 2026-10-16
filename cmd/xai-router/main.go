@@ -145,6 +145,9 @@ func run() error {
 	if err := srv.Shutdown(shutCtx); err != nil {
 		log.Warn("graceful shutdown timed out", "err", err)
 	}
+	// WebSocket sessions are hijacked connections that Shutdown does not
+	// track: close them and wait for their logs.
+	a.Proxy.CloseWebSockets(shutCtx)
 	if err := a.Close(); err != nil {
 		return err
 	}

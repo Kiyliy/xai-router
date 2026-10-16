@@ -64,6 +64,8 @@ type Log struct {
 	Attempts      []Attempt
 	AttemptCount  int // filled when reading
 	HasBodies     bool
+	WS            bool
+	Extra         string // JSON with endpoint-specific details (WebSocket session stats)
 	// NoRecord applies the usage accounting (key/token counters, hourly
 	// stats) without storing the log row itself (logging disabled).
 	NoRecord bool
@@ -91,7 +93,7 @@ func (db *DB) InsertLogs(ctx context.Context, logs []*Log) error {
 	insLog, err := tx.PrepareContext(ctx, `INSERT INTO request_logs (request_id, created_at, method, path, query, model,
 stream, status, error, client_ip, user_agent, token_id, token_name, key_id, key_name, attempts, ttfb_ms, latency_ms,
 prompt_tokens, completion_tokens, cached_tokens, reasoning_tokens, image_tokens, total_tokens, images, video_seconds,
-cost_ticks, cost_source, upstream_id, truncated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+cost_ticks, cost_source, upstream_id, truncated, ws, extra) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
@@ -144,7 +146,7 @@ cost_ticks = cost_ticks + excluded.cost_ticks, latency_ms_sum = latency_ms_sum +
 			l.Status, l.Error, l.ClientIP, l.UserAgent, nullID(l.TokenID), l.TokenName, nullID(l.KeyID), l.KeyName,
 			len(l.Attempts), l.TTFBMs, l.LatencyMs, l.PromptTokens, l.CompletionTokens, l.CachedTokens, l.ReasoningTokens,
 			l.ImageTokens, l.TotalTokens, l.Images, l.VideoSeconds, l.CostTicks, l.CostSource, l.UpstreamID,
-			boolInt(l.Truncated))
+			boolInt(l.Truncated), boolInt(l.WS), l.Extra)
 		if err != nil {
 			return err
 		}
@@ -267,22 +269,22 @@ func escapeLike(s string) string {
 const logCols = `id, request_id, created_at, method, path, query, model, stream, status, error, client_ip, user_agent,
 COALESCE(token_id,0), token_name, COALESCE(key_id,0), key_name, attempts, ttfb_ms, latency_ms, prompt_tokens,
 completion_tokens, cached_tokens, reasoning_tokens, image_tokens, total_tokens, images, video_seconds, cost_ticks,
-cost_source, upstream_id, truncated`
+cost_source, upstream_id, truncated, ws, extra`
 
 func scanLog(s interface{ Scan(...any) error }) (*Log, error) {
 	var l Log
-	var stream, trunc int
+	var stream, trunc, ws int
 	err := s.Scan(&l.ID, &l.RequestID, &l.CreatedAt, &l.Method, &l.Path, &l.Query, &l.Model, &stream, &l.Status,
 		&l.Error, &l.ClientIP, &l.UserAgent, &l.TokenID, &l.TokenName, &l.KeyID, &l.KeyName, &l.AttemptCount, &l.TTFBMs,
 		&l.LatencyMs, &l.PromptTokens, &l.CompletionTokens, &l.CachedTokens, &l.ReasoningTokens, &l.ImageTokens,
-		&l.TotalTokens, &l.Images, &l.VideoSeconds, &l.CostTicks, &l.CostSource, &l.UpstreamID, &trunc)
+		&l.TotalTokens, &l.Images, &l.VideoSeconds, &l.CostTicks, &l.CostSource, &l.UpstreamID, &trunc, &ws, &l.Extra)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	l.Stream, l.Truncated = stream == 1, trunc == 1
+	l.Stream, l.Truncated, l.WS = stream == 1, trunc == 1, ws == 1
 	return &l, nil
 }
 

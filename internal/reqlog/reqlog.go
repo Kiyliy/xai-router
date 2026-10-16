@@ -152,11 +152,26 @@ func HeadersJSON(h http.Header) string {
 		v := strings.Join(h[k], ", ")
 		if secretHeaders[strings.ToLower(k)] {
 			v = MaskSecret(v)
+		} else if strings.EqualFold(k, "Sec-Websocket-Protocol") && strings.Contains(v, "xai-client-secret.") {
+			v = maskProtocols(v)
 		}
 		m[k] = v
 	}
 	b, _ := json.Marshal(m)
 	return string(b)
+}
+
+// maskProtocols masks credentials passed as WebSocket subprotocols.
+func maskProtocols(v string) string {
+	parts := strings.Split(v, ",")
+	for i, p := range parts {
+		p = strings.TrimSpace(p)
+		if rest, ok := strings.CutPrefix(p, "xai-client-secret."); ok {
+			p = "xai-client-secret." + MaskSecret(rest)
+		}
+		parts[i] = p
+	}
+	return strings.Join(parts, ", ")
 }
 
 // SanitizeBody shrinks a body for storage: long base64 runs (inline images,

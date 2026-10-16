@@ -19,6 +19,7 @@ import (
 	"github.com/Kiyliy/xai-router/internal/config"
 	"github.com/Kiyliy/xai-router/internal/keytest"
 	"github.com/Kiyliy/xai-router/internal/pool"
+	"github.com/Kiyliy/xai-router/internal/quota"
 	"github.com/Kiyliy/xai-router/internal/reqlog"
 	"github.com/Kiyliy/xai-router/internal/secret"
 	"github.com/Kiyliy/xai-router/internal/store"
@@ -48,6 +49,7 @@ type Server struct {
 	Tester   *keytest.Tester
 	Settings *config.Holder
 	Logs     *reqlog.Writer
+	Quota    *quota.Ledger
 	Log      *slog.Logger
 	Build    BuildInfo
 	Started  time.Time

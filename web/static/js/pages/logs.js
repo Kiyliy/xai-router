@@ -1,5 +1,5 @@
 import {
-  h, fmtInt, fmtUSD, fmtMs, fmtCompact, fmtDateTime, fmtTimeShort, relTime, timeEl, debounce, tryParseJSON, highlightJSON,
+  h, fmtInt, fmtUSD, fmtMs, fmtCompact, fmtBytes, fmtDateTime, fmtTimeShort, relTime, timeEl, debounce, tryParseJSON, highlightJSON,
   statusClass, toLocalInput, fromLocalInput, copyText,
 } from '../util.js';
 import { icon } from '../icons.js';
@@ -13,7 +13,7 @@ import {
 const PRESETS = ['15m', '1h', '24h', '7d', 'all', 'custom'];
 const PRESET_MS = { '15m': 15 * 60e3, '1h': 3600e3, '24h': 86400e3, '7d': 7 * 86400e3 };
 const STATUS_OPTS = ['', 'success', 'error', '2xx', '4xx', '5xx', '429', 'custom'];
-const PATHS = ['/v1/chat/completions', '/v1/responses', '/v1/messages', '/v1/completions', '/v1/embeddings', '/v1/images/generations', '/v1/images/edits', '/v1/videos/generations', '/v1/models'];
+const PATHS = ['/v1/chat/completions', '/v1/responses', '/v1/messages', '/v1/realtime', '/v1/tts', '/v1/stt', '/v1/completions', '/v1/embeddings', '/v1/images/generations', '/v1/images/edits', '/v1/videos/generations', '/v1/models'];
 const ACTION_VARIANT = { success: 'success', retry: 'warning', return: 'neutral', cooldown: 'warning', disable: 'danger' };
 
 function statusBadge(code) {
@@ -126,13 +126,35 @@ async function copyCurl(id, btn) {
   });
 }
 
+function wsSessionView(s) {
+  const dir = (msgs, bytes) => `${fmtInt(msgs || 0)} ${t('logs.wsMsgs')} · ${fmtBytes(bytes || 0)}`;
+  return h('div', { class: 'detail-block' }, h('h4', null, t('logs.wsSession')), kv([
+    [t('logs.wsDuration'), fmtMs(s.duration_ms || 0)],
+    [t('logs.wsClient'), dir(s.client_messages, s.client_bytes)],
+    [t('logs.wsUpstream'), dir(s.server_messages, s.server_bytes)],
+    [t('logs.wsClosedBy'), s.closed_by || '—'],
+    s.close_code ? [t('logs.wsClose'), h('span', { class: 'mono' }, `${s.close_code}${s.close_reason ? ` · ${s.close_reason}` : ''}`)] : null,
+    s.subprotocol ? [t('logs.wsSubprotocol'), h('span', { class: 'mono small break' }, s.subprotocol.replace(/xai-client-secret\.\S+/, 'xai-client-secret.…'))] : null,
+    s.text_inputs ? [t('logs.wsTextInputs'), fmtInt(s.text_inputs)] : null,
+    s.tts_chars ? [t('logs.wsTtsChars'), fmtInt(s.tts_chars)] : null,
+    s.audio_seconds ? [t('logs.wsAudio'), `${s.audio_seconds.toFixed(1)} s`] : null,
+    [t('logs.wsLogged'), fmtInt(s.logged_messages || 0)],
+  ]));
+}
+
 function detailView(d, ctx) {
   const stat = (label, value, sub, cls = '') => h('div', { class: `dstat ${cls}` }, h('div', { class: 'dstat-l' }, label), h('div', { class: 'dstat-v' }, value), sub ? h('div', { class: 'dstat-s' }, sub) : null);
   const reqTabs = [
     { id: 'body', label: t('logs.body'), render: () => bodyView(d.request_body, { truncated: d.truncated }) },
     { id: 'headers', label: t('logs.headers'), count: Object.keys(d.request_headers || {}).length, render: () => headersView(d.request_headers) },
   ];
-  const resTabs = d.stream
+  const resTabs = d.websocket
+    ? [
+      { id: 'messages', label: t('logs.wsMessages'), render: () => bodyView(d.response_body, { truncated: d.truncated }) },
+      ...(d.response_text ? [{ id: 'text', label: t('logs.text'), render: () => textView(d) }] : []),
+      { id: 'headers', label: t('logs.headers'), count: Object.keys(d.response_headers || {}).length, render: () => headersView(d.response_headers) },
+    ]
+    : d.stream
     ? [
       { id: 'text', label: t('logs.text'), render: () => textView(d) },
       { id: 'sse', label: t('logs.rawSse'), render: () => sseView(d.response_body) },
@@ -174,6 +196,7 @@ function detailView(d, ctx) {
         [t('logs.time'), h('span', null, fmtDateTime(d.created_at), h('span', { class: 'muted' }, ` · ${relTime(d.created_at)}`))],
       ])),
       h('div', { class: 'detail-block' }, h('h4', null, t('logs.usage')), tokenBreakdown(d))),
+    d.websocket_session ? wsSessionView(d.websocket_session) : null,
     attempts ? h('div', { class: 'detail-block' }, h('h4', null, t('logs.attemptsTimeline'), h('span', { class: 'count-pill' }, String((d.upstream_attempts || []).length))), attempts) : null,
     h('div', { class: 'panes' },
       pane(t('logs.request'), reqTabs, () => d.request_body || '', t('logs.copyBody')),
@@ -274,7 +297,7 @@ export function render(el, ctx) {
     const tr = h('tr', { class: `clickable ${r.status >= 400 || !r.status ? 'row-err' : ''} ${r.id === st.openId ? 'row-active' : ''}`, 'data-id': r.id, onclick: () => openDetail(r.id) },
       h('td', { class: 'nowrap' }, h('div', { class: 'mono', title: fmtDateTime(r.created_at) }, fmtTimeShort(r.created_at)), h('div', { class: 'cell-sub', 'data-rel': r.created_at }, relTime(r.created_at))),
       h('td', { class: 'cell-req' }, h('div', { class: 'req-line' }, methodTag(r.method), h('span', { class: 'mono path' }, r.path)), r.error ? h('div', { class: 'cell-sub text-danger truncate', title: r.error }, r.error) : null),
-      h('td', null, h('div', { class: 'model-line' }, r.model ? h('span', { class: 'mono' }, r.model) : h('span', { class: 'muted' }, '—'), r.stream ? h('span', { class: 'stream-tag', title: t('logs.streamYes') }, icon('stream', 12), 'SSE') : null)),
+      h('td', null, h('div', { class: 'model-line' }, r.model ? h('span', { class: 'mono' }, r.model) : h('span', { class: 'muted' }, '—'), r.stream ? h('span', { class: 'stream-tag', title: t('logs.streamYes') }, icon('stream', 12), 'SSE') : null, r.websocket ? h('span', { class: 'stream-tag', title: 'WebSocket' }, icon('stream', 12), 'WS') : null)),
       h('td', null, statusBadge(r.status)),
       h('td', { class: 'num' }, (r.attempts || 0) > 1 ? badge(`×${r.attempts}`, 'warning', { title: t('logs.retriedN', { n: r.attempts }) }) : h('span', { class: 'muted' }, r.attempts ? '1' : '—')),
       h('td', { class: 'truncate-cell' },

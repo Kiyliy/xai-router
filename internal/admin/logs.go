@@ -30,6 +30,7 @@ func logSummaryJSON(l *store.Log) map[string]any {
 		"prompt_tokens": l.PromptTokens, "completion_tokens": l.CompletionTokens, "cached_tokens": l.CachedTokens,
 		"reasoning_tokens": l.ReasoningTokens, "image_tokens": l.ImageTokens, "total_tokens": l.TotalTokens,
 		"images": l.Images, "video_seconds": l.VideoSeconds, "cost_usd": usd(l.CostTicks), "cost_source": l.CostSource,
+		"websocket": l.WS,
 	}
 }
 
@@ -99,6 +100,12 @@ func (s *Server) getLog(w http.ResponseWriter, r *http.Request) {
 	out["reasoning_text"] = l.ReasoningText
 	out["truncated"] = l.Truncated
 	out["upstream_attempts"] = attempts
+	if l.WS && l.Extra != "" {
+		var ws map[string]any
+		if json.Unmarshal([]byte(l.Extra), &ws) == nil {
+			out["websocket_session"] = ws
+		}
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 

@@ -284,6 +284,11 @@ CREATE TABLE stats_hourly (
   PRIMARY KEY (hour, key_id, token_id, model)
 );
 `,
+	// v2: WebSocket sessions
+	`
+ALTER TABLE request_logs ADD COLUMN ws INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE request_logs ADD COLUMN extra TEXT NOT NULL DEFAULT '';
+`,
 }
 
 func (db *DB) migrate(ctx context.Context) error {

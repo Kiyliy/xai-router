@@ -162,6 +162,7 @@ func (s *Server) updateToken(w http.ResponseWriter, r *http.Request) {
 			s.internalErr(w, err)
 			return
 		}
+		s.Quota.Reset(t.ID)
 	}
 	if fresh, err := s.DB.GetToken(r.Context(), t.ID); err == nil {
 		t = fresh
@@ -178,6 +179,7 @@ func (s *Server) deleteToken(w http.ResponseWriter, r *http.Request) {
 		s.storeErr(w, err, "token")
 		return
 	}
+	s.Quota.Invalidate(id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
