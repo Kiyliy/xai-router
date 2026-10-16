@@ -684,3 +684,32 @@ func TestDebugEndpointHiddenByDefault(t *testing.T) {
 	e.api("GET", "/debug/pprof/", nil, 200, nil)
 	e.do("GET", "/debug/pprof/", "", nil, 401, nil)
 }
+
+func TestUsageAccountedWithLoggingDisabled(t *testing.T) {
+	e := newEnv(t, "xai-ok")
+	e.api("PUT", "/api/v1/settings", map[string]any{"log_enabled": false}, 200, nil)
+	e.proxy("POST", "/v1/chat/completions", map[string]any{"model": "grok-build-0.1", "messages": []any{}}, 200, nil)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var tok struct {
+			Data []struct {
+				UsedUSD float64 `json:"used_usd"`
+			}
+		}
+		e.api("GET", "/api/v1/tokens", nil, 200, &tok)
+		if tok.Data[0].UsedUSD == 0.0004496 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("token usage not accounted: %v", tok.Data[0].UsedUSD)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	var page struct{ Total int }
+	e.api("GET", "/api/v1/logs", nil, 200, &page)
+	var ov struct{ Requests int }
+	e.api("GET", "/api/v1/stats/overview", nil, 200, &ov)
+	if page.Total != 0 || ov.Requests != 1 {
+		t.Fatalf("logs=%d (want 0) stats requests=%d (want 1)", page.Total, ov.Requests)
+	}
+}

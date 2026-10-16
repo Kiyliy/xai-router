@@ -546,9 +546,6 @@ func (st *state) fail(w http.ResponseWriter, e *apiError) {
 // finish completes and enqueues the log entry.
 func (st *state) finish(r *http.Request) {
 	s := st.s
-	if !s.LogEnabled {
-		return
-	}
 	l := st.log
 	l.LatencyMs = time.Since(st.start).Milliseconds()
 	l.Attempts = st.attempts
@@ -561,7 +558,10 @@ func (st *state) finish(r *http.Request) {
 			l.Error = "client closed request"
 		}
 	}
-	if s.LogBodies {
+	if !s.LogEnabled {
+		// Usage must still be accounted (quotas, key spend, stats).
+		l.NoRecord = true
+	} else if s.LogBodies {
 		l.HasBodies = true
 		l.ReqHeaders = reqlog.HeadersJSON(r.Header)
 		var trunc bool

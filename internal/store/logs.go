@@ -64,6 +64,9 @@ type Log struct {
 	Attempts      []Attempt
 	AttemptCount  int // filled when reading
 	HasBodies     bool
+	// NoRecord applies the usage accounting (key/token counters, hourly
+	// stats) without storing the log row itself (logging disabled).
+	NoRecord bool
 }
 
 // Success reports whether the request counts as successful.
@@ -131,6 +134,12 @@ cost_ticks = cost_ticks + excluded.cost_ticks, latency_ms_sum = latency_ms_sum +
 	defer upStats.Close()
 
 	for _, l := range logs {
+		if l.NoRecord {
+			if err := accountOnly(ctx, l, updKey, updToken, upStats); err != nil {
+				return err
+			}
+			continue
+		}
 		res, err := insLog.ExecContext(ctx, l.RequestID, l.CreatedAt, l.Method, l.Path, l.Query, l.Model, boolInt(l.Stream),
 			l.Status, l.Error, l.ClientIP, l.UserAgent, nullID(l.TokenID), l.TokenName, nullID(l.KeyID), l.KeyName,
 			len(l.Attempts), l.TTFBMs, l.LatencyMs, l.PromptTokens, l.CompletionTokens, l.CachedTokens, l.ReasoningTokens,
@@ -151,35 +160,45 @@ cost_ticks = cost_ticks + excluded.cost_ticks, latency_ms_sum = latency_ms_sum +
 				a.TTFBMs, a.LatencyMs, a.StartedAt); err != nil {
 				return err
 			}
-			if a.KeyID != 0 {
-				isErr, lastErr, cost := 0, "", int64(0)
-				if a.Action != "success" && a.Action != "return" {
-					isErr, lastErr = 1, a.Error
-				}
-				if a.Action == "success" || (a.Action == "return" && a.KeyID == l.KeyID) {
-					cost = l.CostTicks
-				}
-				if _, err := updKey.ExecContext(ctx, 1, isErr, cost, a.StartedAt, lastErr, lastErr, a.KeyID); err != nil {
-					return err
-				}
-			}
 		}
-		if l.TokenID != 0 {
-			if _, err := updToken.ExecContext(ctx, l.CostTicks, l.CreatedAt, l.TokenID); err != nil {
-				return err
-			}
-		}
-		succ, errs := 1, 0
-		if !l.Success() {
-			succ, errs = 0, 1
-		}
-		hour := l.CreatedAt / 3600_000 * 3600_000
-		if _, err := upStats.ExecContext(ctx, hour, l.KeyID, l.TokenID, l.Model, succ, errs, l.PromptTokens,
-			l.CompletionTokens, l.CachedTokens, l.ReasoningTokens, l.TotalTokens, l.CostTicks, l.LatencyMs); err != nil {
+		if err := accountOnly(ctx, l, updKey, updToken, upStats); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
+}
+
+// accountOnly applies a log's usage to key and token counters and the hourly
+// aggregates.
+func accountOnly(ctx context.Context, l *Log, updKey, updToken, upStats *sql.Stmt) error {
+	for _, a := range l.Attempts {
+		if a.KeyID == 0 {
+			continue
+		}
+		isErr, lastErr, cost := 0, "", int64(0)
+		if a.Action != "success" && a.Action != "return" {
+			isErr, lastErr = 1, a.Error
+		}
+		if a.Action == "success" || (a.Action == "return" && a.KeyID == l.KeyID) {
+			cost = l.CostTicks
+		}
+		if _, err := updKey.ExecContext(ctx, 1, isErr, cost, a.StartedAt, lastErr, lastErr, a.KeyID); err != nil {
+			return err
+		}
+	}
+	if l.TokenID != 0 {
+		if _, err := updToken.ExecContext(ctx, l.CostTicks, l.CreatedAt, l.TokenID); err != nil {
+			return err
+		}
+	}
+	succ, errs := 1, 0
+	if !l.Success() {
+		succ, errs = 0, 1
+	}
+	hour := l.CreatedAt / 3600_000 * 3600_000
+	_, err := upStats.ExecContext(ctx, hour, l.KeyID, l.TokenID, l.Model, succ, errs, l.PromptTokens,
+		l.CompletionTokens, l.CachedTokens, l.ReasoningTokens, l.TotalTokens, l.CostTicks, l.LatencyMs)
+	return err
 }
 
 // LogFilter narrows ListLogs.
