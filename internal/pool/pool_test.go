@@ -148,6 +148,7 @@ func TestClassify(t *testing.T) {
 		{Outcome{Status: 401}, ActionDisable},
 		{Outcome{Status: 403, Body: "Your team has used all available credits or reached its monthly spending limit"}, ActionDisable},
 		{Outcome{Status: 429, Body: "slow down"}, ActionCooldown},
+		{Outcome{Status: 429, Body: `{"code":"resource-exhausted","error":"The model is currently at capacity due to high demand. Please try again in a few minutes."}`}, ActionRetry},
 		{Outcome{Status: 503}, ActionRetry},
 		{Outcome{Status: 400, Body: "quota exceeded"}, ActionRetry},
 		// Dead-key wording on a 400 is verified out of band, not trusted.

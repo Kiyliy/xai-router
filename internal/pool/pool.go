@@ -385,6 +385,11 @@ func classify(s *config.Settings, o Outcome) Verdict {
 		}
 	}
 	if o.Status == http.StatusTooManyRequests {
+		if isCapacityError(msg) {
+			// The model is overloaded for everyone; the key itself is fine,
+			// so try another key without cooling this one down.
+			return Verdict{Action: ActionRetry, Reason: "model at capacity (429): " + snippet, Retry: true}
+		}
 		return Verdict{Action: ActionCooldown, Reason: "rate limited (429): " + snippet, Retry: true}
 	}
 	if kw := config.MatchKeyword(msg, s.DisableKeywords); kw != "" {
@@ -405,6 +410,14 @@ func classify(s *config.Settings, o Outcome) Verdict {
 		}
 	}
 	return Verdict{Action: ActionReturn, Reason: reason}
+}
+
+// isCapacityError recognises 429s caused by model-wide load (xAI:
+// "resource-exhausted … The model is currently at capacity due to high
+// demand") rather than by the key's own rate limit.
+func isCapacityError(msg string) bool {
+	m := strings.ToLower(msg)
+	return strings.Contains(m, "at capacity") || strings.Contains(m, "high demand") || strings.Contains(m, "overloaded")
 }
 
 // ErrorMessage extracts the human-readable message of an error body
