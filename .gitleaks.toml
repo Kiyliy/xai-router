@@ -1,0 +1,11 @@
+# gitleaks configuration: the default rules, plus an allow-list for the
+# obviously fake key strings used as fixtures in unit tests.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fake xAI keys used as test fixtures"
+regexes = [
+  '''xai-abc123def456''',
+  '''xai-second-key-0002''',
+]
