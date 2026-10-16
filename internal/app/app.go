@@ -18,6 +18,7 @@ import (
 	"github.com/Kiyliy/xai-router/internal/billing"
 	"github.com/Kiyliy/xai-router/internal/config"
 	"github.com/Kiyliy/xai-router/internal/keytest"
+	"github.com/Kiyliy/xai-router/internal/netutil"
 	"github.com/Kiyliy/xai-router/internal/pool"
 	"github.com/Kiyliy/xai-router/internal/proxy"
 	"github.com/Kiyliy/xai-router/internal/quota"
@@ -116,10 +117,26 @@ func New(ctx context.Context, o Options) (*App, error) {
 
 func newTransport(h *config.Holder) *http.Transport {
 	t := proxy.NewTransport(15 * time.Second)
-	t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		d := net.Dialer{Timeout: time.Duration(h.Get().ConnectTimeoutSeconds) * time.Second, KeepAlive: 30 * time.Second}
-		return d.DialContext(ctx, network, addr)
+	// Upstream connections refuse non-public addresses unless allowed
+	// (SSRF protection, checked after DNS resolution).
+	// An HTTP(S)_PROXY from the environment is still honoured; the proxy's
+	// own address is exempt from the check (it is configured by the operator).
+	var proxyAddr string
+	if req, err := http.NewRequest(http.MethodGet, "https://api.x.ai/", nil); err == nil {
+		if u, err := http.ProxyFromEnvironment(req); err == nil && u != nil {
+			port := u.Port()
+			if port == "" {
+				port = "80"
+				if u.Scheme == "https" {
+					port = "443"
+				}
+			}
+			proxyAddr = net.JoinHostPort(u.Hostname(), port)
+		}
 	}
+	t.DialContext = netutil.GuardedDialer(
+		func() time.Duration { return time.Duration(h.Get().ConnectTimeoutSeconds) * time.Second },
+		func(addr string) bool { return h.Get().AllowPrivateUpstreams || (proxyAddr != "" && addr == proxyAddr) })
 	return t
 }
 

@@ -206,6 +206,9 @@ func newEnv(t *testing.T, keys ...string) *env {
 	var login struct{ Token string }
 	e.do("POST", "/api/v1/auth/login", "", map[string]any{"password": adminPW}, 200, &login)
 	e.admin = login.Token
+	// The mock upstream is plain HTTP on localhost: relax the SSRF policy.
+	e.api("PUT", "/api/v1/settings", map[string]any{"allow_private_upstreams": true, "allow_insecure_upstreams": true,
+		"upstream_allowed_hosts": []string{}}, 200, nil)
 	for i, k := range keys {
 		e.api("POST", "/api/v1/keys", map[string]any{"name": fmt.Sprintf("k%d", i+1), "key": k, "base_url": e.up.URL,
 			"priority": i}, 201, nil)
@@ -772,4 +775,36 @@ func TestHostileModelNameCannotHurtPool(t *testing.T) {
 			t.Fatalf("hostile request tried %d keys", l.Attempts)
 		}
 	}
+}
+
+func TestUpstreamPolicyBlocksSSRF(t *testing.T) {
+	a, err := app.New(context.Background(), app.Options{DBPath: ":memory:", AdminPassword: adminPW,
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	srv := httptest.NewServer(a.Handler())
+	defer srv.Close()
+	e := &env{t: t, srv: srv, app: a}
+	var login struct{ Token string }
+	e.do("POST", "/api/v1/auth/login", "", map[string]any{"password": adminPW}, 200, &login)
+	e.admin = login.Token
+	// Defaults: https only, api.x.ai hosts only, no private addresses.
+	for _, u := range []string{"http://api.x.ai", "https://evil.example.com", "https://169.254.169.254",
+		"https://127.0.0.1:8080", "https://user:pw@api.x.ai", "ftp://api.x.ai"} {
+		var er struct {
+			Error struct{ Code, Message string }
+		}
+		e.api("POST", "/api/v1/keys", map[string]any{"key": "xai-test", "base_url": u}, 400, &er)
+	}
+	e.api("POST", "/api/v1/keys", map[string]any{"key": "xai-test", "base_url": "https://us.api.x.ai"}, 201, nil)
+	// Allowing every host still refuses private and metadata addresses...
+	e.api("PUT", "/api/v1/settings", map[string]any{"upstream_allowed_hosts": []string{}}, 200, nil)
+	e.api("POST", "/api/v1/keys", map[string]any{"key": "xai-t2", "base_url": "https://10.0.0.5"}, 400, nil)
+	e.api("PUT", "/api/v1/settings", map[string]any{"upstream_base_url": "https://192.168.1.1"}, 400, nil)
+	e.api("PUT", "/api/v1/settings", map[string]any{"allow_private_upstreams": true}, 200, nil)
+	e.api("POST", "/api/v1/keys", map[string]any{"key": "xai-t2", "base_url": "https://10.0.0.5"}, 201, nil)
+	// Name resolution to private addresses is blocked at dial time; see
+	// netutil.TestGuardedDialer.
 }

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/Kiyliy/xai-router/internal/netutil"
 )
 
 // Settings are the runtime settings. JSON field names are part of the admin API.
@@ -38,6 +40,15 @@ type Settings struct {
 	AnthropicStreamFix       bool     `json:"anthropic_stream_fix"`
 	WSLogMessages            int      `json:"ws_log_messages"`
 	UnpricedModels           string   `json:"unpriced_models"`
+	UpstreamAllowedHosts     []string `json:"upstream_allowed_hosts"`
+	AllowInsecureUpstreams   bool     `json:"allow_insecure_upstreams"`
+	AllowPrivateUpstreams    bool     `json:"allow_private_upstreams"`
+}
+
+// UpstreamPolicy returns the SSRF policy for upstream base URLs.
+func (s *Settings) UpstreamPolicy() netutil.UpstreamPolicy {
+	return netutil.UpstreamPolicy{AllowedHosts: s.UpstreamAllowedHosts, AllowInsecure: s.AllowInsecureUpstreams,
+		AllowPrivate: s.AllowPrivateUpstreams}
 }
 
 // DefaultSettings returns the factory defaults.
@@ -77,14 +88,19 @@ func DefaultSettings() Settings {
 		AnthropicStreamFix:       true,
 		WSLogMessages:            50,
 		UnpricedModels:           "block_quota_tokens",
+		UpstreamAllowedHosts:     []string{"api.x.ai", "*.api.x.ai"},
 	}
 }
 
 // Validate normalises and checks the settings.
 func (s *Settings) Validate() error {
 	s.UpstreamBaseURL = strings.TrimRight(strings.TrimSpace(s.UpstreamBaseURL), "/")
+	s.UpstreamAllowedHosts = cleanList(s.UpstreamAllowedHosts, true)
 	if u, err := url.Parse(s.UpstreamBaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return fmt.Errorf("upstream_base_url must be an http(s) URL")
+	}
+	if err := s.UpstreamPolicy().CheckURL(s.UpstreamBaseURL); err != nil {
+		return fmt.Errorf("upstream_base_url: %v", err)
 	}
 	switch s.UnpricedModels {
 	case "":

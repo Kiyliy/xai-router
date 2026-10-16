@@ -289,6 +289,11 @@ func (st *state) attempt(w http.ResponseWriter, r *http.Request, lease *pool.Lea
 	timer := time.AfterFunc(s.RequestTimeout(), func() { cancel(errUpstreamTimeout) })
 	defer timer.Stop()
 
+	if err := s.UpstreamPolicy().CheckURL(k.BaseURL); err != nil {
+		// The key's URL is not allowed by the current upstream policy.
+		record(0, "blocked by upstream policy: "+err.Error(), pool.ActionRetry)
+		return false, &upstreamError{status: http.StatusBadGateway, err: "upstream blocked by policy: " + err.Error()}
+	}
 	url := strings.TrimRight(k.BaseURL, "/") + r.URL.Path
 	if r.URL.RawQuery != "" {
 		url += "?" + r.URL.RawQuery

@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Kiyliy/xai-router/internal/billing"
+	"github.com/Kiyliy/xai-router/internal/netutil"
 	"github.com/Kiyliy/xai-router/internal/pool"
 	"github.com/Kiyliy/xai-router/internal/reqlog"
 	"github.com/Kiyliy/xai-router/internal/store"
@@ -227,16 +228,23 @@ func (st *state) wsDial(r *http.Request, k *store.Key, seq int) (*upstreamWS, *u
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(s.ConnectTimeoutSeconds)*time.Second)
 	defer cancel()
 	var conn net.Conn
-	d := &net.Dialer{KeepAlive: 30 * time.Second}
-	if base.Scheme == "https" {
-		td := &tls.Dialer{NetDialer: d, Config: &tls.Config{ServerName: base.Hostname(), NextProtos: []string{"http/1.1"},
-			MinVersion: tls.VersionTLS12}}
-		conn, err = td.DialContext(ctx, "tcp", host)
-	} else {
-		conn, err = d.DialContext(ctx, "tcp", host)
+	if err := s.UpstreamPolicy().CheckURL(k.BaseURL); err != nil {
+		return fail(err)
 	}
+	dial := netutil.GuardedDialer(func() time.Duration { return time.Duration(s.ConnectTimeoutSeconds) * time.Second },
+		func(string) bool { return s.AllowPrivateUpstreams })
+	conn, err = dial(ctx, "tcp", host)
 	if err != nil {
 		return fail(err)
+	}
+	if base.Scheme == "https" {
+		tc := tls.Client(conn, &tls.Config{ServerName: base.Hostname(), NextProtos: []string{"http/1.1"},
+			MinVersion: tls.VersionTLS12})
+		if err := tc.HandshakeContext(ctx); err != nil {
+			conn.Close()
+			return fail(err)
+		}
+		conn = tc
 	}
 	// Build the upstream handshake.
 	path := strings.TrimRight(base.Path, "/") + r.URL.Path

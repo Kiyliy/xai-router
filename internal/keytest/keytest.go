@@ -68,6 +68,10 @@ type Tester struct {
 func (t *Tester) Test(ctx context.Context, k *store.Key, probe bool) Result {
 	res := Result{KeyID: k.ID, KeyName: k.Name, TestedAt: time.Now().UTC(), Models: []string{}}
 	base := strings.TrimRight(k.BaseURL, "/")
+	if err := t.Settings.Get().UpstreamPolicy().CheckURL(base); err != nil {
+		res.Status, res.Message = "error", "blocked by upstream policy: "+err.Error()
+		return res
+	}
 
 	// 1. Key status (free).
 	t0 := time.Now()
@@ -156,6 +160,9 @@ func (t *Tester) Test(ctx context.Context, k *store.Key, probe bool) Result {
 // Verify is a cheap, free check used by the pool to confirm a key that
 // looked dead during a request (GET /v1/api-key only).
 func (t *Tester) Verify(ctx context.Context, k *store.Key) (bool, string) {
+	if t.Settings.Get().UpstreamPolicy().CheckURL(k.BaseURL) != nil {
+		return false, ""
+	}
 	st, body, err := t.do(ctx, http.MethodGet, strings.TrimRight(k.BaseURL, "/")+"/v1/api-key", k.Key, nil)
 	if err != nil {
 		return false, ""

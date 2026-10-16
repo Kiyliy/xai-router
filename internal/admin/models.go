@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -210,6 +211,9 @@ func (s *Server) RunSync(ctx context.Context, overwriteManual bool) (billing.Syn
 	k := s.Pool.AnyKey()
 	if k == nil {
 		return billing.SyncResult{}, errNoKey
+	}
+	if err := s.Settings.Get().UpstreamPolicy().CheckURL(k.BaseURL); err != nil {
+		return billing.SyncResult{}, fmt.Errorf("key %q: %v", k.Name, err)
 	}
 	res := s.Syncer.Sync(ctx, strings.TrimRight(k.BaseURL, "/"), k.Key, overwriteManual)
 	b, _ := json.Marshal(res)

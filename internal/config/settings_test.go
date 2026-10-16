@@ -11,11 +11,11 @@ func TestDefaultsValid(t *testing.T) {
 
 func TestMerge(t *testing.T) {
 	s := DefaultSettings()
-	out, err := s.Merge([]byte(`{"max_attempts":3,"retry_keywords":[" Foo ","foo","bar"],"upstream_base_url":"https://example.com/"}`))
+	out, err := s.Merge([]byte(`{"max_attempts":3,"retry_keywords":[" Foo ","foo","bar"],"upstream_base_url":"https://us.api.x.ai/"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.MaxAttempts != 3 || len(out.RetryKeywords) != 2 || out.RetryKeywords[0] != "foo" || out.UpstreamBaseURL != "https://example.com" {
+	if out.MaxAttempts != 3 || len(out.RetryKeywords) != 2 || out.RetryKeywords[0] != "foo" || out.UpstreamBaseURL != "https://us.api.x.ai" {
 		t.Fatalf("merge result: %+v", out)
 	}
 	if s.MaxAttempts != 5 {

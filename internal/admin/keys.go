@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Kiyliy/xai-router/internal/config"
 	"github.com/Kiyliy/xai-router/internal/keytest"
 	"github.com/Kiyliy/xai-router/internal/reqlog"
 	"github.com/Kiyliy/xai-router/internal/store"
@@ -67,7 +68,7 @@ type keyInput struct {
 	Notes          *string `json:"notes"`
 }
 
-func (in *keyInput) apply(k *store.Key) string {
+func (in *keyInput) apply(k *store.Key, s *config.Settings) string {
 	if in.Name != nil {
 		k.Name = strings.TrimSpace(*in.Name)
 	}
@@ -105,6 +106,9 @@ func (in *keyInput) apply(k *store.Key) string {
 	}
 	if u, err := url.Parse(k.BaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return "base_url must be an http(s) URL"
+	}
+	if err := s.UpstreamPolicy().CheckURL(k.BaseURL); err != nil {
+		return "base_url: " + err.Error()
 	}
 	if k.Name == "" {
 		k.Name = "key-" + lastN(k.Key, 4)
@@ -154,7 +158,7 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	k := &store.Key{BaseURL: s.Settings.Get().UpstreamBaseURL, Weight: 1, Enabled: true}
-	if msg := in.apply(k); msg != "" {
+	if msg := in.apply(k, s.Settings.Get()); msg != "" {
 		writeErr(w, http.StatusBadRequest, "invalid_key", msg)
 		return
 	}
@@ -181,7 +185,7 @@ func (s *Server) updateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	wasEnabled := k.Enabled
-	if msg := in.apply(k); msg != "" {
+	if msg := in.apply(k, s.Settings.Get()); msg != "" {
 		writeErr(w, http.StatusBadRequest, "invalid_key", msg)
 		return
 	}
@@ -341,7 +345,7 @@ func (s *Server) importKeys(w http.ResponseWriter, r *http.Request) {
 		}
 		k := &store.Key{Enabled: true}
 		ki := keyInput{Name: &name, Key: &key, BaseURL: &in.BaseURL, Priority: &in.Priority, Weight: &in.Weight, Notes: in.Notes}
-		if msg := ki.apply(k); msg != "" {
+		if msg := ki.apply(k, s.Settings.Get()); msg != "" {
 			skips = append(skips, skipped{i + 1, reqlog.MaskSecret(key), msg})
 			continue
 		}
