@@ -14,4 +14,8 @@ services:
       XR_LOG_LEVEL: ${XR_LOG_LEVEL:-info}
       XR_LOG_FORMAT: ${XR_LOG_FORMAT:-json}
     volumes:
-      - ./data:/data
+      # A named volume keeps the non-root container user's permissions.
+      - xai-router-data:/data
+
+volumes:
+  xai-router-data:
