@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/http"
 	"strconv"
 	"strings"
 )
@@ -72,7 +73,14 @@ type Log struct {
 }
 
 // Success reports whether the request counts as successful.
-func (l *Log) Success() bool { return l.Status >= 200 && l.Status < 400 }
+// Success reports whether the request counts as successful: any 2xx/3xx
+// response, or 101 for an established WebSocket session.
+func (l *Log) Success() bool {
+	return (l.Status >= 200 && l.Status < 400) || l.Status == http.StatusSwitchingProtocols
+}
+
+// successSQL is Success as an SQL condition.
+const successSQL = "((status >= 200 AND status < 400) OR status = 101)"
 
 func nullID(id int64) any {
 	if id == 0 {
@@ -244,9 +252,9 @@ func (f LogFilter) where() (string, []any) {
 	switch s := strings.ToLower(f.Status); {
 	case s == "":
 	case s == "success":
-		w = append(w, "status >= 200 AND status < 400")
+		w = append(w, successSQL)
 	case s == "error":
-		w = append(w, "(status < 200 OR status >= 400)")
+		w = append(w, "NOT "+successSQL)
 	case len(s) == 3 && strings.HasSuffix(s, "xx") && s[0] >= '1' && s[0] <= '5':
 		base := int(s[0]-'0') * 100
 		w, a = append(w, "status >= ? AND status < ?"), append(a, base, base+100)

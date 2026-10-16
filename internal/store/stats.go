@@ -88,8 +88,8 @@ func (db *DB) StatsSeriesLogs(ctx context.Context, from, bucketMs int64, by stri
 	}
 	b := strconv.FormatInt(bucketMs, 10)
 	q := `SELECT (created_at / ` + b + `) * ` + b + ` AS bk, ` + col + ` AS g, COUNT(*),
-COALESCE(SUM(CASE WHEN status >= 200 AND status < 400 THEN 1 ELSE 0 END),0),
-COALESCE(SUM(CASE WHEN status >= 200 AND status < 400 THEN 0 ELSE 1 END),0),
+COALESCE(SUM(CASE WHEN ` + successSQL + ` THEN 1 ELSE 0 END),0),
+COALESCE(SUM(CASE WHEN ` + successSQL + ` THEN 0 ELSE 1 END),0),
 COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(cached_tokens),0),
 COALESCE(SUM(reasoning_tokens),0), COALESCE(SUM(total_tokens),0), COALESCE(SUM(cost_ticks),0),
 COALESCE(SUM(latency_ms),0) FROM request_logs WHERE created_at >= ? GROUP BY bk, g ORDER BY bk`
