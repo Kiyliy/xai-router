@@ -1,0 +1,34 @@
+# xai-router behind Caddy with automatic HTTPS.
+# Usage: edit the host name in Caddyfile, then `docker compose up -d`.
+services:
+  xai-router:
+    image: ghcr.io/kiyliy/xai-router:latest
+    restart: unless-stopped
+    environment:
+      # Optional. If unset, a random admin password is generated on first
+      # start and printed in the logs: docker compose logs xai-router
+      XR_ADMIN_PASSWORD: ${XR_ADMIN_PASSWORD:-}
+      XR_LOG_FORMAT: json
+    volumes:
+      - xai-router-data:/data
+    expose:
+      - "8080" # reachable only through Caddy
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - xai-router
+
+volumes:
+  xai-router-data:
+  caddy-data:
+  caddy-config:

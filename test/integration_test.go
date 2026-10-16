@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Kiyliy/xai-router/internal/app"
+	"github.com/Kiyliy/xai-router/web"
 )
 
 // ---- mock xAI ----
@@ -59,6 +60,23 @@ func (m *mockXAI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case strings.HasSuffix(key, "-500"):
 		jsonResp(w, 500, `{"error":"internal"}`)
+		return
+	}
+	if r.Header.Get("X-Grok-Mock-Echo") != "" {
+		// Echo mode: report what arrived, with a large padding so truncation
+		// would be visible.
+		status, _ := strconv.Atoi(r.Header.Get("X-Grok-Mock-Status"))
+		if status == 0 {
+			status = 200
+		}
+		out, _ := json.Marshal(map[string]any{"method": r.Method, "path": r.URL.Path, "query": r.URL.RawQuery,
+			"body_len": len(body), "auth": r.Header.Get("Authorization"), "padding": strings.Repeat("p", 100_000)})
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Upstream-Custom", "kept")
+		w.WriteHeader(status)
+		if status != http.StatusNoContent {
+			_, _ = w.Write(out)
+		}
 		return
 	}
 	if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
@@ -190,11 +208,17 @@ const adminPW = "integration-test-pw"
 
 func newEnv(t *testing.T, keys ...string) *env {
 	t.Helper()
+	return newEnvDB(t, ":memory:", keys...)
+}
+
+// newEnvDB is newEnv with a database path (a file enables WAL concurrency).
+func newEnvDB(t *testing.T, dbPath string, keys ...string) *env {
+	t.Helper()
 	e := &env{t: t, mock: newMock()}
 	e.up = httptest.NewServer(e.mock)
 	t.Cleanup(e.up.Close)
-	a, err := app.New(context.Background(), app.Options{DBPath: ":memory:", AdminPassword: adminPW,
-		Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	a, err := app.New(context.Background(), app.Options{DBPath: dbPath, AdminPassword: adminPW,
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil)), StaticFS: web.FS()})
 	if err != nil {
 		t.Fatal(err)
 	}

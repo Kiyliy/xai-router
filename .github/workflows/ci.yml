@@ -25,7 +25,11 @@ jobs:
       - name: test
         run: go test -race -count=1 -coverprofile=coverage.out ./...
       - name: coverage
-        run: go tool cover -func=coverage.out | tail -1
+        run: |
+          go tool cover -func=coverage.out | tail -1
+          go test -count=1 -coverpkg=./internal/... -coverprofile=all.out ./... > /dev/null
+          echo "total (all tests, internal packages):"
+          go tool cover -func=all.out | tail -1
       - name: build
         run: CGO_ENABLED=0 go build -trimpath -o xai-router ./cmd/xai-router && ./xai-router version
 

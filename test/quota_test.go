@@ -57,7 +57,7 @@ func TestQuotaStrictUnderConcurrency(t *testing.T) {
 		Token string
 	}
 	e.api("POST", "/api/v1/tokens", map[string]any{"name": "q", "quota_usd": 0.05}, 201, &tok)
-	const n = 40
+	const n = 50 // acceptance D2: 50 concurrent requests
 	var ok, rejected atomic.Int64
 	var wg sync.WaitGroup
 	for i := 0; i < n; i++ {

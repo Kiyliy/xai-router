@@ -57,7 +57,17 @@ type Server struct {
 
 	limiter loginLimiter
 	syncMu  sync.Mutex
+	routes  []Route
 }
+
+// Route describes one admin API endpoint ("METHOD /path").
+type Route struct {
+	Pattern string
+	Public  bool // reachable without credentials
+}
+
+// Routes lists the endpoints registered by Handler (for tests and tooling).
+func (s *Server) Routes() []Route { return append([]Route(nil), s.routes...) }
 
 type ctxKey int
 
@@ -73,8 +83,15 @@ type credential struct {
 // Handler returns the router for /api/.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	pub := func(pattern string, h http.HandlerFunc) { mux.HandleFunc(pattern, h) }
-	priv := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, s.requireAuth(h)) }
+	s.routes = s.routes[:0]
+	pub := func(pattern string, h http.HandlerFunc) {
+		s.routes = append(s.routes, Route{Pattern: pattern, Public: true})
+		mux.HandleFunc(pattern, h)
+	}
+	priv := func(pattern string, h http.HandlerFunc) {
+		s.routes = append(s.routes, Route{Pattern: pattern})
+		mux.Handle(pattern, s.requireAuth(h))
+	}
 
 	pub("POST /api/v1/auth/login", s.login)
 	priv("POST /api/v1/auth/logout", s.logout)

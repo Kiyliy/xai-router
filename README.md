@@ -116,6 +116,22 @@ curl http://localhost:8080/v1/chat/completions \
 To build the image yourself, replace `image:` with `build: .` in `docker-compose.yml` after
 cloning the repository.
 
+### Docker Compose with HTTPS (Caddy)
+
+For a public deployment, run Caddy next to the gateway; it gets and renews a Let's Encrypt
+certificate automatically and redirects HTTP to HTTPS. Point a DNS name at the server (or use
+`<ip-with-dashes>.sslip.io`), then:
+
+```bash
+mkdir xai-router && cd xai-router
+curl -O https://raw.githubusercontent.com/Kiyliy/xai-router/main/docs/examples/tls/docker-compose.yml
+curl -O https://raw.githubusercontent.com/Kiyliy/xai-router/main/docs/examples/tls/Caddyfile
+sed -i 's/gateway.example.com/your.domain.example/' Caddyfile
+docker compose up -d
+```
+
+Details, and how to add the gateway to an existing Caddy: [docs/deploy-tls.md](docs/deploy-tls.md).
+
 ### Binary
 
 Download a release for Linux, macOS or Windows from
@@ -142,6 +158,13 @@ timeouts, body limits, log retention, sync interval, trusted proxies…) is edit
 
 Forgot the password? `xai-router reset-password` (or `docker compose exec xai-router
 xai-router reset-password`) prints a new one and signs everyone out.
+
+### Upgrading
+
+Back up the data directory (or volume), then replace the binary or pull the new image and
+restart (`docker compose pull && docker compose up -d`). Database migrations run automatically
+on start, are idempotent, and keep all keys, tokens, logs and statistics; downgrading is not
+supported.
 
 ## Using the gateway
 

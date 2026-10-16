@@ -92,6 +92,21 @@ curl http://localhost:8080/v1/chat/completions \
 
 想自己构建镜像：克隆仓库后把 `docker-compose.yml` 里的 `image:` 换成 `build: .`。
 
+### Docker Compose + HTTPS（Caddy）
+
+公网部署时，在网关旁边跑一个 Caddy：它会自动申请并续期 Let's Encrypt 证书，并把 HTTP 跳转到 HTTPS。
+先把域名解析到服务器（没有域名可以用 `<用短横线连接的IP>.sslip.io`），然后：
+
+```bash
+mkdir xai-router && cd xai-router
+curl -O https://raw.githubusercontent.com/Kiyliy/xai-router/main/docs/examples/tls/docker-compose.yml
+curl -O https://raw.githubusercontent.com/Kiyliy/xai-router/main/docs/examples/tls/Caddyfile
+sed -i 's/gateway.example.com/你的域名/' Caddyfile
+docker compose up -d
+```
+
+更多细节，以及如何接入已有的 Caddy：见 [docs/deploy-tls.md](docs/deploy-tls.md)。
+
 ### 二进制
 
 从 [Releases](https://github.com/Kiyliy/xai-router/releases) 下载 Linux / macOS / Windows 版本，或从源码构建（Go 1.25+）：
@@ -116,6 +131,11 @@ XR_ADMIN_PASSWORD='换成强密码' ./xai-router
 
 忘记密码：执行 `xai-router reset-password`（Docker 下用 `docker compose exec xai-router xai-router reset-password`），
 会打印新密码并让所有会话下线。
+
+### 升级
+
+先备份数据目录（或数据卷），然后替换二进制、或拉取新镜像并重启（`docker compose pull && docker compose up -d`）。
+数据库迁移在启动时自动执行，可以重复执行，密钥、令牌、日志和统计都会保留；不支持降级。
 
 ## 调用网关
 

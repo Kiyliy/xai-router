@@ -1,0 +1,8 @@
+# Replace with your domain (or <ip-with-dashes>.sslip.io). Caddy obtains the
+# certificate and redirects HTTP to HTTPS automatically.
+gateway.example.com {
+	reverse_proxy xai-router:8080 {
+		# Forward every SSE chunk immediately.
+		flush_interval -1
+	}
+}

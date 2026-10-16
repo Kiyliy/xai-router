@@ -8,7 +8,7 @@ streaming (SSE) and WebSocket traffic without extra configuration.
 No domain? Services such as [sslip.io](https://sslip.io) resolve
 `203-0-113-10.sslip.io` to `203.0.113.10`, which is enough for a certificate.
 
-## Option A — everything in Docker Compose
+## Option A — everything in Docker Compose ([docs/examples/tls](examples/tls))
 
 `docker-compose.yml`:
 
