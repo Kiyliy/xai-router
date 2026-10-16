@@ -378,11 +378,13 @@ func classify(s *config.Settings, o Outcome) Verdict {
 	switch o.Status {
 	case http.StatusUnauthorized:
 		return Verdict{Action: ActionDisable, Reason: reason, Retry: true}
-	case http.StatusPaymentRequired, http.StatusForbidden, http.StatusTooManyRequests:
-		// Only account-level statuses can mark a key dead.
-		if kw := config.MatchKeyword(msg, s.DisableKeywords); kw != "" {
-			return Verdict{Action: ActionDisable, Reason: reason, Retry: true}
-		}
+	}
+	if kw := config.MatchKeyword(msg, s.DisableKeywords); kw != "" {
+		// e.g. 400 "Incorrect API key provided" or 403 "no credits". Error
+		// text may echo client input, so a key is only disabled after an
+		// out-of-band check with the key itself confirms it; only a 401
+		// disables directly.
+		return Verdict{Action: ActionVerify, Reason: reason, Retry: true}
 	}
 	if o.Status == http.StatusTooManyRequests {
 		if isCapacityError(msg) {
@@ -391,12 +393,6 @@ func classify(s *config.Settings, o Outcome) Verdict {
 			return Verdict{Action: ActionRetry, Reason: "model at capacity (429): " + snippet, Retry: true}
 		}
 		return Verdict{Action: ActionCooldown, Reason: "rate limited (429): " + snippet, Retry: true}
-	}
-	if kw := config.MatchKeyword(msg, s.DisableKeywords); kw != "" {
-		// e.g. 400 "Incorrect API key provided". The status could also come
-		// from a bad request whose input is echoed, so the key is only
-		// disabled after an out-of-band check confirms it.
-		return Verdict{Action: ActionVerify, Reason: reason, Retry: true}
 	}
 	if s.IsRetryStatus(o.Status) {
 		// Server errors count towards the circuit breaker; client-class

@@ -139,8 +139,22 @@ func (st *state) serveWebSocket(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	st.info.Model = q.Get("model")
 	st.log.Model = st.info.Model
+	if len(q["model"]) > 1 || len(q["call_id"]) > 1 {
+		st.fail(w, errf(http.StatusBadRequest, "ambiguous_model", "the model query parameter is given more than once"))
+		return
+	}
+	if st.info.Model == "" && len(st.token.AllowedModels) > 0 && r.URL.Path != "/v1/tts" {
+		// Fail closed: the upstream would pick a default model.
+		st.fail(w, errf(http.StatusBadRequest, "model_required",
+			"this API key is restricted to specific models; set ?model= on the WebSocket URL"))
+		return
+	}
 	if st.info.Model != "" && !h.modelAllowed(st.token, st.info.Model) {
 		st.fail(w, errf(http.StatusForbidden, "model_not_allowed", "this token is not allowed to use model %q", st.info.Model))
+		return
+	}
+	if m := h.Prices.Lookup(st.info.Model); m != nil && !m.Enabled {
+		st.fail(w, errf(http.StatusForbidden, "model_disabled", "the model %q is disabled on this gateway", st.info.Model))
 		return
 	}
 	if st.res = h.Quota.Reserve(st.token, 0); st.res == nil {

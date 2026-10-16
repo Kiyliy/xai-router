@@ -92,6 +92,12 @@ func (m *mockXAI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case r.Method == "POST" && r.URL.Path == "/v1/chat/completions":
+		if c, _ := req["model"].(string); c == "echo-403" {
+			// A 403 that repeats the user's message text back.
+			msgs, _ := json.Marshal(req["messages"])
+			jsonResp(w, 403, `{"error":"content not permitted: `+strings.ReplaceAll(string(msgs), `"`, `'`)+`"}`)
+			return
+		}
 		if m, _ := req["model"].(string); strings.HasPrefix(m, "echo ") {
 			// Like xAI, unknown models are echoed back in the error.
 			jsonResp(w, 404, `{"code":"not-found","error":"The model `+m+` does not exist or your team does not have access to it."}`)
@@ -167,6 +173,29 @@ func (m *mockXAI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		jsonResp(w, 200, `{"data":[{"url":"https://img/1.png"},{"url":"https://img/2.png"}]}`)
 	case r.URL.Path == "/v1/api-key":
 		jsonResp(w, 200, `{"name":"k","team_id":"t","acls":["api-key:model:*"],"api_key_blocked":false,"api_key_disabled":false,"team_blocked":false}`)
+	case r.Method == "POST" && r.URL.Path == "/v1/files":
+		jsonResp(w, 200, fmt.Sprintf(`{"id":%q,"object":"file","filename":"a.txt"}`, m.newID("file", key)))
+	case r.Method == "POST" && r.URL.Path == "/v1/batches":
+		jsonResp(w, 200, fmt.Sprintf(`{"batch_id":%q,"name":"b"}`, m.newID("batch", key)))
+	case r.Method == "GET" && (r.URL.Path == "/v1/files" || r.URL.Path == "/v1/batches"):
+		// The team sees everything, including resources created elsewhere.
+		m.mu.Lock()
+		var items []string
+		for id := range m.owner {
+			if strings.HasPrefix(id, "file_") && r.URL.Path == "/v1/files" {
+				items = append(items, fmt.Sprintf(`{"id":%q}`, id))
+			}
+			if strings.HasPrefix(id, "batch_") && r.URL.Path == "/v1/batches" {
+				items = append(items, fmt.Sprintf(`{"batch_id":%q}`, id))
+			}
+		}
+		m.mu.Unlock()
+		items = append(items, `{"id":"file_console","batch_id":"batch_console"}`)
+		field := "data"
+		if r.URL.Path == "/v1/batches" {
+			field = "batches"
+		}
+		jsonResp(w, 200, fmt.Sprintf(`{%q:[%s]}`, field, strings.Join(items, ",")))
 	case r.Method == "POST" && r.URL.Path == "/v1/tts":
 		jsonResp(w, 200, `{"audio":"AAAA","content_type":"audio/mpeg","duration":1.2}`)
 	case r.Method == "POST" && r.URL.Path == "/v1/images/edits":

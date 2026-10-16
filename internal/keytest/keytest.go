@@ -172,12 +172,37 @@ func (t *Tester) Verify(ctx context.Context, k *store.Key) (bool, string) {
 		if json.Unmarshal(body, &info) == nil && (info.TeamBlocked || info.APIKeyBlocked || info.APIKeyDisabled) {
 			return true, "verified: API key or team is blocked/disabled"
 		}
-		return false, ""
+		// The key itself is valid; check whether it can still pay.
+		return t.verifyWithProbe(ctx, k)
 	}
 	status, msg := classify(st, body)
 	switch status {
 	case "invalid", "blocked", "no_credits":
 		return true, "verified: " + msg
+	}
+	return false, ""
+}
+
+// verifyWithProbe follows a healthy GET /v1/api-key with a 1-token request,
+// because an exhausted balance or spending limit only shows up on real
+// requests. Used when the triggering error looked like a billing problem.
+func (t *Tester) verifyWithProbe(ctx context.Context, k *store.Key) (bool, string) {
+	model := t.Settings.Get().KeyTestModel
+	if model == "" {
+		model = t.Prices.Cheapest()
+	}
+	if model == "" {
+		model = "grok-build-0.1"
+	}
+	payload, _ := json.Marshal(map[string]any{"model": model, "max_tokens": 1,
+		"messages": []map[string]string{{"role": "user", "content": "ok"}}})
+	st, body, err := t.do(ctx, http.MethodPost, strings.TrimRight(k.BaseURL, "/")+"/v1/chat/completions", k.Key, payload)
+	if err != nil || st == http.StatusOK {
+		return false, ""
+	}
+	switch status, msg := classify(st, body); status {
+	case "invalid", "blocked", "no_credits":
+		return true, "verified by probe: " + msg
 	}
 	return false, ""
 }

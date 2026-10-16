@@ -949,7 +949,7 @@ components:
         log_body_max_kb: { type: integer, default: 256, description: Per-body size cap for stored logs }
         log_retention_days: { type: integer, default: 30, description: Logs older than this are deleted daily (0 = keep). Aggregated stats are kept. }
         model_sync_interval_hours: { type: integer, default: 24, description: 0 = manual only }
-        task_binding_ttl_hours: { type: integer, default: 72, description: How long async task / resource → key bindings are kept }
+        task_binding_ttl_hours: { type: integer, default: 720, description: How long async task / resource → key bindings are kept }
         key_test_model: { type: string, default: "", description: Model for probe requests; empty = cheapest chat model }
         trusted_proxies: { type: array, items: { type: string }, description: CIDRs whose X-Forwarded-For / X-Real-IP is trusted for client IP }
         expose_debug: { type: boolean, default: false, description: Serve /debug/pprof (admin auth still required) }

@@ -82,7 +82,7 @@ func DefaultSettings() Settings {
 		LogBodyMaxKB:             256,
 		LogRetentionDays:         30,
 		ModelSyncIntervalHours:   24,
-		TaskBindingTTLHours:      72,
+		TaskBindingTTLHours:      720,
 		TrustedProxies:           []string{"127.0.0.1/32", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"},
 		InjectStreamUsage:        true,
 		AnthropicStreamFix:       true,

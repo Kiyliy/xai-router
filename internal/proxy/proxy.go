@@ -409,6 +409,7 @@ func (st *state) attempt(w http.ResponseWriter, r *http.Request, lease *pool.Lea
 		return false, &upstreamError{status: http.StatusBadGateway, err: v.Reason}
 	}
 	full = st.filterModelList(r, full)
+	full = st.filterOwnedList(r.Context(), r, full)
 	w.Header().Set("Content-Length", strconv.Itoa(len(full)))
 	w.WriteHeader(resp.StatusCode)
 	st.markTTFB()
@@ -561,12 +562,19 @@ func (st *state) handleBody(r *http.Request, body []byte) {
 			if first {
 				st.h.Quota.ReleaseHold(id)
 			}
+		} else {
+			// Without the binding (expired, or the job was not submitted
+			// through this gateway) "bill once" cannot be guaranteed, so the
+			// job is not charged here.
+			st.h.Log.Info("finished async job without binding not billed", "kind", kind, "id", id)
+			u = billing.Usage{}
+			st.log.Error = "finished " + kind + " job has no binding (expired or not created here); not billed again"
 		}
 	}
 	st.applyUsage(u)
 	st.applyVoiceREST(r, body)
 	if kind := createdResourceKind(r.Method, r.URL.Path, st.info.Deferred); kind != "" {
-		id := env.ID
+		id := resourceID(body) // id, batch_id, collection_id, file_id or request_id
 		if kind == KindVideo || kind == KindImage || kind == KindDeferred {
 			id = firstNonEmpty(env.RequestID, env.ID)
 		}
@@ -789,7 +797,11 @@ func parseRequest(contentType string, body []byte) reqInfo {
 		return ri
 	}
 	body = trimmed
-	if countTopLevelKey(body, "model") > 1 {
+	// Go's JSON decoding matches field names case-insensitively and keeps
+	// the last match, while xAI reads the exact lowercase name. Any second
+	// spelling (duplicate, "MODEL", "Model"...) would let the gateway and
+	// the upstream disagree about the model, so such bodies are refused.
+	if keyAmbiguous(body, "model") || keyAmbiguous(body, "previous_response_id") {
 		ri.Ambiguous = true
 	}
 	var v struct {
@@ -875,6 +887,33 @@ func countTopLevelKey(body []byte, key string) int {
 		}
 	}
 	return n
+}
+
+// keyAmbiguous reports whether a top-level member name matches key
+// case-insensitively more than once, or only with a different case.
+func keyAmbiguous(body []byte, key string) bool {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return false
+	}
+	exact, fold := 0, 0
+	for dec.More() {
+		t, err := dec.Token()
+		if err != nil {
+			return false // invalid JSON: the upstream rejects it anyway
+		}
+		if k, ok := t.(string); ok && strings.EqualFold(k, key) {
+			fold++
+			if k == key {
+				exact++
+			}
+		}
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			return false
+		}
+	}
+	return fold > 1 || (fold == 1 && exact == 0)
 }
 
 // flexInt reads a JSON number or numeric string ("8").
