@@ -192,7 +192,7 @@ func (m *mockXAI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		m.mu.Unlock()
 		items = append(items, `{"id":"file_console","batch_id":"batch_console"}`)
 		field := "data"
-		if r.URL.Path == "/v1/batches" {
+		if r.URL.Path == "/v1/batches" && r.URL.Query().Get("shape") != "data" {
 			field = "batches"
 		}
 		jsonResp(w, 200, fmt.Sprintf(`{%q:[%s]}`, field, strings.Join(items, ",")))

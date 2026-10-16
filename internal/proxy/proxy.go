@@ -801,8 +801,11 @@ func parseRequest(contentType string, body []byte) reqInfo {
 	// the last match, while xAI reads the exact lowercase name. Any second
 	// spelling (duplicate, "MODEL", "Model"...) would let the gateway and
 	// the upstream disagree about the model, so such bodies are refused.
-	if keyAmbiguous(body, "model") || keyAmbiguous(body, "previous_response_id") {
-		ri.Ambiguous = true
+	for _, k := range readFields {
+		if keyAmbiguous(body, k) {
+			ri.Ambiguous = true
+			break
+		}
 	}
 	var v struct {
 		Text                string          `json:"text"`
@@ -844,6 +847,7 @@ func parseMultipart(boundary string, body []byte) reqInfo {
 	}
 	mr := multipart.NewReader(bytes.NewReader(body), boundary)
 	models := 0
+	seen := map[string]int{}
 	for {
 		p, err := mr.NextPart()
 		if err != nil {
@@ -852,12 +856,43 @@ func parseMultipart(boundary string, body []byte) reqInfo {
 			}
 			break
 		}
-		if p.FormName() == "model" && p.FileName() == "" {
-			v, _ := io.ReadAll(io.LimitReader(p, 256))
-			ri.Model = strings.TrimSpace(string(v))
-			models++
+		name := p.FormName()
+		for _, k := range readFields {
+			if strings.EqualFold(name, k) {
+				seen[strings.ToLower(name)]++
+				if name != k {
+					ri.Ambiguous = true
+				}
+			}
+		}
+		if p.FileName() == "" {
+			switch name {
+			case "model":
+				v, _ := io.ReadAll(io.LimitReader(p, 256))
+				ri.Model = strings.TrimSpace(string(v))
+				models++
+			case "deferred":
+				v, _ := io.ReadAll(io.LimitReader(p, 16))
+				ri.Deferred = strings.EqualFold(strings.TrimSpace(string(v)), "true")
+			case "n", "quality", "resolution":
+				v, _ := io.ReadAll(io.LimitReader(p, 32))
+				val := strings.TrimSpace(string(v))
+				switch name {
+				case "n":
+					ri.N, _ = strconv.ParseInt(val, 10, 64)
+				case "quality":
+					ri.Quality = val
+				case "resolution":
+					ri.Resolution = val
+				}
+			}
 		}
 		p.Close()
+	}
+	for _, n := range seen {
+		if n > 1 {
+			ri.Ambiguous = true
+		}
 	}
 	if models > 1 {
 		ri.Ambiguous = true
@@ -888,6 +923,14 @@ func countTopLevelKey(body []byte, key string) int {
 	}
 	return n
 }
+
+// readFields are the request fields the gateway acts on (policy, billing,
+// bindings, quota reservations). Each must appear at most once and only in
+// its exact lowercase spelling, otherwise gateway and upstream could read
+// different values.
+var readFields = []string{"model", "previous_response_id", "deferred", "stream", "stream_options",
+	"max_tokens", "max_completion_tokens", "max_output_tokens", "n", "duration", "seconds",
+	"service_tier", "quality", "resolution", "text"}
 
 // keyAmbiguous reports whether a top-level member name matches key
 // case-insensitively more than once, or only with a different case.

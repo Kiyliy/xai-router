@@ -33,29 +33,32 @@ func resourceID(raw json.RawMessage) string {
 // filterOwnedList removes resources created by other tokens (or outside
 // the gateway) from file/batch/collection list responses.
 func (st *state) filterOwnedList(ctx context.Context, r *http.Request, body []byte) []byte {
-	field, ok := ownedListPaths[r.URL.Path]
-	if !ok || r.Method != http.MethodGet || st.token == nil {
+	if _, ok := ownedListPaths[r.URL.Path]; !ok || r.Method != http.MethodGet || st.token == nil {
 		return body
 	}
 	var doc map[string]json.RawMessage
 	if json.Unmarshal(body, &doc) != nil {
-		return body
+		return []byte(`{"error":{"message":"unexpected list response from upstream","type":"xai_router_error","code":"upstream_format"}}`)
 	}
-	var items []json.RawMessage
-	if json.Unmarshal(doc[field], &items) != nil {
-		return body
-	}
-	kept := make([]json.RawMessage, 0, len(items))
-	for _, it := range items {
-		id := resourceID(it)
-		if id == "" {
+	// Filter every top-level array, whatever the upstream calls it, so a
+	// changed field name cannot expose other tokens' resources.
+	for field, raw := range doc {
+		var items []json.RawMessage
+		if json.Unmarshal(raw, &items) != nil {
 			continue
 		}
-		if b, err := st.h.DB.GetBinding(ctx, id); err == nil && b.TokenID == st.token.ID {
-			kept = append(kept, it)
+		kept := make([]json.RawMessage, 0, len(items))
+		for _, it := range items {
+			id := resourceID(it)
+			if id == "" {
+				continue
+			}
+			if b, err := st.h.DB.GetBinding(ctx, id); err == nil && b.TokenID == st.token.ID {
+				kept = append(kept, it)
+			}
 		}
+		doc[field], _ = json.Marshal(kept)
 	}
-	doc[field], _ = json.Marshal(kept)
 	out, err := json.Marshal(doc)
 	if err != nil {
 		return body

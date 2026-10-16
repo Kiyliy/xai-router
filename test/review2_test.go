@@ -1,7 +1,9 @@
 package test
 
 import (
+	"bytes"
 	"context"
+	"mime/multipart"
 	"net/http"
 	"testing"
 	"time"
@@ -88,6 +90,16 @@ func TestTeamResourceListsFiltered(t *testing.T) {
 	if len(batches.Batches) != 1 || batches.Batches[0].BatchID != b.BatchID {
 		t.Fatalf("owner batches %+v", batches.Batches)
 	}
+	// Filtering does not depend on the upstream's field name.
+	var other2 struct {
+		Data []struct {
+			BatchID string `json:"batch_id"`
+		}
+	}
+	e.do("GET", "/v1/batches?shape=data", other.Token, nil, 200, &other2)
+	if len(other2.Data) != 0 {
+		t.Fatalf("other token sees batches under an unexpected field: %+v", other2.Data)
+	}
 	// The created resources are private: other tokens get 404.
 	e.do("GET", "/v1/files/"+f.ID, other.Token, nil, 404, nil)
 	e.do("GET", "/v1/batches/"+b.BatchID, other.Token, nil, 404, nil)
@@ -137,5 +149,30 @@ func TestEchoed403DoesNotDisableKeys(t *testing.T) {
 		if k.Status != "active" {
 			t.Fatalf("key %s is %s after echoed 403s", k.Name, k.Status)
 		}
+	}
+}
+
+// R1: every field the gateway reads must have a single, exact spelling.
+func TestCaseVariantBillingFieldsRejected(t *testing.T) {
+	e := newEnv(t, "xai-ok")
+	for _, body := range []string{
+		`{"model":"grok-4.3","deferred":true,"DEFERRED":false,"messages":[]}`,
+		`{"model":"grok-4.3","Deferred":true,"messages":[]}`,
+		`{"model":"grok-4.3","max_tokens":10,"MAX_TOKENS":100000,"messages":[]}`,
+		`{"model":"grok-imagine-image","prompt":"p","n":1,"N":10}`,
+		`{"model":"grok-imagine-video","prompt":"p","duration":1,"Duration":15}`,
+		`{"model":"grok-4.3","service_tier":"default","Service_Tier":"priority","messages":[]}`,
+	} {
+		if st := e.raw("POST", "/v1/chat/completions", e.client, "application/json", []byte(body)); st != 400 {
+			t.Errorf("%s: status %d, want 400", body, st)
+		}
+	}
+	var mp bytes.Buffer
+	w := multipart.NewWriter(&mp)
+	_ = w.WriteField("model", "grok-imagine-image")
+	_ = w.WriteField("Deferred", "true")
+	w.Close()
+	if st := e.raw("POST", "/v1/images/edits", e.client, w.FormDataContentType(), mp.Bytes()); st != 400 {
+		t.Errorf("multipart Deferred: status %d, want 400", st)
 	}
 }
