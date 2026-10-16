@@ -3,7 +3,6 @@ services:
     image: ghcr.io/kiyliy/xai-router:latest
     # To build from source instead: comment out "image" and uncomment "build".
     # build: .
-    container_name: xai-router
     restart: unless-stopped
     ports:
       - "${XR_PORT:-8080}:8080"
