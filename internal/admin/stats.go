@@ -142,9 +142,13 @@ func (s *Server) statsTimeseries(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	interval := q.Get("interval")
 	if interval == "" {
-		interval = "hour"
-		if rg == "30d" || rg == "90d" {
+		switch rg {
+		case "1h":
+			interval = "5m"
+		case "30d", "90d":
 			interval = "day"
+		default:
+			interval = "hour"
 		}
 	}
 	bucket := int64(3600_000)
@@ -152,8 +156,16 @@ func (s *Server) statsTimeseries(w http.ResponseWriter, r *http.Request) {
 	case "hour":
 	case "day":
 		bucket = 86400_000
+	case "5m":
+		// Fine-grained buckets come from raw logs; keep the range short.
+		if rg != "1h" && rg != "24h" {
+			writeErr(w, http.StatusBadRequest, "invalid_interval", "interval 5m is only available for ranges up to 24h")
+			return
+		}
+		bucket = 300_000
+		from = time.Now().Add(-ranges[rg]).UnixMilli() / bucket * bucket
 	default:
-		writeErr(w, http.StatusBadRequest, "invalid_interval", "interval must be hour or day")
+		writeErr(w, http.StatusBadRequest, "invalid_interval", "interval must be 5m, hour or day")
 		return
 	}
 	group := q.Get("group")
@@ -164,7 +176,13 @@ func (s *Server) statsTimeseries(w http.ResponseWriter, r *http.Request) {
 	if limit <= 0 {
 		limit = 6
 	}
-	rows, err := s.DB.StatsSeries(r.Context(), from, bucket, group)
+	var rows []store.SeriesRow
+	var err error
+	if bucket < 3600_000 {
+		rows, err = s.DB.StatsSeriesLogs(r.Context(), from, bucket, group)
+	} else {
+		rows, err = s.DB.StatsSeries(r.Context(), from, bucket, group)
+	}
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_group", "group must be none, model, key or token")
 		return

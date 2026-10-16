@@ -71,6 +71,44 @@ GROUP BY g ORDER BY SUM(requests) DESC`, from)
 	return out, rows.Err()
 }
 
+// StatsSeriesLogs is StatsSeries computed from raw request logs, for
+// sub-hour buckets over short ranges.
+func (db *DB) StatsSeriesLogs(ctx context.Context, from, bucketMs int64, by string) ([]SeriesRow, error) {
+	col := "''"
+	switch by {
+	case "", "none":
+	case "model":
+		col = "model"
+	case "key":
+		col = "CAST(COALESCE(key_id,0) AS TEXT)"
+	case "token":
+		col = "CAST(COALESCE(token_id,0) AS TEXT)"
+	default:
+		return nil, fmt.Errorf("invalid group %q", by)
+	}
+	b := strconv.FormatInt(bucketMs, 10)
+	q := `SELECT (created_at / ` + b + `) * ` + b + ` AS bk, ` + col + ` AS g, COUNT(*),
+COALESCE(SUM(CASE WHEN status >= 200 AND status < 400 THEN 1 ELSE 0 END),0),
+COALESCE(SUM(CASE WHEN status >= 200 AND status < 400 THEN 0 ELSE 1 END),0),
+COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(cached_tokens),0),
+COALESCE(SUM(reasoning_tokens),0), COALESCE(SUM(total_tokens),0), COALESCE(SUM(cost_ticks),0),
+COALESCE(SUM(latency_ms),0) FROM request_logs WHERE created_at >= ? GROUP BY bk, g ORDER BY bk`
+	rows, err := db.R.QueryContext(ctx, q, from)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SeriesRow
+	for rows.Next() {
+		var r SeriesRow
+		if err := rows.Scan(append([]any{&r.Bucket, &r.Group}, r.dest()...)...); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // SeriesRow is one time bucket of one group.
 type SeriesRow struct {
 	Bucket int64

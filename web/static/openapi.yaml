@@ -506,7 +506,7 @@ paths:
       summary: Requests, tokens and cost over time
       parameters:
         - $ref: "#/components/parameters/Range"
-        - { name: interval, in: query, schema: { type: string, enum: [hour, day], default: hour } }
+        - { name: interval, in: query, schema: { type: string, enum: [5m, hour, day] }, description: "Default: 5m for 1h, hour up to 7d, day for 30d/90d. 5m is computed from raw logs and limited to ranges up to 24h." }
         - { name: group, in: query, schema: { type: string, enum: [none, model, key, token], default: none } }
         - { name: limit, in: query, schema: { type: integer, default: 6 }, description: Max series when grouped; the rest are merged into "other" }
       responses:

@@ -160,13 +160,33 @@ func (a *App) routes(static fs.FS) http.Handler {
 			if r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, ".html") {
 				h.Set("Cache-Control", "no-cache")
 			}
-			if ext := filepath.Ext(r.URL.Path); ext == ".yaml" || ext == ".yml" {
-				h.Set("Content-Type", "application/yaml; charset=utf-8")
+			h.Set("Content-Security-Policy", consoleCSP)
+			// Set types explicitly: the OS MIME table (e.g. the Windows
+			// registry) may map .js to text/plain, which breaks ES modules.
+			if ct, ok := staticTypes[filepath.Ext(r.URL.Path)]; ok {
+				h.Set("Content-Type", ct)
 			}
 			files.ServeHTTP(w, r)
 		})
 	}
 	return a.accessLog(mux)
+}
+
+// The console only loads its own files, plus Swagger UI from jsDelivr on the
+// API docs page.
+const consoleCSP = "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; " +
+	"style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: blob: https:; " +
+	"font-src 'self' data: https://cdn.jsdelivr.net; connect-src 'self'; frame-ancestors 'none'; " +
+	"base-uri 'self'; form-action 'self'"
+
+var staticTypes = map[string]string{
+	".html": "text/html; charset=utf-8",
+	".js":   "text/javascript; charset=utf-8",
+	".css":  "text/css; charset=utf-8",
+	".svg":  "image/svg+xml",
+	".png":  "image/png",
+	".yaml": "application/yaml; charset=utf-8",
+	".yml":  "application/yaml; charset=utf-8",
 }
 
 type statusWriter struct {
