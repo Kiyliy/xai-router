@@ -462,7 +462,7 @@ func (st *state) applyUsage(u billing.Usage) {
 	l.ReasoningTokens, l.ImageTokens, l.TotalTokens = u.ReasoningTokens, u.ImageTokens, u.TotalTokens
 	l.Images, l.VideoSeconds = u.Images, u.VideoSeconds
 	l.CostTicks, l.CostSource = st.h.Prices.Cost(l.Model, u, billing.Request{
-		Quality: st.info.Quality, Resolution: st.info.Resolution})
+		Quality: st.info.Quality, Resolution: st.info.Resolution, Edit: st.log.Path == "/v1/images/edits"})
 }
 
 func (st *state) bind(kind, id string) {

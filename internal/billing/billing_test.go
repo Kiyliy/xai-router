@@ -113,6 +113,13 @@ func TestMediaCost(t *testing.T) {
 	if got, _ := tb.Cost("grok-imagine-image-2.0", u, Request{Quality: "medium", Resolution: "2k"}); got != 2*800_000_000 {
 		t.Fatalf("tiered image cost = %d", got)
 	}
+	// Defaults: 1k, quality auto = low for generation, medium for edits.
+	if got, _ := tb.Cost("grok-imagine-image-2.0", u, Request{}); got != 2*400_000_000 {
+		t.Fatalf("default generation cost = %d", got)
+	}
+	if got, _ := tb.Cost("grok-imagine-image-2.0", u, Request{Edit: true, Quality: "auto"}); got != 2*600_000_000 {
+		t.Fatalf("default edit cost = %d", got)
+	}
 	// Upstream cost wins.
 	u, _ = ParseBody([]byte(`{"data":[{"b64_json":"AAAA"}],"usage":{"cost_in_usd_ticks":400000000}}`))
 	if got, src := tb.Cost("grok-imagine-image", u, Request{}); got != 400_000_000 || src != "upstream" {

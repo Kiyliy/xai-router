@@ -104,6 +104,7 @@ func (t *Table) Cheapest() string {
 type Request struct {
 	Quality    string
 	Resolution string
+	Edit       bool // image edit (default quality differs from generation)
 }
 
 // Cost prices usage. Upstream-reported cost always wins; otherwise the price
@@ -131,13 +132,26 @@ func (t *Table) Cost(model string, u Usage, req Request) (int64, string) {
 	return cost, "computed"
 }
 
+// imagePrice picks the per-image price. Models with quality/resolution tiers
+// (grok-imagine-image-2.0) default to resolution 1k and quality "auto", which
+// xAI serves as low for generations and medium for edits.
 func imagePrice(m *store.Model, req Request) int64 {
-	if req.Quality != "" || req.Resolution != "" {
-		for _, tr := range m.ImageTiers {
-			if (req.Quality == "" || strings.EqualFold(tr.Quality, req.Quality)) &&
-				(req.Resolution == "" || strings.EqualFold(tr.Resolution, req.Resolution)) {
-				return tr.Ticks
-			}
+	if len(m.ImageTiers) == 0 {
+		return m.ImageTicks
+	}
+	q, res := strings.ToLower(req.Quality), strings.ToLower(req.Resolution)
+	if q == "" || q == "auto" {
+		q = "low"
+		if req.Edit {
+			q = "medium"
+		}
+	}
+	if res == "" {
+		res = "1k"
+	}
+	for _, tr := range m.ImageTiers {
+		if strings.EqualFold(tr.Quality, q) && strings.EqualFold(tr.Resolution, res) {
+			return tr.Ticks
 		}
 	}
 	return m.ImageTicks
