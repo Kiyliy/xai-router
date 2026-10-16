@@ -354,6 +354,26 @@ func (st *state) streamBody(ctx context.Context, cancel context.CancelCauseFunc,
 	watchdog := time.AfterFunc(idle, func() { cancel(errStreamIdle) })
 	defer watchdog.Stop()
 
+	var fixer *messagesFixer
+	if s.AnthropicStreamFix && st.log.Path == "/v1/messages" {
+		fixer = &messagesFixer{}
+	}
+	forward := func(chunk []byte) bool {
+		if len(chunk) == 0 {
+			return true
+		}
+		st.markTTFB()
+		if _, werr := w.Write(chunk); werr != nil {
+			return false
+		}
+		_ = rc.Flush()
+		parser.Write(chunk)
+		if s.LogBodies {
+			capt.Write(chunk)
+		}
+		return true
+	}
+
 	buf := make([]byte, 32<<10)
 	var errMsg string
 	for {
@@ -361,19 +381,19 @@ func (st *state) streamBody(ctx context.Context, cancel context.CancelCauseFunc,
 		if n > 0 {
 			watchdog.Reset(idle)
 			chunk := buf[:n]
-			st.markTTFB()
-			if _, werr := w.Write(chunk); werr != nil {
+			if fixer != nil {
+				chunk = fixer.Feed(chunk)
+			}
+			if !forward(chunk) {
 				errMsg = "client went away"
 				st.log.Status = 499
 				break
 			}
-			_ = rc.Flush()
-			parser.Write(chunk)
-			if s.LogBodies {
-				capt.Write(chunk)
-			}
 		}
 		if err != nil {
+			if fixer != nil {
+				forward(fixer.Flush())
+			}
 			if !errors.Is(err, io.EOF) {
 				switch {
 				case errors.Is(context.Cause(ctx), errStreamIdle):

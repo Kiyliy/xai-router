@@ -116,3 +116,35 @@ func TestTruncateStr(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestMessagesFixer(t *testing.T) {
+	in := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\"}}\n\n" +
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"thinking\"}}\n\n" +
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"x\"}}\n\n" +
+		"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"Hi\"}}\n\n" +
+		"event: content_block_stop\ndata: {\"type\":\"content_block_stop\"}\n\n" +
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+	for size := 1; size <= 64; size *= 2 {
+		f := &messagesFixer{}
+		var out []byte
+		for i := 0; i < len(in); i += size {
+			out = append(out, f.Feed([]byte(in[i:min(i+size, len(in))]))...)
+		}
+		out = append(out, f.Flush()...)
+		s := string(out)
+		for _, want := range []string{
+			`{"index":0,"type":"content_block_start","content_block":{"type":"thinking"}}`,
+			`{"index":0,"type":"content_block_delta","delta":{"type":"thinking_delta"`,
+			`{"index":1,"type":"content_block_delta","delta":{"type":"text_delta"`,
+			`{"index":1,"type":"content_block_stop"}`,
+			`{"type":"content_block_stop","index":0}`,
+			"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+		} {
+			if !strings.Contains(s, want) {
+				t.Fatalf("chunk %d: missing %s in\n%s", size, want, s)
+			}
+		}
+	}
+}

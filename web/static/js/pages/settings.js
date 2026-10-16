@@ -38,6 +38,7 @@ const SECTIONS = [
     { k: 'model_sync_interval_hours', type: 'int', unit: 'h', min: 0 },
     { k: 'key_test_model', type: 'text', mono: true, models: true },
     { k: 'inject_stream_usage', type: 'bool', full: true },
+    { k: 'anthropic_stream_fix', type: 'bool', full: true },
   ] },
   { id: 'security', icon: 'shield', fields: [
     { k: 'trusted_proxies', type: 'lines', full: true },

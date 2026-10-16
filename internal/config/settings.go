@@ -35,6 +35,7 @@ type Settings struct {
 	TrustedProxies           []string `json:"trusted_proxies"`
 	ExposeDebug              bool     `json:"expose_debug"`
 	InjectStreamUsage        bool     `json:"inject_stream_usage"`
+	AnthropicStreamFix       bool     `json:"anthropic_stream_fix"`
 }
 
 // DefaultSettings returns the factory defaults.
@@ -71,6 +72,7 @@ func DefaultSettings() Settings {
 		TaskBindingTTLHours:      72,
 		TrustedProxies:           []string{"127.0.0.1/32", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"},
 		InjectStreamUsage:        true,
+		AnthropicStreamFix:       true,
 	}
 }
 

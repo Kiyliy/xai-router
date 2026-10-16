@@ -933,3 +933,4 @@ components:
         trusted_proxies: { type: array, items: { type: string }, description: CIDRs whose X-Forwarded-For / X-Real-IP is trusted for client IP }
         expose_debug: { type: boolean, default: false, description: Serve /debug/pprof (admin auth still required) }
         inject_stream_usage: { type: boolean, default: true, description: Add stream_options.include_usage to streaming chat requests so usage can be billed }
+        anthropic_stream_fix: { type: boolean, default: true, description: "Add the missing `index` field to content_block events of /v1/messages streams (xAI omits it, which breaks Anthropic SDK streaming)" }

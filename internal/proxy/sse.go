@@ -1,6 +1,10 @@
 package proxy
 
-import "bytes"
+import (
+	"bytes"
+	"encoding/json"
+	"strconv"
+)
 
 // sseParser incrementally splits a Server-Sent Events byte stream into events.
 // It copes with events and lines split across arbitrary chunk boundaries.
@@ -117,4 +121,88 @@ func (c *capture) Bytes() []byte {
 	out = append(out, c.head...)
 	out = append(out, []byte("\n\n…[stream truncated in log; "+itoa(c.total)+" bytes total]…\n\n")...)
 	return append(out, c.tail...)
+}
+
+// messagesFixer repairs xAI's Anthropic-compatible /v1/messages streams,
+// whose content_block_delta (and sometimes content_block_start/stop) events
+// lack the "index" field that Anthropic SDKs require to assemble a message.
+// It works on whole events, so it buffers at most one partial event.
+type messagesFixer struct {
+	buf  []byte
+	cur  int
+	next int
+}
+
+func (f *messagesFixer) Feed(b []byte) []byte {
+	f.buf = append(f.buf, b...)
+	var out []byte
+	for {
+		end, sep := eventEnd(f.buf)
+		if end < 0 {
+			break
+		}
+		out = append(out, f.fixBlock(f.buf[:end+sep])...)
+		f.buf = f.buf[end+sep:]
+	}
+	return out
+}
+
+// Flush returns any trailing bytes not terminated by a blank line.
+func (f *messagesFixer) Flush() []byte {
+	out := f.buf
+	f.buf = nil
+	return out
+}
+
+func eventEnd(b []byte) (int, int) {
+	i := bytes.Index(b, []byte("\n\n"))
+	j := bytes.Index(b, []byte("\r\n\r\n"))
+	switch {
+	case i < 0 && j < 0:
+		return -1, 0
+	case j >= 0 && (i < 0 || j < i):
+		return j, 4
+	}
+	return i, 2
+}
+
+func (f *messagesFixer) fixBlock(block []byte) []byte {
+	start := bytes.Index(block, []byte("data: {"))
+	if start < 0 {
+		return block
+	}
+	jsonStart := start + len("data: ")
+	lineEnd := bytes.IndexByte(block[jsonStart:], '\n')
+	if lineEnd < 0 {
+		lineEnd = len(block) - jsonStart
+	}
+	payload := bytes.TrimRight(block[jsonStart:jsonStart+lineEnd], "\r")
+	var ev struct {
+		Type  string `json:"type"`
+		Index *int   `json:"index"`
+	}
+	if json.Unmarshal(payload, &ev) != nil {
+		return block
+	}
+	var idx int
+	switch ev.Type {
+	case "content_block_start":
+		if ev.Index != nil {
+			f.cur, f.next = *ev.Index, *ev.Index+1
+			return block
+		}
+		idx = f.next
+		f.cur, f.next = idx, idx+1
+	case "content_block_delta", "content_block_stop":
+		if ev.Index != nil {
+			return block
+		}
+		idx = f.cur
+	default:
+		return block
+	}
+	out := make([]byte, 0, len(block)+12)
+	out = append(out, block[:jsonStart+1]...) // through the opening '{'
+	out = append(out, `"index":`+strconv.Itoa(idx)+`,`...)
+	return append(out, block[jsonStart+1:]...)
 }
