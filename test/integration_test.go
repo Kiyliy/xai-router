@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,13 +33,15 @@ type mockXAI struct {
 	lastBody  map[string][]byte
 	lastHdr   map[string]http.Header
 	hits      map[string]int // key -> requests
-	streamGap time.Duration
+	streamGap atomic.Int64   // time.Duration between stream chunks
 	wsSeen    []wsSeen
 }
 
 func newMock() *mockXAI {
-	return &mockXAI{owner: map[string]string{}, polls: map[string]int{}, lastBody: map[string][]byte{},
-		lastHdr: map[string]http.Header{}, hits: map[string]int{}, streamGap: 40 * time.Millisecond}
+	m := &mockXAI{owner: map[string]string{}, polls: map[string]int{}, lastBody: map[string][]byte{},
+		lastHdr: map[string]http.Header{}, hits: map[string]int{}}
+	m.streamGap.Store(int64(40 * time.Millisecond))
+	return m
 }
 
 func (m *mockXAI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -122,7 +125,7 @@ func (m *mockXAI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					conn.Close()
 					return
 				}
-				time.Sleep(m.streamGap)
+				time.Sleep(time.Duration(m.streamGap.Load()))
 			}
 			opts, _ := req["stream_options"].(map[string]any)
 			if opts["include_usage"] == true {
@@ -404,7 +407,7 @@ func TestFailoverAcrossKeys(t *testing.T) {
 
 func TestStreamingIsIncrementalAndBilled(t *testing.T) {
 	e := newEnv(t, "xai-ok")
-	e.mock.streamGap = 150 * time.Millisecond
+	e.mock.streamGap.Store(int64(150 * time.Millisecond))
 	b, _ := json.Marshal(map[string]any{"model": "grok-build-0.1", "stream": true,
 		"messages": []map[string]string{{"role": "user", "content": "hi"}}})
 	req, _ := http.NewRequest("POST", e.srv.URL+"/v1/chat/completions", bytes.NewReader(b))

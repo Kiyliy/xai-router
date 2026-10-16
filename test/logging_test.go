@@ -171,8 +171,8 @@ func TestEveryOutcomeIsLogged(t *testing.T) {
 	})
 
 	t.Run("client disconnects during a stream", func(t *testing.T) {
-		e.mock.streamGap = 300 * time.Millisecond
-		defer func() { e.mock.streamGap = 40 * time.Millisecond }()
+		e.mock.streamGap.Store(int64(300 * time.Millisecond))
+		defer e.mock.streamGap.Store(int64(40 * time.Millisecond))
 		ctx, cancel := context.WithCancel(context.Background())
 		req, _ := http.NewRequestWithContext(ctx, "POST", e.srv.URL+"/v1/chat/completions",
 			strings.NewReader(`{"model":"grok-build-0.1","stream":true,"messages":[]}`))
