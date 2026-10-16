@@ -176,3 +176,24 @@ func TestCaseVariantBillingFieldsRejected(t *testing.T) {
 		t.Errorf("multipart Deferred: status %d, want 400", st)
 	}
 }
+
+// R4: a wrongly typed field the gateway reads makes the request fail
+// instead of being forwarded with the gateway blind to its other fields.
+func TestWrongTypedFieldsRejected(t *testing.T) {
+	e := newEnv(t, "xai-ok")
+	for _, body := range []string{
+		`{"model":"grok-4.3","deferred":true,"text":123,"messages":[]}`,
+		`{"model":"grok-4.3","deferred":true,"quality":1,"messages":[]}`,
+		`{"model":42,"messages":[]}`,
+		`{"model":"grok-4.3","stream":"yes","messages":[]}`,
+		`{"model":"grok-4.3","messages":[]`,
+	} {
+		if st := e.raw("POST", "/v1/chat/completions", e.client, "application/json", []byte(body)); st != 400 {
+			t.Errorf("%s: status %d, want 400", body, st)
+		}
+	}
+	if st := e.raw("POST", "/v1/chat/completions", e.client, "application/json",
+		[]byte(`{"model":"grok-4.3","max_tokens":16.0,"messages":[]}`)); st != 200 {
+		t.Errorf("numeric max_tokens 16.0: status %d", st)
+	}
+}

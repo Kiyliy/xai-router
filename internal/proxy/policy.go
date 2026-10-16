@@ -28,6 +28,11 @@ func (h *Handler) admit(st *state, r *http.Request) *apiError {
 	ep, inference := inferencePaths[r.URL.Path]
 	inference = inference && r.Method == http.MethodPost
 	model := st.info.Model
+	if st.info.Invalid != "" {
+		// The gateway reads these fields for policy and billing; if it cannot
+		// read them reliably it must not forward the request.
+		return errf(http.StatusBadRequest, "invalid_request", "%s", st.info.Invalid)
+	}
 	if st.info.Ambiguous {
 		return errf(http.StatusBadRequest, "ambiguous_model", "the request's model could not be determined unambiguously (duplicate or malformed model field)")
 	}

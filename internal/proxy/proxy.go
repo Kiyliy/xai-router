@@ -71,8 +71,9 @@ type reqInfo struct {
 	Quality            string
 	Resolution         string
 	MaxTokens          int64
-	TextChars          int64 // characters of "text" (text to speech)
-	Ambiguous          bool  // the model could not be determined reliably
+	TextChars          int64  // characters of "text" (text to speech)
+	Invalid            string // why the body cannot be trusted (bad JSON or field types)
+	Ambiguous          bool   // the model could not be determined reliably
 	N                  int64
 	Duration           int64
 	ServiceTier        string
@@ -807,32 +808,59 @@ func parseRequest(contentType string, body []byte) reqInfo {
 			break
 		}
 	}
-	var v struct {
-		Text                string          `json:"text"`
-		Model               string          `json:"model"`
-		Stream              bool            `json:"stream"`
-		PreviousResponseID  string          `json:"previous_response_id"`
-		Deferred            bool            `json:"deferred"`
-		Quality             string          `json:"quality"`
-		Resolution          json.RawMessage `json:"resolution"`
-		MaxTokens           int64           `json:"max_tokens"`
-		MaxCompletionTokens int64           `json:"max_completion_tokens"`
-		MaxOutputTokens     int64           `json:"max_output_tokens"`
-		N                   int64           `json:"n"`
-		Duration            json.RawMessage `json:"duration"`
-		Seconds             json.RawMessage `json:"seconds"`
-		ServiceTier         string          `json:"service_tier"`
-	}
-	if json.Unmarshal(body, &v) != nil {
+	// Decode field by field: one wrongly typed field must not make the
+	// gateway lose the others (the upstream may still accept the body).
+	var m map[string]json.RawMessage
+	if json.Unmarshal(body, &m) != nil {
+		ri.Invalid = "the request body is not valid JSON"
 		return ri
 	}
-	ri = reqInfo{Ambiguous: ri.Ambiguous, TextChars: int64(utf8.RuneCountInString(v.Text)), Model: v.Model, Stream: v.Stream, PreviousResponseID: v.PreviousResponseID, Deferred: v.Deferred,
-		Quality: v.Quality, N: v.N, ServiceTier: v.ServiceTier,
-		MaxTokens: max(v.MaxTokens, v.MaxCompletionTokens, v.MaxOutputTokens)}
-	_ = json.Unmarshal(v.Resolution, &ri.Resolution)
-	ri.Duration = flexInt(v.Duration)
+	str := func(k string) string {
+		raw, ok := m[k]
+		if !ok || string(raw) == "null" {
+			return ""
+		}
+		var v string
+		if json.Unmarshal(raw, &v) != nil {
+			ri.Invalid = fmt.Sprintf("%q must be a string", k)
+		}
+		return v
+	}
+	boolean := func(k string) bool {
+		raw, ok := m[k]
+		if !ok || string(raw) == "null" {
+			return false
+		}
+		var v bool
+		if json.Unmarshal(raw, &v) != nil {
+			ri.Invalid = fmt.Sprintf("%q must be a boolean", k)
+		}
+		return v
+	}
+	number := func(k string) int64 {
+		raw, ok := m[k]
+		if !ok || string(raw) == "null" {
+			return 0
+		}
+		n := flexInt(raw) // JSON number in any form, or a numeric string
+		if n == 0 && strings.Trim(string(raw), `"0. `) != "" {
+			ri.Invalid = fmt.Sprintf("%q must be a number", k)
+		}
+		return n
+	}
+	ri.Model = str("model")
+	ri.PreviousResponseID = str("previous_response_id")
+	ri.Quality = str("quality")
+	ri.Resolution = str("resolution")
+	ri.ServiceTier = str("service_tier")
+	ri.TextChars = int64(utf8.RuneCountInString(str("text")))
+	ri.Stream = boolean("stream")
+	ri.Deferred = boolean("deferred")
+	ri.N = number("n")
+	ri.MaxTokens = max(number("max_tokens"), number("max_completion_tokens"), number("max_output_tokens"))
+	ri.Duration = number("duration")
 	if ri.Duration == 0 {
-		ri.Duration = flexInt(v.Seconds)
+		ri.Duration = number("seconds")
 	}
 	return ri
 }
@@ -873,7 +901,7 @@ func parseMultipart(boundary string, body []byte) reqInfo {
 				models++
 			case "deferred":
 				v, _ := io.ReadAll(io.LimitReader(p, 16))
-				ri.Deferred = strings.EqualFold(strings.TrimSpace(string(v)), "true")
+				ri.Deferred, _ = strconv.ParseBool(strings.TrimSpace(string(v)))
 			case "n", "quality", "resolution":
 				v, _ := io.ReadAll(io.LimitReader(p, 32))
 				val := strings.TrimSpace(string(v))
