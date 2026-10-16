@@ -1,0 +1,935 @@
+openapi: 3.0.3
+info:
+  title: xai-router Admin API
+  version: "1.0.0"
+  description: |
+    Management API for **xai-router**, a gateway for the xAI (Grok) API.
+
+    Every feature of the web console is built on this API, so anything you can do in the
+    UI you can also script.
+
+    **Authentication** — send `Authorization: Bearer <token>`, where the token is either
+    a session token from `POST /api/v1/auth/login` or an admin API token (`xra-…`)
+    created under *Admin tokens*. Client tokens (`sk-xr-…`) are **not** accepted here;
+    they only work on the `/v1/*` proxy endpoints.
+
+    **Errors** — every non-2xx response has the body
+    `{"error": {"code": "not_found", "message": "key not found"}}`.
+
+    **Money** — all monetary values are US dollars as JSON numbers. Internally the
+    gateway accounts in xAI "ticks" (1 USD = 10^10 ticks), so values are exact to
+    1e-10 USD. Token prices are expressed in USD per 1M tokens.
+
+    **Time** — timestamps are RFC 3339 strings in UTC. Query parameters that take a time
+    accept RFC 3339 or Unix seconds.
+servers:
+  - url: /
+security:
+  - bearerAuth: []
+tags:
+  - name: Auth
+  - name: Keys
+    description: Upstream xAI API keys (the key pool).
+  - name: Tokens
+    description: Client tokens used by downstream applications to call `/v1/*`.
+  - name: Admin tokens
+    description: Long-lived tokens for scripting this admin API.
+  - name: Models
+    description: Model catalogue and price table.
+  - name: Logs
+    description: Detailed per-request logs.
+  - name: Stats
+  - name: Settings
+  - name: System
+
+paths:
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in with the admin password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string }
+      responses:
+        "200":
+          description: Session created. Sessions are persisted and survive restarts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  expires_at: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke the current session
+      responses:
+        "204": { description: Logged out }
+  /api/v1/auth/me:
+    get:
+      tags: [Auth]
+      summary: Describe the current credential
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  type: { type: string, enum: [session, admin_token] }
+                  name: { type: string }
+                  expires_at: { type: string, format: date-time, nullable: true }
+  /api/v1/auth/password:
+    put:
+      tags: [Auth]
+      summary: Change the admin password
+      description: All other sessions are revoked.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [old_password, new_password]
+              properties:
+                old_password: { type: string }
+                new_password: { type: string, minLength: 8 }
+      responses:
+        "204": { description: Changed }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+
+  /api/v1/keys:
+    get:
+      tags: [Keys]
+      summary: List upstream keys
+      parameters:
+        - { name: q, in: query, schema: { type: string }, description: Search name or key suffix }
+        - { name: status, in: query, schema: { type: string, enum: [active, cooldown, disabled] } }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: "#/components/schemas/Key" } }
+    post:
+      tags: [Keys]
+      summary: Add a key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/KeyInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Key" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/keys/import:
+    post:
+      tags: [Keys]
+      summary: Bulk import keys, optionally testing each one
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [keys]
+              properties:
+                keys:
+                  type: string
+                  description: One key per line. A line may be `name,key` or just `key`. Blank lines and duplicates are skipped.
+                base_url: { type: string, example: "https://api.x.ai" }
+                priority: { type: integer, default: 0 }
+                weight: { type: integer, default: 1 }
+                name_prefix: { type: string, default: "key" }
+                test: { type: boolean, default: true, description: Run a health check on every imported key }
+                probe: { type: boolean, default: false, description: Also send a tiny completion request when testing }
+      responses:
+        "200":
+          description: Import result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  created: { type: array, items: { $ref: "#/components/schemas/Key" } }
+                  skipped:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        line: { type: integer }
+                        key_masked: { type: string }
+                        reason: { type: string }
+                  tests: { type: array, items: { $ref: "#/components/schemas/KeyTestResult" } }
+  /api/v1/keys/test:
+    post:
+      tags: [Keys]
+      summary: Test many keys
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ids: { type: array, items: { type: integer }, description: Omit to test every key }
+                probe: { type: boolean, default: true }
+      responses:
+        "200":
+          description: Results, in the order of the keys tested
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results: { type: array, items: { $ref: "#/components/schemas/KeyTestResult" } }
+  /api/v1/keys/{id}:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get:
+      tags: [Keys]
+      summary: Get a key
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Key" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [Keys]
+      summary: Update a key (partial)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/KeyInput" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Key" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [Keys]
+      summary: Delete a key
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/keys/{id}/test:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    post:
+      tags: [Keys]
+      summary: Test one key
+      description: |
+        Calls `GET /v1/api-key` (free) to read the key's status and block flags and
+        `GET /v1/models` for the model list. With `probe=true` it also sends a 1-token
+        request to the cheapest chat model and records latency and cost.
+        A key reported as blocked or disabled is automatically disabled in the pool.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                probe: { type: boolean, default: true }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/KeyTestResult" } } } }
+  /api/v1/keys/{id}/reset:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    post:
+      tags: [Keys]
+      summary: Clear cooldown / auto-disable state and re-enable the key
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Key" } } } }
+
+  /api/v1/tokens:
+    get:
+      tags: [Tokens]
+      summary: List client tokens
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: "#/components/schemas/Token" } }
+    post:
+      tags: [Tokens]
+      summary: Create a client token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TokenInput" }
+      responses:
+        "201":
+          description: Created. `token` holds the secret and is shown only once.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenWithSecret" }
+  /api/v1/tokens/{id}:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get:
+      tags: [Tokens]
+      summary: Get a client token
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Token" } } } }
+    patch:
+      tags: [Tokens]
+      summary: Update a client token (partial)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TokenInput" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Token" } } } }
+    delete:
+      tags: [Tokens]
+      summary: Delete a client token
+      responses:
+        "204": { description: Deleted }
+  /api/v1/tokens/{id}/regenerate:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    post:
+      tags: [Tokens]
+      summary: Replace the secret of a client token
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TokenWithSecret" } } } }
+
+  /api/v1/admin-tokens:
+    get:
+      tags: [Admin tokens]
+      summary: List admin API tokens
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/AdminToken" } }
+                  total: { type: integer }
+    post:
+      tags: [Admin tokens]
+      summary: Create an admin API token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        "201":
+          description: Created. `token` is shown only once.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/AdminToken"
+                  - type: object
+                    properties:
+                      token: { type: string, example: "xra-…" }
+  /api/v1/admin-tokens/{id}:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    delete:
+      tags: [Admin tokens]
+      summary: Revoke an admin API token
+      responses:
+        "204": { description: Revoked }
+
+  /api/v1/models:
+    get:
+      tags: [Models]
+      summary: List models and prices
+      parameters:
+        - { name: kind, in: query, schema: { type: string, enum: [language, image, video, embedding] } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Model" } }
+                  total: { type: integer }
+                  last_sync: { $ref: "#/components/schemas/SyncResult" }
+    post:
+      tags: [Models]
+      summary: Add or replace a model manually
+      description: Manually edited models are marked `source=manual` and are not overwritten by sync unless `overwrite_manual` is set on the sync call.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Model" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Model" } } } }
+  /api/v1/models/sync:
+    post:
+      tags: [Models]
+      summary: Sync models and official prices from xAI now
+      description: Uses an enabled pool key to read `/v1/language-models`, `/v1/image-generation-models`, `/v1/video-generation-models` and `/v1/embedding-models`. Video prices (not exposed by the API) come from the built-in table of official prices.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                overwrite_manual: { type: boolean, default: false }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SyncResult" } } } }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/models/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string }, description: Model id, e.g. grok-4.3 }
+    patch:
+      tags: [Models]
+      summary: Update a model (partial)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Model" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Model" } } } }
+    delete:
+      tags: [Models]
+      summary: Delete a model from the price table
+      responses:
+        "204": { description: Deleted }
+
+  /api/v1/logs:
+    get:
+      tags: [Logs]
+      summary: Search request logs
+      parameters:
+        - { name: from, in: query, schema: { type: string } }
+        - { name: to, in: query, schema: { type: string } }
+        - { name: model, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string }, description: "Exact code (`429`), class (`2xx`, `4xx`, `5xx`), `success` or `error`" }
+        - { name: key_id, in: query, schema: { type: integer } }
+        - { name: token_id, in: query, schema: { type: integer } }
+        - { name: path, in: query, schema: { type: string }, description: Path prefix }
+        - { name: q, in: query, schema: { type: string }, description: Matches request id, upstream id or error text }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Newest first
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: "#/components/schemas/LogSummary" } }
+    delete:
+      tags: [Logs]
+      summary: Delete logs older than a time
+      parameters:
+        - { name: before, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted: { type: integer }
+  /api/v1/logs/{id}:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get:
+      tags: [Logs]
+      summary: Get one log with request/response bodies and all upstream attempts
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/LogDetail" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/logs/{id}/curl:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get:
+      tags: [Logs]
+      summary: Reproduce a request as a curl command
+      parameters:
+        - { name: base_url, in: query, schema: { type: string }, description: Base URL to put in the command (defaults to the request's Host) }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  curl: { type: string }
+
+  /api/v1/stats/overview:
+    get:
+      tags: [Stats]
+      summary: Totals for a time range (client-request based)
+      parameters: [ { $ref: "#/components/parameters/Range" } ]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Overview" } } } }
+  /api/v1/stats/timeseries:
+    get:
+      tags: [Stats]
+      summary: Requests, tokens and cost over time
+      parameters:
+        - $ref: "#/components/parameters/Range"
+        - { name: interval, in: query, schema: { type: string, enum: [hour, day], default: hour } }
+        - { name: group, in: query, schema: { type: string, enum: [none, model, key, token], default: none } }
+        - { name: limit, in: query, schema: { type: integer, default: 6 }, description: Max series when grouped; the rest are merged into "other" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  interval: { type: string }
+                  buckets: { type: array, items: { type: string, format: date-time } }
+                  series:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        points: { type: array, items: { $ref: "#/components/schemas/StatPoint" } }
+  /api/v1/stats/breakdown:
+    get:
+      tags: [Stats]
+      summary: Per-model / per-key / per-token totals
+      parameters:
+        - $ref: "#/components/parameters/Range"
+        - { name: by, in: query, required: true, schema: { type: string, enum: [model, key, token] } }
+      responses:
+        "200":
+          description: Sorted by request count, descending
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/BreakdownRow" } }
+
+  /api/v1/settings:
+    get:
+      tags: [Settings]
+      summary: Read runtime settings
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Settings" } } } }
+    put:
+      tags: [Settings]
+      summary: Update runtime settings (partial). Takes effect immediately.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Settings" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Settings" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+
+  /api/v1/system/info:
+    get:
+      tags: [System]
+      summary: Version and runtime information
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: string }
+                  commit: { type: string }
+                  build_date: { type: string }
+                  go_version: { type: string }
+                  started_at: { type: string, format: date-time }
+                  uptime_seconds: { type: integer }
+                  db_size_bytes: { type: integer }
+                  log_queue_length: { type: integer }
+                  log_dropped: { type: integer }
+                  needs_password_change: { type: boolean }
+  /healthz:
+    get:
+      tags: [System]
+      summary: Liveness probe
+      security: []
+      responses:
+        "200": { description: OK }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, default: 1, minimum: 1 }
+    PageSize:
+      name: page_size
+      in: query
+      schema: { type: integer, default: 20, minimum: 1, maximum: 200 }
+    Range:
+      name: range
+      in: query
+      schema: { type: string, enum: [1h, 24h, 7d, 30d, 90d], default: 24h }
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string, example: not_found }
+            message: { type: string }
+    Page:
+      type: object
+      properties:
+        total: { type: integer }
+        page: { type: integer }
+        page_size: { type: integer }
+    Key:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        key_masked: { type: string, example: "xai-AbCd…WxYz" }
+        base_url: { type: string, example: "https://api.x.ai" }
+        priority: { type: integer, description: Lower is tried first }
+        weight: { type: integer, description: Relative weight inside the same priority }
+        enabled: { type: boolean, description: Admin switch }
+        status:
+          type: string
+          enum: [active, cooldown, disabled]
+          description: "`disabled` = turned off by the admin or automatically (see `status_reason`)"
+        status_reason: { type: string, example: "rate limited (429)" }
+        auto_disabled: { type: boolean }
+        cooldown_until: { type: string, format: date-time, nullable: true }
+        max_concurrency: { type: integer, description: 0 = unlimited }
+        rpm_limit: { type: integer, description: Requests per minute, 0 = unlimited }
+        inflight: { type: integer }
+        requests: { type: integer, description: Upstream attempts made with this key }
+        errors: { type: integer }
+        cost_usd: { type: number }
+        last_used_at: { type: string, format: date-time, nullable: true }
+        last_error: { type: string }
+        last_test: { allOf: [ { $ref: "#/components/schemas/KeyTestResult" } ], nullable: true }
+        notes: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    KeyInput:
+      type: object
+      properties:
+        name: { type: string }
+        key: { type: string, description: Required on create }
+        base_url: { type: string, default: "https://api.x.ai" }
+        priority: { type: integer, default: 0 }
+        weight: { type: integer, default: 1, minimum: 1 }
+        enabled: { type: boolean, default: true }
+        max_concurrency: { type: integer, default: 0 }
+        rpm_limit: { type: integer, default: 0 }
+        notes: { type: string }
+    KeyTestResult:
+      type: object
+      properties:
+        key_id: { type: integer }
+        key_name: { type: string }
+        ok: { type: boolean }
+        status:
+          type: string
+          enum: [ok, invalid, blocked, no_credits, rate_limited, error]
+        message: { type: string }
+        latency_ms: { type: integer, description: Latency of GET /v1/api-key }
+        api_key:
+          type: object
+          nullable: true
+          properties:
+            name: { type: string }
+            team_id: { type: string }
+            acls: { type: array, items: { type: string } }
+            api_key_blocked: { type: boolean }
+            api_key_disabled: { type: boolean }
+            team_blocked: { type: boolean }
+        models: { type: array, items: { type: string } }
+        probe:
+          type: object
+          nullable: true
+          properties:
+            model: { type: string }
+            status: { type: integer }
+            latency_ms: { type: integer }
+            cost_usd: { type: number }
+            error: { type: string }
+        tested_at: { type: string, format: date-time }
+    Token:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        prefix: { type: string, example: "sk-xr-a1b2" }
+        enabled: { type: boolean }
+        quota_usd: { type: number, description: 0 = unlimited }
+        used_usd: { type: number }
+        remaining_usd: { type: number, nullable: true }
+        expires_at: { type: string, format: date-time, nullable: true }
+        expired: { type: boolean }
+        allowed_models: { type: array, items: { type: string }, description: Empty = all models. Supports trailing `*` wildcards. }
+        requests: { type: integer }
+        last_used_at: { type: string, format: date-time, nullable: true }
+        notes: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    TokenInput:
+      type: object
+      properties:
+        name: { type: string }
+        enabled: { type: boolean }
+        quota_usd: { type: number }
+        expires_at: { type: string, format: date-time, nullable: true, description: null or empty = never }
+        allowed_models: { type: array, items: { type: string } }
+        notes: { type: string }
+        reset_usage: { type: boolean, description: PATCH only — set used_usd back to 0 }
+    TokenWithSecret:
+      allOf:
+        - $ref: "#/components/schemas/Token"
+        - type: object
+          properties:
+            token: { type: string, example: "sk-xr-…" }
+    AdminToken:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        prefix: { type: string }
+        last_used_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+    Model:
+      type: object
+      properties:
+        id: { type: string, example: grok-4.3 }
+        kind: { type: string, enum: [language, image, video, embedding] }
+        aliases: { type: array, items: { type: string } }
+        enabled: { type: boolean }
+        source: { type: string, enum: [sync, manual, builtin] }
+        context_length: { type: integer }
+        input_price: { type: number, description: USD per 1M input tokens }
+        cached_input_price: { type: number, description: USD per 1M cached input tokens }
+        image_input_price: { type: number, description: USD per 1M image input tokens }
+        output_price: { type: number, description: USD per 1M output (incl. reasoning) tokens }
+        long_context_threshold: { type: integer, description: Prompt size at which long-context prices apply to the whole request (0 = none) }
+        long_input_price: { type: number }
+        long_cached_input_price: { type: number }
+        long_output_price: { type: number }
+        image_price: { type: number, description: USD per generated image }
+        image_tiers:
+          type: array
+          items:
+            type: object
+            properties:
+              quality: { type: string }
+              resolution: { type: string }
+              price: { type: number }
+        video_price_per_second: { type: number }
+        synced_at: { type: string, format: date-time, nullable: true }
+        updated_at: { type: string, format: date-time }
+    SyncResult:
+      type: object
+      nullable: true
+      properties:
+        at: { type: string, format: date-time }
+        ok: { type: boolean }
+        error: { type: string }
+        added: { type: array, items: { type: string } }
+        updated: { type: array, items: { type: string } }
+        total: { type: integer }
+    LogSummary:
+      type: object
+      properties:
+        id: { type: integer }
+        request_id: { type: string }
+        created_at: { type: string, format: date-time }
+        method: { type: string }
+        path: { type: string }
+        model: { type: string }
+        stream: { type: boolean }
+        status: { type: integer, description: Final status returned to the client (499 = client went away) }
+        error: { type: string }
+        client_ip: { type: string }
+        token_id: { type: integer, nullable: true }
+        token_name: { type: string }
+        key_id: { type: integer, nullable: true }
+        key_name: { type: string }
+        attempts: { type: integer }
+        ttfb_ms: { type: integer }
+        latency_ms: { type: integer }
+        prompt_tokens: { type: integer }
+        completion_tokens: { type: integer }
+        cached_tokens: { type: integer }
+        reasoning_tokens: { type: integer }
+        image_tokens: { type: integer }
+        total_tokens: { type: integer }
+        images: { type: integer }
+        video_seconds: { type: number }
+        cost_usd: { type: number }
+        cost_source: { type: string, enum: [upstream, computed, none] }
+    LogDetail:
+      allOf:
+        - $ref: "#/components/schemas/LogSummary"
+        - type: object
+          properties:
+            query: { type: string }
+            user_agent: { type: string }
+            upstream_id: { type: string }
+            request_headers: { type: object, additionalProperties: { type: string } }
+            request_body: { type: string }
+            response_headers: { type: object, additionalProperties: { type: string } }
+            response_body: { type: string, description: Raw body; for streams this is the raw SSE }
+            response_text: { type: string, description: For streams, the assembled assistant text }
+            reasoning_text: { type: string }
+            truncated: { type: boolean }
+            upstream_attempts:
+              type: array
+              items:
+                type: object
+                properties:
+                  seq: { type: integer }
+                  key_id: { type: integer, nullable: true }
+                  key_name: { type: string }
+                  status: { type: integer, description: 0 = network error }
+                  error: { type: string }
+                  action: { type: string, enum: [success, retry, return, cooldown, disable], description: What the pool did after this attempt }
+                  ttfb_ms: { type: integer }
+                  latency_ms: { type: integer }
+                  started_at: { type: string, format: date-time }
+    Overview:
+      type: object
+      properties:
+        range: { type: string }
+        requests: { type: integer }
+        success: { type: integer }
+        errors: { type: integer }
+        success_rate: { type: number, description: 0..1 }
+        avg_latency_ms: { type: number }
+        prompt_tokens: { type: integer }
+        completion_tokens: { type: integer }
+        cached_tokens: { type: integer }
+        reasoning_tokens: { type: integer }
+        total_tokens: { type: integer }
+        cost_usd: { type: number }
+        keys:
+          type: object
+          properties:
+            total: { type: integer }
+            active: { type: integer }
+            cooldown: { type: integer }
+            disabled: { type: integer }
+        tokens:
+          type: object
+          properties:
+            total: { type: integer }
+            enabled: { type: integer }
+    StatPoint:
+      type: object
+      properties:
+        t: { type: string, format: date-time }
+        requests: { type: integer }
+        success: { type: integer }
+        errors: { type: integer }
+        total_tokens: { type: integer }
+        cost_usd: { type: number }
+        avg_latency_ms: { type: number }
+    BreakdownRow:
+      type: object
+      properties:
+        id: { type: string, description: Model id, key id or token id }
+        name: { type: string }
+        requests: { type: integer }
+        success: { type: integer }
+        errors: { type: integer }
+        success_rate: { type: number }
+        prompt_tokens: { type: integer }
+        completion_tokens: { type: integer }
+        cached_tokens: { type: integer }
+        reasoning_tokens: { type: integer }
+        total_tokens: { type: integer }
+        cost_usd: { type: number }
+        avg_latency_ms: { type: number }
+    Settings:
+      type: object
+      properties:
+        upstream_base_url: { type: string, default: "https://api.x.ai", description: Default base URL for new keys }
+        selection_strategy: { type: string, enum: [weighted, random, round_robin], default: weighted }
+        retry_status_codes: { type: array, items: { type: integer }, default: [401, 403, 408, 429, 500, 502, 503, 504] }
+        retry_keywords:
+          type: array
+          items: { type: string }
+          description: If a 4xx body contains one of these (case-insensitive) the next key is tried.
+        disable_keywords:
+          type: array
+          items: { type: string }
+          description: If an error body contains one of these, the key is automatically disabled (e.g. blocked, no credits).
+        max_attempts: { type: integer, default: 5, description: Max upstream attempts per client request }
+        cooldown_seconds: { type: integer, default: 60, description: Cooldown after a 429 when no Retry-After header is given }
+        breaker_threshold: { type: integer, default: 3, description: Consecutive 5xx/network failures that open the breaker }
+        breaker_seconds: { type: integer, default: 30 }
+        request_timeout_seconds: { type: integer, default: 600, description: Max time for a non-streaming upstream request }
+        connect_timeout_seconds: { type: integer, default: 15 }
+        stream_idle_timeout_seconds: { type: integer, default: 300, description: Abort a stream after this long without bytes }
+        max_body_mb: { type: integer, default: 50, description: Client request body limit; enforced for chunked bodies too }
+        log_enabled: { type: boolean, default: true }
+        log_bodies: { type: boolean, default: true, description: Store request/response bodies }
+        log_body_max_kb: { type: integer, default: 256, description: Per-body size cap for stored logs }
+        log_retention_days: { type: integer, default: 30, description: Logs older than this are deleted daily (0 = keep). Aggregated stats are kept. }
+        model_sync_interval_hours: { type: integer, default: 24, description: 0 = manual only }
+        task_binding_ttl_hours: { type: integer, default: 72, description: How long async task / resource → key bindings are kept }
+        key_test_model: { type: string, default: "", description: Model for probe requests; empty = cheapest chat model }
+        trusted_proxies: { type: array, items: { type: string }, description: CIDRs whose X-Forwarded-For / X-Real-IP is trusted for client IP }
+        expose_debug: { type: boolean, default: false, description: Serve /debug/pprof (admin auth still required) }
+        inject_stream_usage: { type: boolean, default: true, description: Add stream_options.include_usage to streaming chat requests so usage can be billed }

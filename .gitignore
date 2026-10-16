@@ -1,0 +1,16 @@
+# Runtime data and local secrets — never commit these.
+/data/
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*
+!.env.example
+
+# Build output
+/dist/
+/bin/
+/xai-router
+/xai-router.exe
+*.exe
+coverage.out
