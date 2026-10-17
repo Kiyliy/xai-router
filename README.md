@@ -320,7 +320,9 @@ voice:        no cost is reported by xAI, so the published rates are applied:
 
 **Client disconnects.** xAI bills a request it has started even if nobody reads the answer. When
 a client disconnects mid-stream, the gateway keeps reading the upstream response (without
-forwarding it) for up to 60 seconds so the usage at its end is billed; the log keeps status 499.
+forwarding it) for up to 60 seconds so the usage at its end is billed; the log keeps status 499
+(behind a buffering reverse proxy, a client that leaves during the last burst of a stream can be
+logged as 200, since the proxy accepted the data; the cost is the same either way).
 If a stream ends without usage (the upstream breaks, goes idle or exceeds that limit), the cost
 is estimated from the request size and the text received (`cost_source = estimated`) instead of
 being recorded as free.
