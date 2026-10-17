@@ -470,7 +470,24 @@ func (db *DB) estimateCount(ctx context.Context, f LogFilter) (int64, bool) {
 	var est int64
 	err := db.R.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+col+`),0) FROM stats_dim WHERE dim = ? AND id = ?
 AND hour >= ? AND hour <= ?`, dim, id, from, to).Scan(&est)
-	return est, err == nil
+	if err != nil {
+		return 0, false
+	}
+	// The id range of the remaining logs bounds every estimate (logs are
+	// deleted oldest first), and is the estimate for an unfiltered list:
+	// rollups of deleted hours can otherwise be counted again when older
+	// logs are imported later.
+	var minID, maxID sql.NullInt64
+	_ = db.R.QueryRowContext(ctx, `SELECT MIN(id) FROM request_logs`).Scan(&minID)
+	_ = db.R.QueryRowContext(ctx, `SELECT MAX(id) FROM request_logs`).Scan(&maxID)
+	if maxID.Valid {
+		span := maxID.Int64 - minID.Int64 + 1
+		if dim == "all" && col == "requests" && f.From <= 0 && f.To <= 0 {
+			return span, true
+		}
+		est = min(est, span)
+	}
+	return est, true
 }
 
 // LogStats describes the stored logs (for the console).
