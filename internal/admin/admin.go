@@ -58,6 +58,7 @@ type Server struct {
 	limiter loginLimiter
 	syncMu  sync.Mutex
 	routes  []Route
+	jobs    jobs
 }
 
 // Route describes one admin API endpoint ("METHOD /path").
@@ -137,6 +138,9 @@ func (s *Server) Handler() http.Handler {
 	priv("GET /api/v1/settings", s.getSettings)
 	priv("PUT /api/v1/settings", s.putSettings)
 	priv("GET /api/v1/system/info", s.systemInfo)
+	priv("POST /api/v1/system/compact", s.compact)
+	priv("GET /api/v1/jobs", s.listJobs)
+	priv("GET /api/v1/jobs/{id}", s.getJob)
 
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", "no such endpoint: "+r.Method+" "+r.URL.Path)

@@ -134,7 +134,7 @@ func TestLogsAPI(t *testing.T) {
 			t.Fatalf("delete %q: %d", q, r.status)
 		}
 	}
-	del := h.must(h.call(http.MethodDelete, "/api/v1/logs?before="+itoa(logs[1].CreatedAt), ""), 200)
+	del := h.must(h.call(http.MethodDelete, "/api/v1/logs?wait=true&before="+itoa(logs[1].CreatedAt), ""), 200)
 	if num(del["deleted"]) != 1 {
 		t.Fatalf("delete: %v", del)
 	}
@@ -337,19 +337,19 @@ func TestInternalErrors(t *testing.T) {
 	h.db.Close()
 	cred := &credential{Type: "admin_token", Name: "ci"}
 	handlers := map[string]http.HandlerFunc{
-		"GET /api/v1/keys":              h.s.listKeys,
-		"POST /api/v1/keys/test":        h.s.testKeys,
-		"GET /api/v1/tokens":            h.s.listTokens,
-		"GET /api/v1/admin-tokens":      h.s.listAdminTokens,
-		"POST /api/v1/admin-tokens":     h.s.createAdminToken,
-		"GET /api/v1/models":            h.s.listModels,
-		"POST /api/v1/models":           h.s.createModel,
-		"GET /api/v1/logs":              h.s.listLogs,
-		"DELETE /api/v1/logs?before=10": h.s.deleteLogs,
-		"GET /api/v1/stats/overview":    h.s.statsOverview,
-		"PUT /api/v1/settings":          h.s.putSettings,
-		"POST /api/v1/auth/login":       h.s.login,
-		"PUT /api/v1/auth/password":     h.s.changePassword,
+		"GET /api/v1/keys":                        h.s.listKeys,
+		"POST /api/v1/keys/test":                  h.s.testKeys,
+		"GET /api/v1/tokens":                      h.s.listTokens,
+		"GET /api/v1/admin-tokens":                h.s.listAdminTokens,
+		"POST /api/v1/admin-tokens":               h.s.createAdminToken,
+		"GET /api/v1/models":                      h.s.listModels,
+		"POST /api/v1/models":                     h.s.createModel,
+		"GET /api/v1/logs":                        h.s.listLogs,
+		"DELETE /api/v1/logs?wait=true&before=10": h.s.deleteLogs,
+		"GET /api/v1/stats/overview":              h.s.statsOverview,
+		"PUT /api/v1/settings":                    h.s.putSettings,
+		"POST /api/v1/auth/login":                 h.s.login,
+		"PUT /api/v1/auth/password":               h.s.changePassword,
 	}
 	bodies := map[string]string{
 		"POST /api/v1/admin-tokens": `{"name":"x"}`,

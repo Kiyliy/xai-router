@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"sort"
@@ -56,16 +57,19 @@ func (s *Server) listLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	f.KeyID, _ = strconv.ParseInt(q.Get("key_id"), 10, 64)
 	f.TokenID, _ = strconv.ParseInt(q.Get("token_id"), 10, 64)
-	logs, total, err := s.DB.ListLogs(r.Context(), f)
+	pg, err := s.DB.ListLogsPage(r.Context(), f)
 	if err != nil {
 		s.internalErr(w, err)
 		return
 	}
-	out := make([]map[string]any, 0, len(logs))
-	for _, l := range logs {
+	out := make([]map[string]any, 0, len(pg.Logs))
+	for _, l := range pg.Logs {
 		out = append(out, logSummaryJSON(l))
 	}
-	writeJSON(w, http.StatusOK, pageJSON(out, total, p))
+	resp := pageJSON(out, int(pg.Total), p)
+	resp["total_kind"] = pg.TotalKind // exact, approx or at_least
+	resp["total_exact"] = pg.TotalKind == "exact"
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) getLog(w http.ResponseWriter, r *http.Request) {
@@ -115,13 +119,32 @@ func (s *Server) deleteLogs(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid_time", "before is required (RFC 3339 or unix seconds)")
 		return
 	}
-	n, err := s.DB.DeleteLogsBefore(r.Context(), before)
-	if err != nil {
-		s.internalErr(w, err)
+	if r.URL.Query().Get("wait") == "true" {
+		n, err := s.DB.DeleteLogsBefore(r.Context(), before)
+		if err != nil {
+			s.internalErr(w, err)
+			return
+		}
+		_ = s.DB.Vacuum(r.Context())
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": n})
 		return
 	}
-	_ = s.DB.Vacuum(r.Context())
-	writeJSON(w, http.StatusOK, map[string]any{"deleted": n})
+	// Purging millions of rows takes minutes: run it in the background in
+	// small chunks (requests keep flowing) and report progress as a job.
+	j, _ := s.jobs.start("purge_logs", func(ctx context.Context, j *Job) (any, error) {
+		total := s.DB.CountLogsBefore(ctx, before)
+		s.jobs.update(j, func(j *Job) { j.Total = total })
+		n, err := s.DB.DeleteLogsBeforeProgress(ctx, before, func(done int64) {
+			s.jobs.update(j, func(j *Job) { j.Progress = done })
+		})
+		if err != nil {
+			return map[string]any{"deleted": n}, err
+		}
+		s.jobs.update(j, func(j *Job) { j.Message = "reclaiming disk space" })
+		freed, _ := s.DB.IncrementalVacuumIfEnabled(ctx)
+		return map[string]any{"deleted": n, "freed_bytes": freed}, nil
+	})
+	writeJSON(w, http.StatusAccepted, j)
 }
 
 // Headers worth repeating in a reproduced request.

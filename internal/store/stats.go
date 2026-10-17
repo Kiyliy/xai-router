@@ -6,7 +6,7 @@ import (
 	"strconv"
 )
 
-// Agg is an aggregate over stats_hourly rows.
+// Agg is an aggregate over hourly rollup rows (stats_dim).
 type Agg struct {
 	Requests, Success, Errors                           int64
 	PromptTokens, CompletionTokens, CachedTokens        int64
@@ -26,7 +26,7 @@ func (a *Agg) dest() []any {
 // StatsTotal aggregates everything since `from` (unix ms, hour aligned).
 func (db *DB) StatsTotal(ctx context.Context, from int64) (Agg, error) {
 	var a Agg
-	err := db.R.QueryRowContext(ctx, `SELECT `+aggCols+` FROM stats_hourly WHERE hour >= ?`, from).Scan(a.dest()...)
+	err := db.R.QueryRowContext(ctx, `SELECT `+aggCols+` FROM stats_dim WHERE dim = 'all' AND hour >= ?`, from).Scan(a.dest()...)
 	return a, err
 }
 
@@ -36,26 +36,21 @@ type GroupedAgg struct {
 	Agg
 }
 
-func groupColumn(by string) (string, error) {
+func checkDim(by string) error {
 	switch by {
-	case "model":
-		return "model", nil
-	case "key":
-		return "CAST(key_id AS TEXT)", nil
-	case "token":
-		return "CAST(token_id AS TEXT)", nil
+	case "model", "key", "token":
+		return nil
 	}
-	return "", fmt.Errorf("invalid group %q", by)
+	return fmt.Errorf("invalid group %q", by)
 }
 
 // StatsBreakdown aggregates by model, key or token since `from`.
 func (db *DB) StatsBreakdown(ctx context.Context, from int64, by string) ([]GroupedAgg, error) {
-	col, err := groupColumn(by)
-	if err != nil {
+	if err := checkDim(by); err != nil {
 		return nil, err
 	}
-	rows, err := db.R.QueryContext(ctx, `SELECT `+col+` AS g, `+aggCols+` FROM stats_hourly WHERE hour >= ?
-GROUP BY g ORDER BY SUM(requests) DESC`, from)
+	rows, err := db.R.QueryContext(ctx, `SELECT id AS g, `+aggCols+` FROM stats_dim WHERE dim = ? AND hour >= ?
+GROUP BY g ORDER BY SUM(requests) DESC`, by, from)
 	if err != nil {
 		return nil, err
 	}
@@ -120,18 +115,17 @@ type SeriesRow struct {
 // optional group ("" = none). Buckets are aligned to midnight in the zone
 // offsetMs east of UTC (e.g. +8h for China).
 func (db *DB) StatsSeries(ctx context.Context, from, bucketMs, offsetMs int64, by string) ([]SeriesRow, error) {
-	col := "''"
+	dim := "all"
 	if by != "" && by != "none" {
-		c, err := groupColumn(by)
-		if err != nil {
+		if err := checkDim(by); err != nil {
 			return nil, err
 		}
-		col = c
+		dim = by
 	}
 	bs, off := strconv.FormatInt(bucketMs, 10), strconv.FormatInt(offsetMs, 10)
-	q := `SELECT ((hour + ` + off + `) / ` + bs + `) * ` + bs + ` - ` + off + ` AS b, ` + col +
-		` AS g, ` + aggCols + ` FROM stats_hourly WHERE hour >= ? GROUP BY b, g ORDER BY b`
-	rows, err := db.R.QueryContext(ctx, q, from)
+	q := `SELECT ((hour + ` + off + `) / ` + bs + `) * ` + bs + ` - ` + off + ` AS b, id AS g, ` + aggCols +
+		` FROM stats_dim WHERE dim = ? AND hour >= ? GROUP BY b, g ORDER BY b`
+	rows, err := db.R.QueryContext(ctx, q, dim, from)
 	if err != nil {
 		return nil, err
 	}

@@ -18,6 +18,8 @@ jobs:
           go-version: stable
       - name: gofmt
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - name: openapi.yaml is valid YAML
+        run: python3 -c "import yaml,sys; yaml.safe_load(open('web/static/openapi.yaml')); print('ok')"
       - name: go vet
         run: go vet ./...
       - name: staticcheck

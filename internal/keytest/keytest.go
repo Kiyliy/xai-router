@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -230,6 +231,12 @@ func (t *Tester) apply(ctx context.Context, k *store.Key, res Result) {
 
 // TestMany checks keys concurrently (bounded) and returns results in order.
 func (t *Tester) TestMany(ctx context.Context, keys []*store.Key, probe bool) []Result {
+	return t.TestManyProgress(ctx, keys, probe, nil)
+}
+
+// TestManyProgress is TestMany reporting the number of finished keys.
+func (t *Tester) TestManyProgress(ctx context.Context, keys []*store.Key, probe bool, progress func(done int)) []Result {
+	var done atomic.Int64
 	out := make([]Result, len(keys))
 	sem := make(chan struct{}, 8)
 	var wg sync.WaitGroup
@@ -240,6 +247,9 @@ func (t *Tester) TestMany(ctx context.Context, keys []*store.Key, probe bool) []
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			out[i] = t.Test(ctx, k, probe)
+			if n := done.Add(1); progress != nil {
+				progress(int(n))
+			}
 		}()
 	}
 	wg.Wait()

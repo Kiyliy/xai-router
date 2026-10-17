@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -268,6 +269,7 @@ func (s *Server) testKeys(w http.ResponseWriter, r *http.Request) {
 	in := struct {
 		IDs   []int64 `json:"ids"`
 		Probe *bool   `json:"probe"`
+		Async bool    `json:"async"`
 	}{}
 	if !decode(w, r, &in) {
 		return
@@ -290,7 +292,22 @@ func (s *Server) testKeys(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	res := s.Tester.TestMany(r.Context(), keys, in.Probe == nil || *in.Probe)
+	probe := in.Probe == nil || *in.Probe
+	if in.Async {
+		j, _ := s.jobs.start("test_keys", func(ctx context.Context, j *Job) (any, error) {
+			s.jobs.update(j, func(j *Job) { j.Total = int64(len(keys)) })
+			res := s.Tester.TestManyProgress(ctx, keys, probe, func(done int) {
+				s.jobs.update(j, func(j *Job) { j.Progress = int64(done) })
+			})
+			if err := s.Pool.Reload(ctx); err != nil {
+				s.Log.Error("reload pool", "err", err)
+			}
+			return map[string]any{"results": res}, nil
+		})
+		writeJSON(w, http.StatusAccepted, j)
+		return
+	}
+	res := s.Tester.TestMany(r.Context(), keys, probe)
 	s.reloadPool(r)
 	writeJSON(w, http.StatusOK, map[string]any{"results": res})
 }

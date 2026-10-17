@@ -68,6 +68,15 @@ func Open(path string) (*DB, error) {
 		// flaky with table locks, and tests do not need read concurrency.
 		db.R = w
 	}
+	if path != ":memory:" {
+		// New databases reclaim space incrementally after log purges
+		// (no-op on existing ones: changing it needs a VACUUM).
+		var tables int
+		_ = w.QueryRow(`SELECT COUNT(*) FROM sqlite_master`).Scan(&tables)
+		if tables == 0 {
+			_, _ = w.Exec(`PRAGMA auto_vacuum = INCREMENTAL`)
+		}
+	}
 	if err := db.migrate(context.Background()); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
@@ -288,6 +297,45 @@ CREATE TABLE stats_hourly (
 	`
 ALTER TABLE request_logs ADD COLUMN ws INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE request_logs ADD COLUMN extra TEXT NOT NULL DEFAULT '';
+`,
+	// v3: scale to millions of logs. One small hourly rollup per dimension
+	// (stats_hourly is keyed by every dimension at once and grows almost as
+	// fast as the logs), and indexes that serve each list filter in
+	// (created_at, id) order.
+	`
+CREATE TABLE stats_dim (
+  dim               TEXT    NOT NULL,
+  hour              INTEGER NOT NULL,
+  id                TEXT    NOT NULL,
+  requests          INTEGER NOT NULL DEFAULT 0,
+  success           INTEGER NOT NULL DEFAULT 0,
+  errors            INTEGER NOT NULL DEFAULT 0,
+  prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+  completion_tokens INTEGER NOT NULL DEFAULT 0,
+  cached_tokens     INTEGER NOT NULL DEFAULT 0,
+  reasoning_tokens  INTEGER NOT NULL DEFAULT 0,
+  total_tokens      INTEGER NOT NULL DEFAULT 0,
+  cost_ticks        INTEGER NOT NULL DEFAULT 0,
+  latency_ms_sum    INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (dim, hour, id)
+) WITHOUT ROWID;
+INSERT INTO stats_dim SELECT 'all', hour, '', SUM(requests), SUM(success), SUM(errors), SUM(prompt_tokens),
+  SUM(completion_tokens), SUM(cached_tokens), SUM(reasoning_tokens), SUM(total_tokens), SUM(cost_ticks),
+  SUM(latency_ms_sum) FROM stats_hourly GROUP BY hour;
+INSERT INTO stats_dim SELECT 'model', hour, model, SUM(requests), SUM(success), SUM(errors), SUM(prompt_tokens),
+  SUM(completion_tokens), SUM(cached_tokens), SUM(reasoning_tokens), SUM(total_tokens), SUM(cost_ticks),
+  SUM(latency_ms_sum) FROM stats_hourly GROUP BY hour, model;
+INSERT INTO stats_dim SELECT 'key', hour, CAST(key_id AS TEXT), SUM(requests), SUM(success), SUM(errors), SUM(prompt_tokens),
+  SUM(completion_tokens), SUM(cached_tokens), SUM(reasoning_tokens), SUM(total_tokens), SUM(cost_ticks),
+  SUM(latency_ms_sum) FROM stats_hourly GROUP BY hour, key_id;
+INSERT INTO stats_dim SELECT 'token', hour, CAST(token_id AS TEXT), SUM(requests), SUM(success), SUM(errors), SUM(prompt_tokens),
+  SUM(completion_tokens), SUM(cached_tokens), SUM(reasoning_tokens), SUM(total_tokens), SUM(cost_ticks),
+  SUM(latency_ms_sum) FROM stats_hourly GROUP BY hour, token_id;
+DELETE FROM stats_hourly;
+CREATE INDEX idx_logs_ok ON request_logs(((status >= 200 AND status < 400) OR status = 101), created_at);
+CREATE INDEX idx_logs_class ON request_logs((status / 100), created_at);
+CREATE INDEX idx_logs_path ON request_logs(path, created_at);
+CREATE INDEX idx_logs_upstream ON request_logs(upstream_id);
 `,
 }
 

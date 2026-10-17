@@ -294,11 +294,14 @@ func (s *Server) statsTimeseries(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) systemInfo(w http.ResponseWriter, r *http.Request) {
 	gen, _ := s.DB.GetMeta(r.Context(), MetaPasswordGenerated)
+	ls, _ := s.DB.LogStorageStats(r.Context())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version": s.Build.Version, "commit": s.Build.Commit, "build_date": s.Build.Date,
 		"go_version": runtime.Version(), "started_at": s.Started.UTC(),
 		"uptime_seconds": int64(time.Since(s.Started).Seconds()), "db_size_bytes": s.DB.Size(),
 		"log_queue_length": s.Logs.QueueLen(), "log_dropped": s.Logs.Dropped(),
 		"needs_password_change": gen == "1",
+		"log_count":             ls.Count, "oldest_log_at": msTime(ls.OldestAt), "newest_log_at": msTime(ls.NewestAt),
+		"db_free_bytes": ls.FreeBytes, "db_auto_vacuum": ls.AutoVacuum,
 	})
 }

@@ -198,7 +198,9 @@ paths:
               properties:
                 ids: { type: array, items: { type: integer }, description: Omit to test every key }
                 probe: { type: boolean, default: true }
+                async: { type: boolean, default: false, description: "Run in the background and return a job (poll GET /api/v1/jobs/{id}; the job result holds `results`)" }
       responses:
+        "202": { description: Job started (async=true), content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
         "200":
           description: Results, in the order of the keys tested
           content:
@@ -455,14 +457,19 @@ paths:
                   - type: object
                     properties:
                       data: { type: array, items: { $ref: "#/components/schemas/LogSummary" } }
+                      total_kind: { type: string, enum: [exact, approx, at_least], description: "How `total` was obtained: an exact count, an estimate from the hourly rollups (when counting would exceed 250 ms), or a lower bound" }
+                      total_exact: { type: boolean }
     delete:
       tags: [Logs]
       summary: Delete logs older than a time
+      description: Runs in the background in small chunks (forwarding is not affected) and returns a job; the job result holds `deleted` and `freed_bytes`. Pass `wait=true` to run synchronously instead.
       parameters:
         - { name: before, in: query, required: true, schema: { type: string } }
+        - { name: wait, in: query, schema: { type: boolean, default: false } }
       responses:
+        "202": { description: Job started, content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
         "200":
-          description: OK
+          description: Deleted (wait=true)
           content:
             application/json:
               schema:
@@ -563,6 +570,35 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Settings" } } } }
         "400": { $ref: "#/components/responses/Error" }
 
+  /api/v1/system/compact:
+    post:
+      tags: [System]
+      summary: Reclaim free space in the database file (background job)
+      description: Uses incremental vacuum. Databases created before v0.3 are converted once with a full VACUUM, which blocks writes while it runs.
+      responses:
+        "202": { description: Job started (or the running one), content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
+  /api/v1/jobs:
+    get:
+      tags: [System]
+      summary: Recent background jobs (newest first, kept in memory)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Job" } }
+                  total: { type: integer }
+  /api/v1/jobs/{id}:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get:
+      tags: [System]
+      summary: Get a background job
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/system/info:
     get:
       tags: [System]
@@ -585,6 +621,11 @@ paths:
                   log_queue_length: { type: integer }
                   log_dropped: { type: integer }
                   needs_password_change: { type: boolean }
+                  log_count: { type: integer, description: Approximate number of stored logs }
+                  oldest_log_at: { type: string, format: date-time, nullable: true }
+                  newest_log_at: { type: string, format: date-time, nullable: true }
+                  db_free_bytes: { type: integer, description: Free space inside the database file (reclaimable with compact) }
+                  db_auto_vacuum: { type: string, enum: [none, full, incremental] }
   /healthz:
     get:
       tags: [System]
@@ -623,6 +664,19 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
   schemas:
+    Job:
+      type: object
+      properties:
+        id: { type: integer }
+        kind: { type: string, enum: [purge_logs, test_keys, compact] }
+        state: { type: string, enum: [running, done, failed] }
+        progress: { type: integer }
+        total: { type: integer, description: 0 = unknown }
+        message: { type: string }
+        result: { type: object, description: "purge_logs: {deleted, freed_bytes}; test_keys: {results}; compact: {freed_bytes, size_before, size_after}" }
+        error: { type: string }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time, nullable: true }
     Error:
       type: object
       properties:
