@@ -1,9 +1,9 @@
-import { h, fmtInt, fmtUSD, timeEl, debounce, fmtDateTime, toLocalInput, fromLocalInput } from '../util.js';
+import { h, fmtInt, fmtUSD, timeEl, debounce, fmtDateTime, toLocalInput, fromLocalInput, fmtTotal, latestSignal } from '../util.js';
 import { icon } from '../icons.js';
 import { t } from '../i18n.js';
 import { get, post, patch, del } from '../api.js';
 import {
-  card, toast, toastError, openModal, confirmDialog, menuButton, badge, switchEl, searchInput, pagination,
+  card, toast, toastError, openModal, confirmDialog, menuButton, badge, switchEl, searchInput, pager as pagerEl, setTableLoading,
   skeletonRows, tableEmptyRow, tableWrap, field, input, checkbox, button, busy, progress, tagInput, codeBlock, copyButton, tabs,
   tapToMenu, spinner, errorMessage,
 } from '../ui.js';
@@ -50,9 +50,18 @@ export function showSecret({ title, secret, kind = 'client' }) {
   });
 }
 
+const PAGE_SIZES = [10, 20, 50, 100, 200];
+const DEF_PS = 20;
+function stateFromParams(p) {
+  let saved = 0;
+  if (!Object.keys(p).length) try { saved = Number(localStorage.getItem('xr.tokens.ps')); } catch { /* ignore */ }
+  const ps = Number(p.page_size) || saved || DEF_PS;
+  return { q: p.q || '', page: Math.max(1, Math.floor(Number(p.page)) || 1), pageSize: PAGE_SIZES.includes(ps) ? ps : DEF_PS };
+}
+
 export function render(el, ctx) {
-  const st = { q: ctx.params.q || '', page: Number(ctx.params.page) || 1, pageSize: Number(localStorage.getItem('xr.tokens.ps')) || 20, total: 0 };
-  const syncParams = () => ctx.setParams({ q: st.q, page: st.page > 1 ? st.page : '' });
+  const st = { ...stateFromParams(ctx.params), total: 0, totalKind: 'exact', loaded: false };
+  const syncParams = (push = false) => ctx.setParams({ q: st.q, page: st.page > 1 ? st.page : '', page_size: st.pageSize !== DEF_PS ? st.pageSize : '' }, { push });
   ctx.setActions(button(t('tokens.create'), { icon: 'plus', variant: 'primary', onClick: () => openForm() }));
 
   const search = searchInput({ value: st.q, placeholder: t('tokens.searchPh'), onInput: debounce((v) => { st.q = v.trim(); st.page = 1; syncParams(); load(); }, 300) });
@@ -66,8 +75,15 @@ export function render(el, ctx) {
       h('th', { class: 'num' }, t('keys.usage')), h('th', { class: 'col-actions' }, h('span', { class: 'sr-only' }, t('common.actions'))))),
     tbody);
   let knownNames = [];
-  const pager = h('div');
-  el.append(card({ flush: true, body: [h('div', { class: 'toolbar' }, search, h('div', { class: 'toolbar-spacer' }), countEl), tableWrap(table), pager] }));
+  const pager = pagerEl({
+    sizes: PAGE_SIZES,
+    onChange: (p, ps) => {
+      if (ps !== st.pageSize) try { localStorage.setItem('xr.tokens.ps', ps); } catch { /* */ }
+      st.page = p; st.pageSize = ps; syncParams(true); load();
+    },
+  });
+  const region = h('div', { class: 'table-region' }, h('div', { class: 'loading-bar', 'aria-hidden': 'true' }), tableWrap(table));
+  el.append(card({ flush: true, body: [h('div', { class: 'toolbar' }, search, h('div', { class: 'toolbar-spacer' }), countEl), region, pager] }));
 
   function quotaCell(tk) {
     const unlimited = !tk.quota_usd;
@@ -126,23 +142,35 @@ export function render(el, ctx) {
     return tapToMenu(tr, menu);
   }
 
-  let loadSeq = 0;
+  // Each load aborts the previous one; old rows stay (dimmed) until the new page arrives.
+  const nextSignal = latestSignal(ctx.signal);
   async function load() {
-    const seq = ++loadSeq;
+    const signal = nextSignal();
+    if (st.loaded) { setTableLoading(region, true); pager.setLoading(true); }
     try {
-      const res = await get('/api/v1/tokens', { q: st.q, page: st.page, page_size: st.pageSize }, { signal: ctx.signal });
-      if (seq !== loadSeq) return;
-      const rows = res.data || []; st.total = res.total || 0;
+      const res = await get('/api/v1/tokens', { q: st.q, page: st.page, page_size: st.pageSize }, { signal });
+      if (signal.aborted) return;
+      const rows = res.data || []; st.total = res.total || 0; st.totalKind = res.total_kind || 'exact'; st.loaded = true;
+      if (!rows.length && st.page > 1 && st.total && st.totalKind === 'exact') { st.page = Math.ceil(st.total / st.pageSize); syncParams(); return load(); }
       knownNames = rows.map((x) => x.name);
-      countEl.textContent = t('common.totalN', { n: fmtInt(st.total) });
+      countEl.textContent = t('common.totalN', { n: fmtTotal(st.total, st.totalKind) });
       tbody.replaceChildren(...(rows.length ? rows.map(row) : [tableEmptyRow(COLS, st.q ? { icon: 'search', title: t('common.noMatches') } : { icon: 'ticket', title: t('tokens.empty'), desc: t('tokens.emptyDesc'), action: button(t('tokens.create'), { icon: 'plus', variant: 'primary', onClick: () => openForm() }) })]));
-      pager.replaceChildren(pagination({ page: st.page, pageSize: st.pageSize, total: st.total, onChange: (p, ps) => { st.page = p; st.pageSize = ps; try { localStorage.setItem('xr.tokens.ps', ps); } catch { /* */ } syncParams(); load(); } }));
+      pager.update({ page: st.page, pageSize: st.pageSize, total: st.total, totalKind: st.totalKind, hasMore: rows.length >= st.pageSize, rowCount: rows.length, loading: false });
     } catch (e) {
-      if (e.name === 'AbortError') return;
+      if (e.name === 'AbortError' || signal.aborted) return;
+      pager.setLoading(false);
       toastError(e);
       tbody.replaceChildren(tableEmptyRow(COLS, { icon: 'alert', title: t('common.loadFailed'), desc: errorMessage(e) }));
+    } finally {
+      if (!signal.aborted) setTableLoading(region, false);
     }
   }
+
+  ctx.onParams((p) => {
+    Object.assign(st, stateFromParams(p));
+    search.input.value = st.q;
+    load();
+  });
 
   async function regenerate(tk) {
     const ok = await confirmDialog({ title: t('tokens.regenTitle'), message: t('tokens.regenMsg', { name: tk.name }), confirmText: t('tokens.regenerate'), danger: true });
@@ -227,5 +255,6 @@ export function render(el, ctx) {
     }
   }
 
+  syncParams();
   load();
 }

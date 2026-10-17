@@ -1,5 +1,5 @@
 // Reusable UI primitives: toasts, modals/drawers, confirm, menus, pagination, inputs.
-import { h, copyText } from './util.js';
+import { h, copyText, fmtTotal, fmtInt } from './util.js';
 import { icon } from './icons.js';
 import { t, hasT } from './i18n.js';
 
@@ -268,7 +268,7 @@ export function copyButton(getText, { label, small = true, iconOnly = false, cls
       if (ok) {
         b.classList.add('copied');
         const prev = [...b.childNodes];
-        b.replaceChildren(icon('check', 14), iconOnly ? null : h('span', null, t('common.copied')));
+        b.replaceChildren(...[icon('check', 14), iconOnly ? null : h('span', null, t('common.copied'))].filter(Boolean));
         setTimeout(() => { b.classList.remove('copied'); b.replaceChildren(...prev); }, 1400);
       } else toast(t('common.copyFailed'), 'error');
     },
@@ -282,25 +282,92 @@ export function codeBlock(text, { lang, copy = true } = {}) {
     h('pre', { class: `code ${lang ? 'lang-' + lang : ''}` }, h('code', null, text)));
 }
 
-/** Pagination: { page, pageSize, total, onChange(page, pageSize), sizes } */
-export function pagination({ page, pageSize, total, onChange, sizes = [10, 20, 50, 100, 200] }) {
-  const pages = Math.max(1, Math.ceil((total || 0) / pageSize));
-  const go = (p) => { if (p < 1 || p > pages || p === page) return; onChange(p, pageSize); };
-  const nums = [];
-  const add = (p) => nums.push(h('button', { class: `page-btn ${p === page ? 'active' : ''}`, onclick: () => go(p) }, String(p)));
-  const win = 1;
-  for (let p = 1; p <= pages; p++) {
-    if (p === 1 || p === pages || Math.abs(p - page) <= win) add(p);
-    else if (nums.length && nums[nums.length - 1].textContent !== '…') nums.push(h('span', { class: 'page-gap' }, '…'));
+/**
+ * Stateful pager. pager({ onChange(page, pageSize), sizes }) returns an element with
+ * .update({ page, pageSize, total, totalKind, hasMore, loading }) so controls (and focus)
+ * survive page changes. totalKind: exact | approx (estimate) | at_least (lower bound).
+ * For estimates "last" jumps to the estimated last page; for lower bounds it is disabled
+ * and "next" follows `hasMore` (the current page was full).
+ */
+export function pager({ onChange, sizes = [10, 20, 50, 100, 200] } = {}) {
+  let st = { page: 1, pageSize: sizes[0], total: 0, totalKind: 'exact', hasMore: false, loading: false, rowCount: null };
+  const lastPage = () => Math.max(1, Math.ceil((st.total || 0) / st.pageSize));
+  const canNext = () => st.page < lastPage() || (st.totalKind !== 'exact' && st.hasMore);
+  const go = (p) => {
+    p = Math.floor(Number(p));
+    if (!Number.isFinite(p) || p < 1) p = 1;
+    if (st.totalKind === 'exact') p = Math.min(p, lastPage());
+    if (p === st.page) { paint(); return; }
+    onChange(p, st.pageSize);
+  };
+  const info = h('div', { class: 'page-info' });
+  const sizeSel = select(sizes.map((s) => ({ value: s, label: t('common.perPage', { n: s }) })), st.pageSize, {
+    class: 'input select select-sm', 'aria-label': t('common.pageSize'), onchange: (e) => onChange(1, Number(e.target.value)),
+  });
+  const btn = (ic, label, fn) => h('button', { class: 'page-btn', type: 'button', 'aria-label': label, title: label, onclick: fn }, icon(ic, 15));
+  const firstB = btn('chevronsLeft', t('common.firstPage'), () => go(1));
+  const prevB = btn('chevronLeft', t('common.prev'), () => go(st.page - 1));
+  const nextB = btn('chevronRight', t('common.next'), () => go(st.page + 1));
+  const lastB = btn('chevronsRight', t('common.lastPage'), () => go(lastPage()));
+  const nums = h('div', { class: 'page-nums' });
+  const jump = h('input', {
+    class: 'input page-jump', type: 'number', min: 1, inputmode: 'numeric', 'aria-label': t('common.goToPage'), title: t('common.goToPage'),
+    onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); go(jump.value); } },
+    onchange: () => go(jump.value),
+  });
+  const jumpWrap = h('label', { class: 'page-jump-wrap' }, h('span', null, t('common.goTo')), jump);
+  const el = h('div', { class: 'pagination' }, info,
+    h('div', { class: 'page-controls' }, sizeSel, firstB, prevB, nums, nextB, lastB, jumpWrap));
+  function paint() {
+    const { page, pageSize, total, totalKind, loading } = st;
+    const pages = lastPage();
+    const exact = totalKind === 'exact';
+    const rows = st.rowCount != null ? st.rowCount : Math.max(0, Math.min(pageSize, (total || 0) - (page - 1) * pageSize));
+    const from = rows ? (page - 1) * pageSize + 1 : 0, to = rows ? (page - 1) * pageSize + rows : 0;
+    info.replaceChildren(
+      ...(loading ? [h('span', { class: 'page-loading' }, spinner(12))] : []),
+      h('span', null, t(exact ? 'common.showing' : 'common.showingEst', { from: fmtInt(from), to: fmtInt(to), total: fmtTotal(total || 0, totalKind) })));
+    sizeSel.value = String(pageSize);
+    prevB.disabled = firstB.disabled = page <= 1;
+    nextB.disabled = !canNext();
+    lastB.disabled = totalKind === 'at_least' || page === pages;
+    lastB.title = totalKind === 'approx' ? t('common.lastPageEst') : t('common.lastPage');
+    const list = [];
+    const add = (p) => list.push(h('button', { class: `page-btn ${p === page ? 'active' : ''}`, type: 'button', 'aria-current': p === page ? 'page' : null, onclick: () => go(p) },
+      (totalKind === 'approx' && p === pages && p !== page ? '~' : '') + fmtInt(p)));
+    const gap = () => list.push(h('span', { class: 'page-gap' }, '…'));
+    if (totalKind !== 'at_least' && page > pages) {
+      // Past the estimated end: 1 … ~last … current
+      add(1); if (pages > 2) gap(); if (pages > 1) add(pages); gap(); add(page);
+    } else {
+      const lo = Math.max(1, page - 1), hi = totalKind === 'at_least' ? page + (canNext() ? 1 : 0) : Math.min(pages, page + 1);
+      if (lo > 1) { add(1); if (lo > 2) gap(); }
+      for (let p = lo; p <= hi; p++) add(p);
+      if (totalKind !== 'at_least' && hi < pages) { if (hi < pages - 1) gap(); add(pages); }
+      else if (totalKind === 'at_least' && canNext()) gap();
+    }
+    nums.replaceChildren(...list);
+    if (document.activeElement !== jump) jump.value = '';
+    jump.placeholder = String(page);
+    if (exact) jump.max = String(pages); else jump.removeAttribute('max');
+    jumpWrap.hidden = pages <= 1 && !canNext() && page === 1;
   }
-  const from = total ? (page - 1) * pageSize + 1 : 0, to = Math.min(total || 0, page * pageSize);
-  return h('div', { class: 'pagination' },
-    h('div', { class: 'page-info' }, t('common.showing', { from, to, total: (total || 0).toLocaleString() })),
-    h('div', { class: 'page-controls' },
-      select(sizes.map((s) => ({ value: s, label: t('common.perPage', { n: s }) })), pageSize, { class: 'input select select-sm', onchange: (e) => onChange(1, Number(e.target.value)) }),
-      h('button', { class: 'page-btn', disabled: page <= 1, onclick: () => go(page - 1), 'aria-label': t('common.prev') }, icon('chevronLeft', 15)),
-      h('div', { class: 'page-nums' }, nums),
-      h('button', { class: 'page-btn', disabled: page >= pages, onclick: () => go(page + 1), 'aria-label': t('common.next') }, icon('chevronRight', 15))));
+  el.update = (o) => { st = { ...st, ...o }; paint(); };
+  el.setLoading = (on) => { st.loading = !!on; paint(); };
+  paint();
+  return el;
+}
+
+
+/** Back-compat wrapper: a one-shot pager. */
+export function pagination(o) { const p = pager({ onChange: o.onChange, sizes: o.sizes }); p.update(o); return p; }
+
+/** Toggle the "loading, previous rows still shown" state on a table region. */
+export function setTableLoading(region, on) {
+  if (!region) return;
+  clearTimeout(region._loadT);
+  if (on) region._loadT = setTimeout(() => region.classList.add('is-loading'), 120);
+  else region.classList.remove('is-loading');
 }
 
 /** Tag input with optional suggestions (datalist). Returns element with .getValues(). */

@@ -25,7 +25,7 @@ const ROUTES = {
 };
 
 const app = document.getElementById('app');
-const state = { me: null, info: null, cleanup: null, controller: null, routeSeq: 0, shell: null, view: 'none', guard: null, lastHash: '' };
+const state = { me: null, info: null, cleanup: null, controller: null, routeSeq: 0, shell: null, view: 'none', guard: null, lastHash: '', onParams: null, curName: '' };
 
 // ---------- routing ----------
 function parseHash() {
@@ -38,6 +38,8 @@ function parseHash() {
 function teardownPage() {
   closeMenus();
   state.guard = null;
+  state.onParams = null;
+  state.curName = '';
   if (state.controller) state.controller.abort();
   state.controller = null;
   if (typeof state.cleanup === 'function') { try { state.cleanup(); } catch (e) { console.error(e); } }
@@ -49,6 +51,12 @@ function route() {
   state.lastHash = location.hash;
   const { name, params } = parseHash();
   if (!ROUTES[name]) { location.replace('#/overview'); return; }
+  // Same page, new query (back/forward, or a link to other filters): let the page apply the
+  // params in place so the current rows stay visible instead of re-rendering from scratch.
+  if (state.onParams && state.curName === name) {
+    state.shell.shell.classList.remove('sidebar-open');
+    try { state.onParams(params); return; } catch (e) { console.error(e); }
+  }
   const seq = ++state.routeSeq;
   teardownPage();
   closeAllModals();
@@ -70,17 +78,24 @@ function route() {
     alive: () => seq === state.routeSeq,
     setActions: (...nodes) => sh.actions.replaceChildren(...nodes.flat().filter(Boolean)),
     navigate: (hash) => { location.hash = hash; },
-    setParams: (obj) => {
+    // push: true adds a history entry (page / filter changes) so back/forward restores the view;
+    // otherwise the current entry is replaced (typing, drawer state).
+    setParams: (obj, { push = false } = {}) => {
       if (seq !== state.routeSeq || parseHash().name !== name) return;
       const qs = qsBuild(obj);
-      history.replaceState(null, '', `#/${name}${qs ? '?' + qs : ''}`);
+      const hash = `#/${name}${qs ? '?' + qs : ''}`;
+      if (hash === location.hash) return;
+      if (push) history.pushState(null, '', hash); else history.replaceState(null, '', hash);
       state.lastHash = location.hash;
     },
+    // Register a handler that applies new params in place (see route()).
+    onParams: (fn) => { if (seq === state.routeSeq) state.onParams = fn; },
     // A page can register a "has unsaved changes" check; in-app navigation then asks first.
     setGuard: (fn) => { if (seq === state.routeSeq) state.guard = fn; },
     info: () => state.info,
     refreshInfo: loadInfo,
   };
+  state.curName = name;
   let r;
   try { r = ROUTES[name].page.render(pageEl, ctx); } catch (e) { console.error(e); toastError(e); }
   if (r && typeof r.then === 'function') {

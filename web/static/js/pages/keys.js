@@ -1,9 +1,10 @@
-import { h, fmtInt, fmtUSD, fmtMs, fmtCompact, timeEl, debounce, fmtDateTime, fmtDuration, readableReason } from '../util.js';
+import { h, fmtInt, fmtUSD, fmtMs, fmtCompact, timeEl, debounce, fmtDateTime, fmtDuration, readableReason, fmtTotal, latestSignal } from '../util.js';
+import { jobPanel, asJob } from '../jobs.js';
 import { icon } from '../icons.js';
 import { t, hasT } from '../i18n.js';
 import { get, post, patch, del } from '../api.js';
 import {
-  card, toast, toastError, openModal, confirmDialog, menuButton, badge, switchEl, searchInput, select, pagination,
+  card, toast, toastError, openModal, confirmDialog, menuButton, badge, switchEl, searchInput, select, pager as pagerEl, setTableLoading,
   skeletonRows, tableEmptyRow, tableWrap, field, input, checkbox, button, busy, kv, spinner, passwordInput, tapToMenu, errorMessage,
 } from '../ui.js';
 
@@ -83,21 +84,61 @@ function testResultsTable(results, onOpen) {
       h('td', { class: 'num mono' }, r.probe ? fmtUSD(r.probe.cost_usd) : '—'))) : tableEmptyRow(6, {}))), { maxHeight: '50vh' });
 }
 
+const PAGE_SIZES = [10, 20, 50, 100, 200];
+const DEF_PS = 20;
+const STATUSES = ['', 'active', 'cooldown', 'disabled'];
+function stateFromParams(p) {
+  let saved = 0;
+  if (!Object.keys(p).length) try { saved = Number(localStorage.getItem('xr.keys.ps')); } catch { /* ignore */ }
+  const ps = Number(p.page_size) || saved || DEF_PS;
+  return {
+    q: p.q || '', status: STATUSES.includes(p.status) ? p.status : '',
+    page: Math.max(1, Math.floor(Number(p.page)) || 1), pageSize: PAGE_SIZES.includes(ps) ? ps : DEF_PS,
+  };
+}
+
 export function render(el, ctx) {
-  const st = { q: ctx.params.q || '', status: ctx.params.status || '', page: Number(ctx.params.page) || 1, pageSize: Number(localStorage.getItem('xr.keys.ps')) || 20, total: 0, rows: [] };
+  const st = { ...stateFromParams(ctx.params), total: 0, totalKind: 'exact', rows: [], loaded: false };
   const sel = new Set();
   let bulkRunning = false;
-  const syncParams = () => ctx.setParams({ q: st.q, status: st.status, page: st.page > 1 ? st.page : '' });
+  const syncParams = (push = false) => ctx.setParams({ q: st.q, status: st.status, page: st.page > 1 ? st.page : '', page_size: st.pageSize !== DEF_PS ? st.pageSize : '' }, { push });
+
+  const testAllBtn = button(t('keys.testAll'), { icon: 'zap', onClick: (e) => testAll(e.currentTarget) });
+  // "Test all" / bulk test run as a background job; the panel survives navigation.
+  const testJob = jobPanel({
+    kind: 'test_keys', signal: ctx.signal,
+    describe: (j) => {
+      const results = (j.result && j.result.results) || [];
+      return t('keys.testSummary', { ok: results.filter((r) => r.ok).length, total: results.length });
+    },
+    actions: (j) => {
+      const results = (j.result && j.result.results) || [];
+      return results.length ? button(t('jobs.viewResults'), { icon: 'logs', size: 'sm', onClick: () => showResults(results) }) : null;
+    },
+    onFinish: (j) => {
+      const results = (j.result && j.result.results) || [];
+      if (j.state === 'done') {
+        toast(t('keys.testSummary', { ok: results.filter((r) => r.ok).length, total: results.length }), 'success');
+        if (results.length && ctx.alive()) showResults(results);
+      } else toast(j.error || t('jobs.failed'), 'error', 6000);
+      if (ctx.alive()) load({ silent: true });
+    },
+    onState: (running) => { testAllBtn.disabled = running; syncSelection(); },
+  });
+  const showResults = (results) => openModal({
+    title: t('keys.testAllResults'), subtitle: t('keys.testSummary', { ok: results.filter((r) => r.ok).length, total: results.length }), size: 'xl',
+    body: testResultsTable(results, showTestResult),
+  });
 
   ctx.setActions(
-    button(t('keys.testAll'), { icon: 'zap', onClick: (e) => testAll(e.currentTarget) }),
+    testAllBtn,
     button(t('keys.bulkImport'), { icon: 'upload', onClick: openImport }),
     button(t('keys.add'), { icon: 'plus', variant: 'primary', onClick: () => openForm() }),
   );
 
   const search = searchInput({ value: st.q, placeholder: t('keys.searchPh'), onInput: debounce((v) => { st.q = v.trim(); st.page = 1; syncParams(); load(); }, 300) });
   const statusSel = select([{ value: '', label: t('keys.allStatuses') }, { value: 'active', label: t('status.active') }, { value: 'cooldown', label: t('status.cooldown') }, { value: 'disabled', label: t('status.disabled') }], st.status,
-    { onchange: (e) => { st.status = e.target.value; st.page = 1; syncParams(); load(); } });
+    { onchange: (e) => { st.status = e.target.value; st.page = 1; syncParams(true); load(); } });
   const countEl = h('span', { class: 'toolbar-count' });
   const COLS = 8;
   const allBox = h('input', { type: 'checkbox', class: 'row-check', 'aria-label': t('common.selectAll'), title: t('common.selectAll'), onchange: () => { if (allBox.checked) st.rows.forEach((k) => sel.add(k.id)); else sel.clear(); syncSelection(); } });
@@ -110,7 +151,13 @@ export function render(el, ctx) {
       h('th', { class: 'num' }, t('keys.usage')),
       h('th', null, t('keys.lastTest')), h('th', { class: 'col-actions' }, h('span', { class: 'sr-only' }, t('common.actions'))))),
     tbody);
-  const pager = h('div');
+  const pager = pagerEl({
+    sizes: PAGE_SIZES,
+    onChange: (p, ps) => {
+      if (ps !== st.pageSize) try { localStorage.setItem('xr.keys.ps', ps); } catch { /* */ }
+      st.page = p; st.pageSize = ps; sel.clear(); syncParams(true); load();
+    },
+  });
 
   // ---- bulk bar ----
   const bulkCount = h('span', { class: 'bulk-count' });
@@ -125,9 +172,10 @@ export function render(el, ctx) {
   const bulkBar = h('div', { class: 'bulk-bar', hidden: true, role: 'region', 'aria-label': t('common.bulkActions') },
     bulkCount, h('div', { class: 'bulk-actions' }, bulkBtns), bulkProgress, h('div', { class: 'toolbar-spacer' }), bulkClear);
 
-  el.append(card({
+  const region = h('div', { class: 'table-region' }, h('div', { class: 'loading-bar', 'aria-hidden': 'true' }), tableWrap(table));
+  el.append(testJob, card({
     flush: true,
-    body: [h('div', { class: 'toolbar' }, search, statusSel, h('div', { class: 'toolbar-spacer' }), countEl), bulkBar, tableWrap(table), pager],
+    body: [h('div', { class: 'toolbar' }, search, statusSel, h('div', { class: 'toolbar-spacer' }), countEl), bulkBar, region, pager],
   }));
 
   function syncSelection() {
@@ -142,6 +190,7 @@ export function render(el, ctx) {
       const cb = tr.querySelector('.row-check'); if (cb) cb.checked = on;
     });
     [...bulkBtns, bulkClear].forEach((b) => { b.disabled = bulkRunning || !sel.size; });
+    if (testJob.running()) bulkBtns[2].disabled = true;
   }
 
   function statusBadgeFor(k) {
@@ -209,24 +258,37 @@ export function render(el, ctx) {
     return tapToMenu(tr, menu);
   }
 
-  let loadSeq = 0;
-  async function load() {
-    const seq = ++loadSeq;
+  // Each load aborts the previous one; old rows stay (dimmed) until the new page arrives.
+  const nextSignal = latestSignal(ctx.signal);
+  async function load({ silent = false } = {}) {
+    const signal = nextSignal();
+    if (!silent && st.loaded) { setTableLoading(region, true); pager.setLoading(true); }
     try {
-      const res = await get('/api/v1/keys', { q: st.q, status: st.status, page: st.page, page_size: st.pageSize }, { signal: ctx.signal });
-      if (seq !== loadSeq) return;
-      st.rows = res.data || []; st.total = res.total || 0;
-      if (!st.rows.length && st.page > 1 && st.total) { st.page = Math.ceil(st.total / st.pageSize); return load(); }
-      countEl.textContent = t('common.totalN', { n: fmtInt(st.total) });
+      const res = await get('/api/v1/keys', { q: st.q, status: st.status, page: st.page, page_size: st.pageSize }, { signal });
+      if (signal.aborted) return;
+      st.rows = res.data || []; st.total = res.total || 0; st.totalKind = res.total_kind || 'exact'; st.loaded = true;
+      if (!st.rows.length && st.page > 1 && st.total && st.totalKind === 'exact') { st.page = Math.ceil(st.total / st.pageSize); syncParams(); return load({ silent }); }
+      countEl.textContent = t('common.totalN', { n: fmtTotal(st.total, st.totalKind) });
       tbody.replaceChildren(...(st.rows.length ? st.rows.map(row) : [tableEmptyRow(COLS, st.q || st.status ? { icon: 'search', title: t('common.noMatches') } : { icon: 'key', title: t('keys.empty'), desc: t('keys.emptyDesc'), action: button(t('keys.add'), { icon: 'plus', variant: 'primary', onClick: () => openForm() }) })]));
-      pager.replaceChildren(pagination({ page: st.page, pageSize: st.pageSize, total: st.total, onChange: (p, ps) => { st.page = p; st.pageSize = ps; sel.clear(); try { localStorage.setItem('xr.keys.ps', ps); } catch { /* */ } syncParams(); load(); } }));
+      pager.update({ page: st.page, pageSize: st.pageSize, total: st.total, totalKind: st.totalKind, hasMore: st.rows.length >= st.pageSize, rowCount: st.rows.length, loading: false });
       syncSelection();
     } catch (e) {
-      if (e.name === 'AbortError') return;
+      if (e.name === 'AbortError' || signal.aborted) return;
+      pager.setLoading(false);
+      if (silent) return;
       toastError(e);
       tbody.replaceChildren(tableEmptyRow(COLS, { icon: 'alert', title: t('common.loadFailed'), desc: errorMessage(e) }));
+    } finally {
+      if (!signal.aborted) setTableLoading(region, false);
     }
   }
+
+  ctx.onParams((p) => {
+    Object.assign(st, stateFromParams(p));
+    search.input.value = st.q; statusSel.value = st.status;
+    sel.clear();
+    load();
+  });
 
   // ---- bulk actions: one API call per key, three at a time, with live progress ----
   async function runBulk(label, fn) {
@@ -264,12 +326,19 @@ export function render(el, ctx) {
   }
   async function bulkTest() {
     const probeBox = checkbox({ checked: false, label: t('keys.probeLabel'), hint: t('keys.probeHint') });
-    const ok = await confirmDialog({ title: t('keys.bulkTestTitle', { n: sel.size }), message: t('keys.testAllMsg'), confirmText: t('keys.bulkTest'), extra: probeBox });
-    if (!ok) return;
-    const probe = probeBox.input.checked;
-    const results = (await runBulk(t('keys.bulkTest'), async (k) => ({ ...(await post(`/api/v1/keys/${k.id}/test`, { probe })), key_id: k.id, key_name: k.name }))).filter(Boolean);
-    if (!results.length || !ctx.alive()) return;
-    openModal({ title: t('keys.testAllResults'), subtitle: t('keys.testSummary', { ok: results.filter((r) => r.ok).length, total: results.length }), size: 'xl', body: testResultsTable(results, showTestResult) });
+    const ids = st.rows.filter((k) => sel.has(k.id)).map((k) => k.id);
+    const ok = await confirmDialog({ title: t('keys.bulkTestTitle', { n: ids.length }), message: t('keys.testAllMsg'), confirmText: t('keys.bulkTest'), extra: probeBox });
+    if (!ok || !ids.length) return;
+    await startTest({ ids, probe: probeBox.input.checked });
+    sel.clear(); syncSelection();
+  }
+
+  async function startTest(body) {
+    if (testJob.running()) { toast(t('keys.testRunning'), 'info'); return; }
+    try {
+      const res = await post('/api/v1/keys/test', { ...body, async: true });
+      testJob.track(asJob(res, 'test_keys'));
+    } catch (e) { toastError(e); }
   }
 
   async function testOne(k, btn, probe = true) {
@@ -289,18 +358,8 @@ export function render(el, ctx) {
     const probeBox = checkbox({ checked: true, label: t('keys.probeLabel'), hint: t('keys.probeHint') });
     const ok = await confirmDialog({ title: t('keys.testAllTitle'), message: t('keys.testAllMsg'), confirmText: t('keys.testAll'), extra: probeBox });
     if (!ok) return;
-    await busy(btn, async () => {
-      try {
-        const res = await post('/api/v1/keys/test', { probe: probeBox.input.checked });
-        const results = res.results || [];
-        const good = results.filter((r) => r.ok).length;
-        openModal({
-          title: t('keys.testAllResults'), subtitle: t('keys.testSummary', { ok: good, total: results.length }), size: 'xl',
-          body: testResultsTable(results, showTestResult),
-        });
-        load();
-      } catch (e) { toastError(e); }
-    });
+    await busy(btn, () => startTest({ probe: probeBox.input.checked }));
+    if (testJob.running()) btn.disabled = true;
   }
 
   async function reset(k) {
@@ -429,7 +488,9 @@ export function render(el, ctx) {
     }));
   }
 
+  syncParams();
   load();
-  const timer = setInterval(() => { if (!document.hidden && !document.querySelector('.overlay')) load(); }, 15000);
+  testJob.resume();
+  const timer = setInterval(() => { if (!document.hidden && !document.querySelector('.overlay')) load({ silent: true }); }, 15000);
   return () => clearInterval(timer);
 }

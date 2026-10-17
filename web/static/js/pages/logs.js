@@ -1,12 +1,12 @@
 import {
   h, fmtInt, fmtUSD, fmtMs, fmtCompact, fmtBytes, fmtDateTime, fmtTimeShort, relTime, timeEl, debounce, tryParseJSON, highlightJSON,
-  statusClass, toLocalInput, fromLocalInput, copyText, downloadText,
+  statusClass, toLocalInput, fromLocalInput, copyText, downloadText, utf8Bytes, fmtTotal, latestSignal,
 } from '../util.js';
 import { icon } from '../icons.js';
 import { t } from '../i18n.js';
 import { get } from '../api.js';
 import {
-  card, toast, toastError, openModal, badge, select, input, pagination, skeletonRows, tableEmptyRow, tableWrap,
+  card, toast, toastError, openModal, badge, select, input, pager as pagerEl, setTableLoading, skeletonRows, tableEmptyRow, tableWrap,
   segmented, switchEl, button, copyButton, busy, tabs, kv, spinner, errorMessage,
 } from '../ui.js';
 
@@ -39,29 +39,124 @@ function expandToggle(pre) {
   return btn;
 }
 
-function bodyView(text, { truncated, note } = {}) {
+// Bodies can be megabytes. Never build per-token DOM for more than HL_LIMIT characters;
+// beyond VIEW_LIMIT show a plain-text preview with "Show all" / "Download".
+const HL_LIMIT = 64 * 1024;
+const VIEW_LIMIT = 64 * 1024;
+const CHUNK = 32 * 1024;
+
+/** Fill `el` with plain text. Long text is split into blocks the browser can skip laying out while off-screen. */
+function paintPlain(el, text) {
+  if (text.length <= CHUNK * 2) { el.textContent = text; return; }
+  const frag = document.createDocumentFragment();
+  for (let i = 0; i < text.length;) {
+    let end = Math.min(text.length, i + CHUNK);
+    if (end < text.length) { const nl = text.lastIndexOf('\n', end); if (nl > i + CHUNK / 2) end = nl + 1; }
+    const piece = text.slice(i, end);
+    let lines = 0;
+    for (let j = piece.indexOf('\n'); j >= 0; j = piece.indexOf('\n', j + 1)) lines++;
+    const est = Math.max(lines, piece.length / 110) * 19.2;
+    frag.appendChild(h('span', { class: 'code-chunk', style: { containIntrinsicSize: `auto ${Math.round(est)}px` } }, piece));
+    i = end;
+  }
+  el.replaceChildren(frag);
+}
+
+function downloadBody(text, filename) {
+  downloadText(filename, text, /\.json$/.test(filename) ? 'application/json' : 'text/plain');
+}
+function downloadTool(getText, filename) {
+  return h('button', { type: 'button', class: 'pane-tool', title: t('logs.downloadHint'), onclick: () => downloadBody(getText(), filename) },
+    icon('download', 12), h('span', null, t('logs.download')));
+}
+
+/** Bar above a preview: "Showing 64 KB of 1.2 MB — Show all · Download". */
+function limitBar({ shownBytes, totalBytes, all, onToggle, onDownload }) {
+  return h('div', { class: 'pane-limit', role: 'status' },
+    icon('info', 13),
+    h('span', null, all ? t('logs.showingAll', { total: fmtBytes(totalBytes) }) : t('logs.showingPart', { shown: fmtBytes(shownBytes), total: fmtBytes(totalBytes) })),
+    h('span', { class: 'pane-meta-spacer' }),
+    h('button', { type: 'button', class: 'pane-tool', onclick: onToggle }, icon(all ? 'shrink' : 'expand', 12), h('span', null, all ? t('logs.showLess') : t('logs.showAll'))),
+    h('button', { type: 'button', class: 'pane-tool', onclick: onDownload }, icon('download', 12), h('span', null, t('logs.download'))));
+}
+
+/** Preview state shared by the body / SSE / text views. */
+function previewer(el, getText, filename) {
+  let showAll = false;
+  const slot = h('div');
+  const paint = () => {
+    const text = getText();
+    const over = text.length > VIEW_LIMIT;
+    paintPlain(el, showAll || !over ? text : text.slice(0, VIEW_LIMIT));
+    if (!over) { slot.replaceChildren(); return; }
+    slot.replaceChildren(limitBar({
+      shownBytes: utf8Bytes(text.slice(0, VIEW_LIMIT)), totalBytes: utf8Bytes(text), all: showAll,
+      onToggle: () => { showAll = !showAll; paint(); }, onDownload: () => downloadBody(text, filename),
+    }));
+  };
+  return { slot, paint };
+}
+
+let prettyPref = (() => { try { return localStorage.getItem('xr.logs.pretty') !== '0'; } catch { return true; } })();
+
+function bodyView(text, { truncated, note, filename = 'body.txt' } = {}) {
   if (text == null || text === '') return emptyPane(t('logs.noBody'));
-  const parsed = tryParseJSON(text);
+  const bytes = utf8Bytes(text);
+  const looksJSON = /^\s*[[{]/.test(text);
+  const big = text.length > HL_LIMIT;
+  // Pretty-printing is on by default only for small bodies; large ones stay raw until asked.
+  let pretty = looksJSON && !big && prettyPref;
+  let parsed = null, prettyText = null;
+  const parseOk = () => {
+    if (parsed === null) { parsed = tryParseJSON(text); if (parsed.ok && big) prettyText = JSON.stringify(parsed.value, null, 2); }
+    return parsed.ok;
+  };
+  const fname = filename.replace(/\.\w+$/, looksJSON ? '.json' : '.txt');
   const pre = h('pre', { class: 'code code-body' });
-  if (parsed.ok) pre.appendChild(highlightJSON(parsed.value)); else pre.textContent = text;
-  const sz = new Blob([text]).size;
+  const kindEl = h('span');
+  const prev = previewer(pre, () => (pretty && big && prettyText ? prettyText : text), fname);
+  const prettyBtn = looksJSON ? h('button', { type: 'button', class: 'pane-tool', title: t('logs.prettyHint') }, icon('braces', 12), h('span', null, t('logs.pretty'))) : null;
+  const paint = () => {
+    if (pretty && !parseOk()) pretty = false;
+    if (pretty && !big) { pre.replaceChildren(highlightJSON(parsed.value)); prev.slot.replaceChildren(); }
+    else prev.paint();
+    const invalid = parsed !== null && !parsed.ok;
+    kindEl.textContent = looksJSON && !invalid ? (pretty ? 'JSON' : `JSON · ${t('logs.raw')}`) : t('logs.raw');
+    if (prettyBtn) { prettyBtn.classList.toggle('on', pretty); prettyBtn.setAttribute('aria-pressed', pretty ? 'true' : 'false'); prettyBtn.hidden = invalid; }
+  };
+  if (prettyBtn) prettyBtn.addEventListener('click', () => {
+    pretty = !pretty;
+    if (!big) { prettyPref = pretty; try { localStorage.setItem('xr.logs.pretty', pretty ? '1' : '0'); } catch { /* ignore */ } }
+    paint();
+  });
+  paint();
   return h('div', { class: 'pane-content' },
-    h('div', { class: 'pane-meta' }, h('span', null, parsed.ok ? 'JSON' : t('logs.raw')), h('span', null, `${fmtCompact(sz)} B`), truncated ? badge(t('logs.truncated'), 'warning') : null,
-      h('span', { class: 'pane-meta-spacer' }), expandToggle(pre)),
+    h('div', { class: 'pane-meta' }, kindEl, h('span', null, fmtBytes(bytes)), truncated ? badge(t('logs.truncated'), 'warning') : null,
+      h('span', { class: 'pane-meta-spacer' }), prettyBtn, downloadTool(() => text, fname), expandToggle(pre)),
     note || null,
+    prev.slot,
     pre);
 }
 
 let sseFormatPref = (() => { try { return localStorage.getItem('xr.logs.sseFmt') === '1'; } catch { return false; } })();
 
-function sseView(text) {
+function sseView(text, { filename = 'response.sse.txt' } = {}) {
   if (!text) return emptyPane(t('logs.noBody'));
   const pre = h('pre', { class: 'code code-body code-sse' });
-  const lines = text.split('\n');
-  const limit = 6000;
+  const lines = text.length > HL_LIMIT ? null : text.split('\n');
+  const events = lines ? lines.filter((l) => l.startsWith('data:')).length : 0;
+  const size = h('span', null, lines ? t('logs.eventsN', { n: events }) : fmtBytes(utf8Bytes(text)));
+  if (!lines) {
+    // Large streams: plain text only (no per-line spans), preview first.
+    const prev = previewer(pre, () => text, filename);
+    prev.paint();
+    return h('div', { class: 'pane-content' },
+      h('div', { class: 'pane-meta' }, h('span', null, 'text/event-stream'), size, h('span', { class: 'pane-meta-spacer' }), downloadTool(() => text, filename), expandToggle(pre)),
+      prev.slot, pre);
+  }
   const paint = () => {
     pre.replaceChildren();
-    lines.slice(0, limit).forEach((line, i) => {
+    lines.forEach((line, i) => {
       const m = /^(data|event|id|retry):\s?/.exec(line);
       if (m) {
         pre.appendChild(h('span', { class: 'sse-field' }, m[0]));
@@ -73,10 +168,8 @@ function sseView(text) {
       else pre.appendChild(document.createTextNode(line));
       if (i < lines.length - 1) pre.appendChild(document.createTextNode('\n'));
     });
-    if (lines.length > limit) pre.appendChild(h('span', { class: 'sse-comment' }, `\n… ${t('logs.moreLines', { n: lines.length - limit })}`));
   };
   paint();
-  const events = lines.filter((l) => l.startsWith('data:')).length;
   const fmtBtn = h('button', { type: 'button', class: `pane-tool ${sseFormatPref ? 'on' : ''}`, 'aria-pressed': sseFormatPref ? 'true' : 'false', title: t('logs.formatEventsHint') },
     icon('braces', 12), h('span', null, t('logs.formatEvents')));
   fmtBtn.addEventListener('click', () => {
@@ -85,8 +178,17 @@ function sseView(text) {
     fmtBtn.classList.toggle('on', sseFormatPref); fmtBtn.setAttribute('aria-pressed', sseFormatPref ? 'true' : 'false');
     paint();
   });
-  return h('div', { class: 'pane-content' }, h('div', { class: 'pane-meta' }, h('span', null, 'text/event-stream'), h('span', null, t('logs.eventsN', { n: events })),
-    h('span', { class: 'pane-meta-spacer' }), fmtBtn, expandToggle(pre)), pre);
+  return h('div', { class: 'pane-content' }, h('div', { class: 'pane-meta' }, h('span', null, 'text/event-stream'), size,
+    h('span', { class: 'pane-meta-spacer' }), fmtBtn, downloadTool(() => text, filename), expandToggle(pre)), pre);
+}
+
+/** Text block that previews the first VIEW_LIMIT characters of very long text. */
+function longText(text, cls, filename) {
+  const box = h('div', { class: cls });
+  if (text.length <= VIEW_LIMIT) { box.textContent = text; return box; }
+  const prev = previewer(box, () => text, filename);
+  prev.paint();
+  return h('div', null, prev.slot, box);
 }
 
 function textView(d) {
@@ -94,8 +196,8 @@ function textView(d) {
   return h('div', { class: 'pane-content text-pane' },
     d.reasoning_text ? h('details', { class: 'reasoning', open: !d.response_text },
       h('summary', null, icon('layers', 14), t('logs.reasoning'), h('span', { class: 'muted small' }, ` · ${fmtCompact(d.reasoning_text.length)} ${t('logs.chars')}`)),
-      h('div', { class: 'reasoning-text' }, d.reasoning_text)) : null,
-    d.response_text ? h('div', { class: 'assistant-text' }, d.response_text) : h('div', { class: 'muted small' }, t('logs.noText')));
+      longText(d.reasoning_text, 'reasoning-text', `log-${d.id}-reasoning.txt`)) : null,
+    d.response_text ? longText(d.response_text, 'assistant-text', `log-${d.id}-text.txt`) : h('div', { class: 'muted small' }, t('logs.noText')));
 }
 
 function headersView(obj) {
@@ -184,23 +286,23 @@ function detailView(d, ctx) {
     ? h('div', { class: 'pane-note' }, icon('info', 13), h('span', null, t('logs.includeUsageNote'))) : null;
   const stat = (label, value, sub, cls = '') => h('div', { class: `dstat ${cls}` }, h('div', { class: 'dstat-l' }, label), h('div', { class: 'dstat-v' }, value), sub ? h('div', { class: 'dstat-s' }, sub) : null);
   const reqTabs = [
-    { id: 'body', label: t('logs.body'), render: () => bodyView(d.request_body, { truncated: d.truncated, note: usageNote }) },
+    { id: 'body', label: t('logs.body'), render: () => bodyView(d.request_body, { truncated: d.truncated, note: usageNote, filename: `log-${d.id}-request.json` }) },
     { id: 'headers', label: t('logs.headers'), count: Object.keys(d.request_headers || {}).length, render: () => headersView(d.request_headers) },
   ];
   const resTabs = d.websocket
     ? [
-      { id: 'messages', label: t('logs.wsMessages'), render: () => bodyView(d.response_body, { truncated: d.truncated }) },
+      { id: 'messages', label: t('logs.wsMessages'), render: () => bodyView(d.response_body, { truncated: d.truncated, filename: `log-${d.id}-messages.json` }) },
       ...(d.response_text ? [{ id: 'text', label: t('logs.text'), render: () => textView(d) }] : []),
       { id: 'headers', label: t('logs.headers'), count: Object.keys(d.response_headers || {}).length, render: () => headersView(d.response_headers) },
     ]
     : d.stream
     ? [
       { id: 'text', label: t('logs.text'), render: () => textView(d) },
-      { id: 'sse', label: t('logs.rawSse'), render: () => sseView(d.response_body) },
+      { id: 'sse', label: t('logs.rawSse'), render: () => sseView(d.response_body, { filename: `log-${d.id}-response.sse.txt` }) },
       { id: 'headers', label: t('logs.headers'), count: Object.keys(d.response_headers || {}).length, render: () => headersView(d.response_headers) },
     ]
     : [
-      { id: 'body', label: t('logs.body'), render: () => bodyView(d.response_body, { truncated: d.truncated }) },
+      { id: 'body', label: t('logs.body'), render: () => bodyView(d.response_body, { truncated: d.truncated, filename: `log-${d.id}-response.json` }) },
       ...(d.response_text || d.reasoning_text ? [{ id: 'text', label: t('logs.text'), render: () => textView(d) }] : []),
       { id: 'headers', label: t('logs.headers'), count: Object.keys(d.response_headers || {}).length, render: () => headersView(d.response_headers) },
     ];
@@ -243,30 +345,42 @@ function detailView(d, ctx) {
 }
 
 // ---------- page ----------
-export function render(el, ctx) {
-  const p = ctx.params;
-  const st = {
+const PAGE_SIZES = [20, 50, 100, 200];
+const DEF_PS = 50;
+const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } };
+
+/** View state from URL params. A bare #/logs falls back to the remembered page size. */
+function stateFromParams(p) {
+  const bare = !Object.keys(p).length;
+  const ps = Number(p.page_size) || (bare ? Number(lsGet('xr.logs.ps')) : 0) || DEF_PS;
+  return {
     preset: PRESETS.includes(p.range) ? p.range : (p.from || p.to ? 'custom' : '24h'),
     from: p.from || '', to: p.to || '',
     model: p.model || '', status: p.status || '', key_id: p.key_id || '', token_id: p.token_id || '', path: p.path || '', q: p.q || '',
-    page: Number(p.page) || 1, pageSize: Number(localStorage.getItem('xr.logs.ps')) || 50,
-    total: 0, rows: [], auto: localStorage.getItem('xr.logs.auto') === '1', openId: p.open ? Number(p.open) : null,
+    page: Math.max(1, Math.floor(Number(p.page)) || 1), pageSize: PAGE_SIZES.includes(ps) ? ps : DEF_PS,
+    openId: p.open ? Number(p.open) : null,
   };
-  let statusCustom = st.status && !STATUS_OPTS.includes(st.status) ? st.status : '';
-  const syncParams = () => ctx.setParams({
+}
+
+export function render(el, ctx) {
+  const st = { ...stateFromParams(ctx.params), total: 0, totalKind: 'exact', rows: [], auto: lsGet('xr.logs.auto') === '1', loaded: false };
+  const syncParams = (push = false) => ctx.setParams({
     range: st.preset !== '24h' && st.preset !== 'custom' ? st.preset : '', from: st.preset === 'custom' ? st.from : '', to: st.preset === 'custom' ? st.to : '',
-    model: st.model, status: st.status, key_id: st.key_id, token_id: st.token_id, path: st.path, q: st.q, page: st.page > 1 ? st.page : '', open: st.openId || '',
-  });
+    model: st.model, status: st.status, key_id: st.key_id, token_id: st.token_id, path: st.path, q: st.q,
+    page: st.page > 1 ? st.page : '', page_size: st.pageSize !== DEF_PS ? st.pageSize : '', open: st.openId || '',
+  }, { push });
 
   // --- controls ---
-  const autoSw = switchEl({ checked: st.auto, label: t('logs.autoRefresh'), onChange: (v) => { st.auto = v; try { localStorage.setItem('xr.logs.auto', v ? '1' : '0'); } catch { /* */ } setupAuto(); } });
+  const autoSw = switchEl({ checked: st.auto, label: t('logs.autoRefresh'), onChange: (v) => { st.auto = v; lsSet('xr.logs.auto', v ? '1' : '0'); setupAuto(); } });
   const refreshBtn = button('', { icon: 'refresh', variant: 'ghost', size: 'icon', attrs: { title: t('common.refresh'), 'aria-label': t('common.refresh') }, onClick: () => load() });
   ctx.setActions(autoSw, refreshBtn);
 
-  const changed = () => { st.page = 1; syncParams(); paintFilterToggle(); load(); };
-  const fromIn = input({ type: 'datetime-local', value: toLocalInput(st.from), onchange: (e) => { st.from = fromLocalInput(e.target.value) || ''; changed(); } });
-  const toIn = input({ type: 'datetime-local', value: toLocalInput(st.to), onchange: (e) => { st.to = fromLocalInput(e.target.value) || ''; changed(); } });
-  const customRange = h('div', { class: 'custom-range', hidden: st.preset !== 'custom' }, fromIn, h('span', { class: 'muted' }, '→'), toIn);
+  // Discrete filter changes add a history entry; typing replaces the current one.
+  const changed = (push = true) => { st.page = 1; syncParams(push); paintFilterToggle(); load(); };
+  const fromIn = input({ type: 'datetime-local', onchange: (e) => { st.from = fromLocalInput(e.target.value) || ''; changed(); } });
+  const toIn = input({ type: 'datetime-local', onchange: (e) => { st.to = fromLocalInput(e.target.value) || ''; changed(); } });
+  const customRange = h('div', { class: 'custom-range' }, fromIn, h('span', { class: 'muted' }, '→'), toIn);
   const presetSel = segmented({
     size: 'seg-sm', options: PRESETS.map((v) => ({ value: v, label: t(`logs.preset.${v}`) })), value: st.preset,
     onChange: (v) => {
@@ -276,12 +390,12 @@ export function render(el, ctx) {
       changed();
     },
   });
-  const qIn = input({ type: 'search', value: st.q, placeholder: t('logs.qPh'), oninput: debounce((e) => { st.q = e.target.value.trim(); changed(); }, 350) });
+  const qIn = input({ type: 'search', placeholder: t('logs.qPh'), oninput: debounce((e) => { st.q = e.target.value.trim(); changed(false); }, 350) });
   const dlModels = h('datalist', { id: 'dl-log-models' });
-  const modelIn = input({ value: st.model, placeholder: t('logs.anyModel'), list: 'dl-log-models', class: 'input mono', oninput: debounce((e) => { st.model = e.target.value.trim(); changed(); }, 400) });
-  const customStatus = input({ type: 'number', min: 100, max: 599, value: statusCustom, placeholder: '503', class: 'input input-status', hidden: st.status === '' || STATUS_OPTS.includes(st.status) && st.status !== 'custom',
-    oninput: debounce((e) => { st.status = e.target.value.trim(); changed(); }, 400) });
-  const statusSel = select(STATUS_OPTS.map((v) => ({ value: v, label: t(`logs.status.${v || 'all'}`) })), statusCustom ? 'custom' : st.status, {
+  const modelIn = input({ placeholder: t('logs.anyModel'), list: 'dl-log-models', class: 'input mono', oninput: debounce((e) => { st.model = e.target.value.trim(); changed(false); }, 400) });
+  const customStatus = input({ type: 'number', min: 100, max: 599, placeholder: '503', class: 'input input-status',
+    oninput: debounce((e) => { st.status = e.target.value.trim(); changed(false); }, 400) });
+  const statusSel = select(STATUS_OPTS.map((v) => ({ value: v, label: t(`logs.status.${v || 'all'}`) })), '', {
     onchange: (e) => {
       const v = e.target.value;
       customStatus.hidden = v !== 'custom';
@@ -289,16 +403,33 @@ export function render(el, ctx) {
       changed();
     },
   });
-  const keySel = select([{ value: '', label: t('logs.anyKey') }], st.key_id, { onchange: (e) => { st.key_id = e.target.value; changed(); } });
-  const tokenSel = select([{ value: '', label: t('logs.anyToken') }], st.token_id, { onchange: (e) => { st.token_id = e.target.value; changed(); } });
+  const keySel = select([{ value: '', label: t('logs.anyKey') }], '', { onchange: (e) => { st.key_id = e.target.value; changed(); } });
+  const tokenSel = select([{ value: '', label: t('logs.anyToken') }], '', { onchange: (e) => { st.token_id = e.target.value; changed(); } });
   const dlPaths = h('datalist', { id: 'dl-log-paths' }, PATHS.map((x) => h('option', { value: x })));
-  const pathIn = input({ value: st.path, placeholder: t('logs.anyPath'), list: 'dl-log-paths', class: 'input mono', oninput: debounce((e) => { st.path = e.target.value.trim(); changed(); }, 400) });
+  const pathIn = input({ placeholder: t('logs.anyPath'), list: 'dl-log-paths', class: 'input mono', oninput: debounce((e) => { st.path = e.target.value.trim(); changed(false); }, 400) });
   const resetBtn = button(t('logs.resetFilters'), { icon: 'x', variant: 'ghost', size: 'sm', onClick: () => {
     Object.assign(st, { preset: '24h', from: '', to: '', model: '', status: '', key_id: '', token_id: '', path: '', q: '' });
-    presetSel.setValue('24h'); customRange.hidden = true; fromIn.value = ''; toIn.value = ''; qIn.value = ''; modelIn.value = ''; statusSel.value = ''; customStatus.hidden = true; customStatus.value = ''; keySel.value = ''; tokenSel.value = ''; pathIn.value = '';
+    paintControls();
     changed();
   } });
   const lbl = (text, ctl) => h('label', { class: 'filter' }, h('span', { class: 'filter-label' }, text), ctl);
+
+  /** Ensure a <select> has an option for `v` (e.g. a key id from the URL before the list loads). */
+  const ensureOpt = (sel, v) => { if (v && ![...sel.options].some((o) => o.value === String(v))) sel.appendChild(h('option', { value: String(v) }, `#${v}`)); };
+  /** Push st into every filter control (initial render, reset, back/forward). */
+  function paintControls() {
+    presetSel.setValue(st.preset);
+    customRange.hidden = st.preset !== 'custom';
+    fromIn.value = toLocalInput(st.from); toIn.value = toLocalInput(st.to);
+    qIn.value = st.q; modelIn.value = st.model; pathIn.value = st.path;
+    const custom = st.status && !STATUS_OPTS.includes(st.status);
+    statusSel.value = custom ? 'custom' : st.status;
+    customStatus.hidden = !custom && st.status !== 'custom';
+    customStatus.value = custom ? st.status : '';
+    ensureOpt(keySel, st.key_id); keySel.value = st.key_id;
+    ensureOpt(tokenSel, st.token_id); tokenSel.value = st.token_id;
+    paintFilterToggle();
+  }
 
   const filterToggle = h('button', { type: 'button', class: 'btn btn-sm filters-toggle', 'aria-expanded': 'false', onclick: () => {
     const open = !filterBar.classList.contains('open');
@@ -331,18 +462,26 @@ export function render(el, ctx) {
       h('th', null, `${t('common.token')} / ${t('common.key')}`),
       h('th', { class: 'num', title: t('logs.ttfbClientHint') }, t('common.latency')), h('th', { class: 'num' }, t('ov.tokens')), h('th', { class: 'num col-cost' }, t('common.cost')))),
     tbody);
-  const pager = h('div');
+  const pager = pagerEl({
+    sizes: PAGE_SIZES,
+    onChange: (pg, ps) => {
+      if (ps !== st.pageSize) lsSet('xr.logs.ps', ps);
+      st.page = pg; st.pageSize = ps; syncParams(true); load({ keepScroll: false });
+    },
+  });
   const countEl = h('span', { class: 'toolbar-count' });
   const liveDot = h('span', { class: 'live-dot', hidden: !st.auto, title: t('logs.autoRefresh') });
   const exportBtn = button(t('logs.exportJson'), { icon: 'download', size: 'sm', variant: 'ghost', attrs: { title: t('logs.exportHint') }, onClick: () => {
     if (!st.rows.length) { toast(t('logs.exportEmpty'), 'info'); return; }
     const d = new Date(); const p2 = (n) => String(n).padStart(2, '0');
     const name = `xai-router-logs-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}-p${st.page}.json`;
-    downloadText(name, JSON.stringify({ exported_at: d.toISOString(), filters: query(), total: st.total, page: st.page, page_size: st.pageSize, data: st.rows }, null, 2));
+    downloadText(name, JSON.stringify({ exported_at: d.toISOString(), filters: query(), total: st.total, total_kind: st.totalKind, page: st.page, page_size: st.pageSize, data: st.rows }, null, 2));
     toast(t('logs.exported', { n: st.rows.length }), 'success', 2500);
   } });
-  el.append(card({ flush: true, cls: 'card-logs', body: [filterBar, h('div', { class: 'toolbar toolbar-thin' }, countEl, liveDot, h('div', { class: 'toolbar-spacer' }), h('span', { class: 'muted small hide-sm' }, t('logs.clickHint')), exportBtn), tableWrap(table, { maxHeight: 'calc(100vh - 330px)' }), pager] }));
-  paintFilterToggle();
+  const wrap = tableWrap(table, { maxHeight: 'calc(100vh - 330px)' });
+  const region = h('div', { class: 'table-region' }, h('div', { class: 'loading-bar', 'aria-hidden': 'true' }), wrap);
+  el.append(card({ flush: true, cls: 'card-logs', body: [filterBar, h('div', { class: 'toolbar toolbar-thin' }, countEl, liveDot, h('div', { class: 'toolbar-spacer' }), h('span', { class: 'muted small hide-sm' }, t('logs.clickHint')), exportBtn), region, pager] }));
+  paintControls();
 
   function row(r) {
     const tokTip = [`${t('tok.prompt')}: ${fmtInt(r.prompt_tokens)}`, `${t('tok.completion')}: ${fmtInt(r.completion_tokens)}`, `${t('tok.cached')}: ${fmtInt(r.cached_tokens)}`, `${t('tok.reasoning')}: ${fmtInt(r.reasoning_tokens)}`, r.image_tokens ? `${t('tok.image')}: ${fmtInt(r.image_tokens)}` : null, `${t('tok.total')}: ${fmtInt(r.total_tokens)}`].filter(Boolean).join('\n');
@@ -374,23 +513,44 @@ export function render(el, ctx) {
     return q;
   }
 
-  let loadSeq = 0, loading = false;
-  async function load({ silent = false } = {}) {
-    const seq = ++loadSeq;
+  // Each load aborts the one before it; the previous rows stay visible (dimmed) until the new ones arrive.
+  const nextSignal = latestSignal(ctx.signal);
+  let loading = false;
+  async function load({ silent = false, keepScroll = true } = {}) {
+    const signal = nextSignal();
     loading = true;
-    if (!silent) refreshBtn.classList.add('spin');
+    if (!silent) { refreshBtn.classList.add('spin'); if (st.loaded) { setTableLoading(region, true); pager.setLoading(true); } }
+    const t0 = performance.now();
     try {
-      const res = await get('/api/v1/logs', query(), { signal: ctx.signal });
-      if (seq !== loadSeq) return;
+      const res = await get('/api/v1/logs', query(), { signal });
+      if (signal.aborted) return;
       st.rows = res.data || []; st.total = res.total || 0;
-      countEl.textContent = t('logs.matchN', { n: fmtInt(st.total) });
+      st.totalKind = res.total_kind || (res.total_exact === false ? 'approx' : 'exact');
+      st.loaded = true;
+      st.lastMs = Math.round(performance.now() - t0);
+      countEl.textContent = t('logs.matchN', { n: fmtTotal(st.total, st.totalKind) });
+      countEl.title = st.totalKind === 'approx' ? t('common.totalApproxHint') : st.totalKind === 'at_least' ? t('common.totalAtLeastHint') : '';
       const filtered = st.model || st.status || st.key_id || st.token_id || st.path || st.q;
-      tbody.replaceChildren(...(st.rows.length ? st.rows.map(row) : [tableEmptyRow(COLS, filtered ? { icon: 'filter', title: t('logs.noMatch'), desc: t('logs.noMatchDesc') } : { icon: 'logs', title: t('logs.empty'), desc: t('logs.emptyDesc') })]));
-      pager.replaceChildren(pagination({ page: st.page, pageSize: st.pageSize, total: st.total, onChange: (pg, ps) => { st.page = pg; st.pageSize = ps; try { localStorage.setItem('xr.logs.ps', ps); } catch { /* */ } syncParams(); load(); } }));
+      let empty;
+      if (!st.rows.length && st.page > 1) {
+        const est = Math.max(1, Math.ceil(st.total / st.pageSize));
+        const goPage = (pg) => { st.page = pg; syncParams(true); load({ keepScroll: false }); };
+        empty = { icon: 'inbox', title: t('common.pastEnd'), desc: t('common.pastEndDesc'), action: h('div', { class: 'row-sm' },
+          button(t('common.firstPage'), { icon: 'chevronsLeft', size: 'sm', onClick: () => goPage(1) }),
+          est < st.page ? button(t('common.lastPageN', { n: fmtInt(est) }), { icon: 'chevronLeft', size: 'sm', onClick: () => goPage(est) }) : null) };
+      }
+      else if (filtered) empty = { icon: 'filter', title: t('logs.noMatch'), desc: t('logs.noMatchDesc') };
+      else empty = { icon: 'logs', title: t('logs.empty'), desc: t('logs.emptyDesc') };
+      tbody.replaceChildren(...(st.rows.length ? st.rows.map(row) : [tableEmptyRow(COLS, empty)]));
+      if (!keepScroll) wrap.scrollTop = 0;
+      pager.update({ page: st.page, pageSize: st.pageSize, total: st.total, totalKind: st.totalKind, hasMore: st.rows.length >= st.pageSize, rowCount: st.rows.length, loading: false });
     } catch (e) {
-      if (e.name === 'AbortError') return;
+      if (e.name === 'AbortError' || signal.aborted) return;
+      pager.setLoading(false);
       if (!silent) { toastError(e); tbody.replaceChildren(tableEmptyRow(COLS, { icon: 'alert', title: t('common.loadFailed'), desc: errorMessage(e) })); }
-    } finally { loading = false; refreshBtn.classList.remove('spin'); }
+    } finally {
+      if (!signal.aborted) { loading = false; refreshBtn.classList.remove('spin'); setTableLoading(region, false); }
+    }
   }
 
   let injectUsage = null;
@@ -409,14 +569,13 @@ export function render(el, ctx) {
       sel.replaceChildren(...opts);
     };
     if (ks.status === 'fulfilled') fill(keySel, ks.value.data || [], t('logs.anyKey'), st.key_id);
-    else if (st.key_id) fill(keySel, [], t('logs.anyKey'), st.key_id);
     if (ts.status === 'fulfilled') fill(tokenSel, ts.value.data || [], t('logs.anyToken'), st.token_id);
-    else if (st.token_id) fill(tokenSel, [], t('logs.anyToken'), st.token_id);
     if (ms.status === 'fulfilled') dlModels.replaceChildren(...(ms.value.data || []).map((m) => h('option', { value: m.id })));
   }
 
   // --- detail drawer ---
   let drawer = null;
+  const nextDetailSignal = latestSignal(ctx.signal);
   function markActive() { tbody.querySelectorAll('tr[data-id]').forEach((tr) => tr.classList.toggle('row-active', Number(tr.dataset.id) === st.openId)); }
   async function openDetail(id) {
     st.openId = id; syncParams(); markActive();
@@ -430,13 +589,14 @@ export function render(el, ctx) {
     else {
       drawer = openModal({
         kind: 'drawer', size: 'xl', title: titleText, subtitle: summary ? fmtDateTime(summary.created_at) : '', body: loadingBody, headerExtra: [prev, next],
-        onClose: () => { drawer = null; st.openId = null; syncParams(); markActive(); document.removeEventListener('keydown', onKey); },
+        onClose: () => { drawer = null; st.openId = null; nextDetailSignal.abort(); syncParams(); markActive(); document.removeEventListener('keydown', onKey); },
       });
       document.addEventListener('keydown', onKey);
     }
     const thisDrawer = drawer;
+    const signal = nextDetailSignal();
     try {
-      const d = await get(`/api/v1/logs/${id}`, null, { signal: ctx.signal });
+      const d = await get(`/api/v1/logs/${id}`, null, { signal });
       if (drawer !== thisDrawer || st.openId !== id) return;
       drawer.setTitle(`${d.method || 'GET'} ${d.path || ''}`);
       const sub = drawer.el.querySelector('.modal-subtitle');
@@ -444,7 +604,7 @@ export function render(el, ctx) {
       drawer.setBody(detailView(d, { closeDetail: () => drawer && drawer.close(), injectUsage }));
       drawer.body.scrollTop = 0;
     } catch (e) {
-      if (e.name === 'AbortError') return;
+      if (e.name === 'AbortError' || signal.aborted) return;
       drawer && drawer.setBody(h('div', { class: 'drawer-loading' }, icon('alert', 22), h('span', null, errorMessage(e))));
       toastError(e);
     }
@@ -460,6 +620,18 @@ export function render(el, ctx) {
     else if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); step(-1); }
   }
 
+  // --- back / forward: apply the URL in place ---
+  ctx.onParams((p) => {
+    const next = stateFromParams(p);
+    const openId = next.openId;
+    delete next.openId;
+    Object.assign(st, next);
+    paintControls();
+    load({ keepScroll: false });
+    if (openId && openId !== st.openId) openDetail(openId);
+    else if (!openId && drawer) drawer.close();
+  });
+
   // --- auto refresh ---
   let autoTimer = null;
   function setupAuto() {
@@ -468,6 +640,7 @@ export function render(el, ctx) {
     if (st.auto) autoTimer = setInterval(() => { if (!document.hidden && !loading && st.page === 1 && !document.querySelector('.overlay-modal')) load({ silent: true }); }, 5000);
   }
 
+  syncParams();
   loadFilterData();
   load().then(() => { if (st.openId) openDetail(st.openId); });
   setupAuto();

@@ -256,3 +256,50 @@ export function qsBuild(obj) {
   for (const [k, v] of Object.entries(obj || {})) if (v !== '' && v != null && v !== false) p.set(k, v);
   return p.toString();
 }
+
+/**
+ * Human total for a list response. kind: exact (thousands separators), approx (compact,
+ * "about 3.0 million" / "约 300 万"), at_least ("1,000+" / "至少 1,000").
+ */
+export function fmtCompactLong(n) {
+  if (!isNum(n)) return '—';
+  if (Math.abs(n) < 10000) return fmtInt(n);
+  const zh = getLang() === 'zh';
+  const opts = { notation: 'compact', compactDisplay: 'long' };
+  if (zh) opts.maximumSignificantDigits = 2;
+  else if (Math.abs(n) >= 1e6) { opts.minimumFractionDigits = 1; opts.maximumFractionDigits = 1; }
+  else opts.maximumSignificantDigits = 3;
+  let s = new Intl.NumberFormat(locale(), opts).format(n);
+  if (zh) s = s.replace(/(\d)([^\d.,\s])/, '$1 $2');
+  return s;
+}
+export function fmtTotal(total, kind = 'exact') {
+  const zh = getLang() === 'zh';
+  if (!total) return fmtInt(0);
+  if (kind === 'approx') return zh ? `约 ${fmtCompactLong(total)}` : `about ${fmtCompactLong(total)}`;
+  if (kind === 'at_least') return zh ? `至少 ${fmtInt(total)}` : `${fmtInt(total)}+`;
+  return fmtInt(total);
+}
+
+/** UTF-8 byte length of a string (used for size labels). */
+export function utf8Bytes(str) {
+  if (!str) return 0;
+  try { return new TextEncoder().encode(str).length; } catch { return str.length; }
+}
+
+/**
+ * Request sequencer: each call aborts the previous request's signal and returns a fresh one,
+ * also aborted when `parent` (the route's signal) aborts.
+ */
+export function latestSignal(parent) {
+  let ctl = null;
+  if (parent) parent.addEventListener('abort', () => { if (ctl) ctl.abort(); }, { once: true });
+  const next = () => {
+    if (ctl) ctl.abort();
+    ctl = new AbortController();
+    if (parent && parent.aborted) ctl.abort();
+    return ctl.signal;
+  };
+  next.abort = () => { if (ctl) ctl.abort(); ctl = null; };
+  return next;
+}

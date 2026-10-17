@@ -245,6 +245,31 @@ const en = {
   // docs
   'docs.chatNode': 'Chat · Node.js', 'docs.anthPy': 'Anthropic · Python', 'docs.anthNode': 'Anthropic · Node.js', 'docs.anthCurl': 'Anthropic · curl',
   'docs.anthNote': 'The Anthropic SDK sends the token as x-api-key and appends /v1/messages itself, so pass the bare origin as the base URL.',
+  // pagination / totals
+  'common.pageSize': 'Rows per page', 'common.firstPage': 'First page', 'common.lastPage': 'Last page', 'common.lastPageEst': 'Last page (estimated)', 'common.lastPageN': 'Page {n} (estimated last)',
+  'common.goTo': 'Go to', 'common.goToPage': 'Go to page (press Enter)', 'common.showingEst': '{from}–{to} of {total}',
+  'common.totalApproxHint': 'Estimated from hourly rollups — counting exactly would be too slow on this many rows.',
+  'common.totalAtLeastHint': 'Lower bound — there are at least this many matches.',
+  'common.pastEnd': 'No rows on this page', 'common.pastEndDesc': 'The total is an estimate and this page is past the end of the results.',
+  // large bodies
+  'logs.download': 'Download', 'logs.downloadHint': 'Save the full body as a file', 'logs.showAll': 'Show all', 'logs.showLess': 'Show less',
+  'logs.showingPart': 'Showing {shown} of {total}', 'logs.showingAll': 'Showing all {total} as plain text',
+  'logs.pretty': 'Pretty', 'logs.prettyHint': 'Pretty-print JSON (large bodies are shown as plain text)',
+  // background jobs
+  'jobs.kind.purge_logs': 'Deleting old logs', 'jobs.kind.test_keys': 'Testing keys', 'jobs.kind.compact': 'Compacting database',
+  'jobs.done': 'done', 'jobs.failed': 'failed', 'jobs.elapsed': 'running for {d}', 'jobs.tookIn': 'took {d}', 'jobs.dismiss': 'Dismiss',
+  'jobs.viewResults': 'View results', 'jobs.background': 'Runs in the background — you can leave this page and come back.',
+  'keys.testRunning': 'A key test is already running.',
+  // storage
+  'settings.storage': 'Storage', 'settings.storageSub': 'Database file and stored request logs.',
+  'settings.dbFree': 'Free space in file', 'settings.autoVacuum': 'Auto-vacuum', 'settings.avLegacy': 'created before v0.3',
+  'settings.logCount': 'Stored logs', 'settings.oldestLog': 'Oldest log', 'settings.newestLog': 'Newest log',
+  'settings.compact': 'Compact database', 'settings.compactHint': 'Returns free space to the disk.',
+  'settings.compactTitle': 'Compact the database?', 'settings.compactMsg': 'Free pages inside the database file are returned to the disk. This runs in the background.',
+  'settings.compactVacuumWarn': 'This database was created before v0.3: the first compaction runs a full VACUUM, which blocks writes (including new request logs) until it finishes — on a large database this can take many minutes. Later compactions are incremental.',
+  'settings.compacted': '{freed} reclaimed · {before} → {after}', 'settings.purgedFreed': '{n} logs deleted · {freed} freed',
+  'settings.purgeBg': 'Runs in the background in small batches.',
+  'settings.goHeap': 'Go heap', 'settings.goSys': 'Go memory (OS)', 'settings.goSysHint': 'Memory obtained from the OS by the Go runtime', 'settings.goroutines': 'Goroutines',
 };
 
 const zh = {
@@ -491,6 +516,31 @@ const zh = {
   // docs
   'docs.chatNode': '对话 · Node.js', 'docs.anthPy': 'Anthropic · Python', 'docs.anthNode': 'Anthropic · Node.js', 'docs.anthCurl': 'Anthropic · curl',
   'docs.anthNote': 'Anthropic SDK 通过 x-api-key 发送令牌，并会自动拼接 /v1/messages，所以 Base URL 只填域名即可。',
+  // pagination / totals
+  'common.pageSize': '每页行数', 'common.firstPage': '第一页', 'common.lastPage': '最后一页', 'common.lastPageEst': '最后一页（估算）', 'common.lastPageN': '第 {n} 页（估算的最后一页）',
+  'common.goTo': '跳至', 'common.goToPage': '跳转到页码（按回车）', 'common.showingEst': '第 {from}–{to} 条，共{total}条',
+  'common.totalApproxHint': '根据小时汇总估算——数据量太大，精确计数会很慢。',
+  'common.totalAtLeastHint': '下限——至少有这么多条匹配。',
+  'common.pastEnd': '此页没有数据', 'common.pastEndDesc': '总数为估算值，此页已超出结果末尾。',
+  // large bodies
+  'logs.download': '下载', 'logs.downloadHint': '将完整内容保存为文件', 'logs.showAll': '显示全部', 'logs.showLess': '收起',
+  'logs.showingPart': '显示 {shown} / 共 {total}', 'logs.showingAll': '以纯文本显示全部 {total}',
+  'logs.pretty': '格式化', 'logs.prettyHint': '格式化 JSON（大内容以纯文本显示）',
+  // background jobs
+  'jobs.kind.purge_logs': '正在删除旧日志', 'jobs.kind.test_keys': '正在测试密钥', 'jobs.kind.compact': '正在压缩数据库',
+  'jobs.done': '已完成', 'jobs.failed': '失败', 'jobs.elapsed': '已运行 {d}', 'jobs.tookIn': '耗时 {d}', 'jobs.dismiss': '关闭',
+  'jobs.viewResults': '查看结果', 'jobs.background': '在后台运行——可以离开此页面，稍后回来查看。',
+  'keys.testRunning': '已有密钥测试正在运行。',
+  // storage
+  'settings.storage': '存储', 'settings.storageSub': '数据库文件与已存储的请求日志。',
+  'settings.dbFree': '文件内空闲空间', 'settings.autoVacuum': '自动清理（auto-vacuum）', 'settings.avLegacy': 'v0.3 之前创建',
+  'settings.logCount': '已存储日志', 'settings.oldestLog': '最早日志', 'settings.newestLog': '最新日志',
+  'settings.compact': '压缩数据库', 'settings.compactHint': '把空闲空间归还给磁盘。',
+  'settings.compactTitle': '压缩数据库？', 'settings.compactMsg': '数据库文件中的空闲页将归还给磁盘，在后台运行。',
+  'settings.compactVacuumWarn': '此数据库创建于 v0.3 之前：首次压缩会执行完整 VACUUM，期间会阻塞写入（包括新的请求日志），大型数据库可能需要很多分钟。之后的压缩为增量方式。',
+  'settings.compacted': '回收 {freed} · {before} → {after}', 'settings.purgedFreed': '已删除 {n} 条日志 · 释放 {freed}',
+  'settings.purgeBg': '在后台分小批执行。',
+  'settings.goHeap': 'Go 堆内存', 'settings.goSys': 'Go 内存（系统）', 'settings.goSysHint': 'Go 运行时从操作系统获取的内存', 'settings.goroutines': 'Goroutine 数',
 };
 
 const DICTS = { en, zh };

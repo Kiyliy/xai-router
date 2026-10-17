@@ -1,4 +1,5 @@
-import { h, fmtBytes, fmtDuration, fmtDateTime, timeEl, fmtInt, toLocalInput } from '../util.js';
+import { h, fmtBytes, fmtDuration, fmtDateTime, timeEl, fmtInt, fmtTotal, relTime, toLocalInput } from '../util.js';
+import { jobPanel, asJob } from '../jobs.js';
 import { icon } from '../icons.js';
 import { t } from '../i18n.js';
 import { get, put, post, del } from '../api.js';
@@ -259,23 +260,77 @@ export function render(el, ctx) {
 
   // ---- side: system info ----
   const infoBody = h('div', null, h('div', { class: 'skeleton', style: { width: '80%' } }));
-  sideCol.append(card({ title: h('span', { class: 'card-title-ic' }, icon('server', 16), t('settings.system')), body: infoBody, actions: button('', { icon: 'refresh', variant: 'ghost', size: 'icon', attrs: { title: t('common.refresh') }, onClick: loadInfo }) }));
+  const storageBody = h('div', null, h('div', { class: 'skeleton', style: { width: '70%' } }));
+  sideCol.append(card({ title: h('span', { class: 'card-title-ic' }, icon('server', 16), t('settings.system')), body: infoBody, actions: button('', { icon: 'refresh', variant: 'ghost', size: 'icon', attrs: { title: t('common.refresh'), 'aria-label': t('common.refresh') }, onClick: loadInfo }) }));
+  const mono = (v) => h('span', { class: 'mono' }, v);
+  const when = (iso) => (iso ? h('span', { title: fmtDateTime(iso) }, fmtDateTime(iso, { seconds: false }), h('span', { class: 'muted' }, ` · ${relTime(iso)}`)) : null);
+  let lastInfo = null;
   async function loadInfo() {
     try {
       const i = await ctx.refreshInfo();
       if (!i) return;
+      lastInfo = i;
       infoBody.replaceChildren(kv([
-        [t('settings.version'), h('span', { class: 'mono' }, i.version || '—')],
-        [t('settings.commit'), i.commit ? h('span', { class: 'mono' }, i.commit.slice(0, 12)) : null],
-        [t('settings.buildDate'), i.build_date ? h('span', { class: 'mono' }, i.build_date) : null],
-        [t('settings.goVersion'), h('span', { class: 'mono' }, i.go_version || '—')],
+        [t('settings.version'), mono(i.version || '—')],
+        [t('settings.commit'), i.commit ? mono(i.commit.slice(0, 12)) : null],
+        [t('settings.buildDate'), i.build_date ? mono(i.build_date) : null],
+        [t('settings.goVersion'), mono(i.go_version || '—')],
         [t('settings.startedAt'), i.started_at ? h('span', { title: fmtDateTime(i.started_at) }, fmtDateTime(i.started_at, { seconds: false })) : null],
         [t('settings.uptime'), fmtDuration(i.uptime_seconds)],
-        [t('settings.dbSize'), fmtBytes(i.db_size_bytes)],
+        [t('settings.goHeap'), i.go_heap_bytes != null ? mono(fmtBytes(i.go_heap_bytes)) : null],
+        [t('settings.goSys'), i.go_sys_bytes != null ? h('span', { class: 'mono', title: t('settings.goSysHint') }, fmtBytes(i.go_sys_bytes)) : null],
+        [t('settings.goroutines'), i.goroutines != null ? mono(fmtInt(i.goroutines)) : null],
         [t('settings.logQueue'), fmtInt(i.log_queue_length)],
         [t('settings.logDropped'), h('span', { class: i.log_dropped ? 'text-warning' : '' }, fmtInt(i.log_dropped))],
       ]));
+      paintStorage(i);
     } catch (e) { toastError(e); }
+  }
+
+  // ---- side: storage ----
+  const compactBtn = h('button', { class: 'btn', type: 'button', onclick: () => compact() }, icon('database', 15), h('span', null, t('settings.compact')));
+  const compactJob = jobPanel({
+    kind: 'compact', signal: ctx.signal,
+    describe: (j) => {
+      const r = j.result || {};
+      return t('settings.compacted', { freed: fmtBytes(r.freed_bytes || 0), before: fmtBytes(r.size_before || 0), after: fmtBytes(r.size_after || 0) });
+    },
+    onFinish: (j) => {
+      if (j.state === 'done') toast(t('settings.compacted', { freed: fmtBytes((j.result || {}).freed_bytes || 0), before: fmtBytes((j.result || {}).size_before || 0), after: fmtBytes((j.result || {}).size_after || 0) }), 'success');
+      else toast(j.error || t('jobs.failed'), 'error', 6000);
+      if (ctx.alive()) loadInfo();
+    },
+    onState: (running) => { compactBtn.disabled = running; },
+  });
+  const vacuumWarn = h('div', { class: 'callout callout-warning', hidden: true }, icon('alert', 16), h('span', null, t('settings.compactVacuumWarn')));
+  sideCol.append(card({
+    title: h('span', { class: 'card-title-ic' }, icon('database', 16), t('settings.storage')), subtitle: t('settings.storageSub'),
+    body: h('div', { class: 'stack' }, storageBody, vacuumWarn, h('div', { class: 'row-sm' }, compactBtn, h('span', { class: 'muted small' }, t('settings.compactHint'))), compactJob),
+  }));
+  function paintStorage(i) {
+    const size = i.db_size_bytes || 0, free = i.db_free_bytes || 0;
+    const av = i.db_auto_vacuum || '';
+    storageBody.replaceChildren(kv([
+      [t('settings.dbSize'), mono(fmtBytes(size))],
+      [t('settings.dbFree'), i.db_free_bytes != null ? h('span', null, mono(fmtBytes(free)), size ? h('span', { class: 'muted' }, ` · ${((free / size) * 100).toFixed(free / size < 0.1 ? 1 : 0)}%`) : null) : null],
+      [t('settings.autoVacuum'), av ? h('span', null, mono(av), av !== 'incremental' ? h('span', { class: 'muted' }, ` · ${t('settings.avLegacy')}`) : null) : null],
+      [t('settings.logCount'), i.log_count != null ? h('span', { title: fmtInt(i.log_count) }, fmtTotal(i.log_count, 'approx')) : null],
+      [t('settings.oldestLog'), when(i.oldest_log_at)],
+      [t('settings.newestLog'), when(i.newest_log_at)],
+    ]));
+    vacuumWarn.hidden = !av || av === 'incremental';
+  }
+  async function compact() {
+    const legacy = lastInfo && lastInfo.db_auto_vacuum && lastInfo.db_auto_vacuum !== 'incremental';
+    const ok = await confirmDialog({
+      title: t('settings.compactTitle'), message: t('settings.compactMsg'), confirmText: t('settings.compact'), danger: !!legacy,
+      extra: legacy ? h('div', { class: 'callout callout-warning' }, icon('alert', 16), h('span', null, t('settings.compactVacuumWarn'))) : null,
+    });
+    if (!ok) return;
+    await busy(compactBtn, async () => {
+      try { const r = await post('/api/v1/system/compact', {}); compactJob.track(asJob(r, 'compact')); } catch (e) { toastError(e); }
+    });
+    if (compactJob.running()) compactBtn.disabled = true;
   }
 
   // ---- side: account (password) ----
@@ -330,9 +385,19 @@ export function render(el, ctx) {
   // ---- side: maintenance ----
   const before = input({ type: 'datetime-local', value: toLocalInput(new Date(Date.now() - 30 * 86400e3).toISOString()) });
   const purgeBtn = h('button', { class: 'btn btn-danger-soft', onclick: () => purge() }, icon('trash', 15), h('span', null, t('settings.purge')));
+  const purgeText = (r) => (r && r.freed_bytes ? t('settings.purgedFreed', { n: fmtInt(r.deleted ?? 0), freed: fmtBytes(r.freed_bytes) }) : t('settings.purged', { n: fmtInt((r && r.deleted) ?? 0) }));
+  const purgeJob = jobPanel({
+    kind: 'purge_logs', signal: ctx.signal,
+    describe: (j) => purgeText(j.result),
+    onFinish: (j) => {
+      if (j.state === 'done') toast(purgeText(j.result), 'success'); else toast(j.error || t('jobs.failed'), 'error', 6000);
+      if (ctx.alive()) loadInfo();
+    },
+    onState: (running) => { purgeBtn.disabled = running; },
+  });
   sideCol.append(card({
-    title: h('span', { class: 'card-title-ic' }, icon('database', 16), t('settings.maintenance')), subtitle: t('settings.maintenanceSub'),
-    body: h('div', { class: 'stack' }, field(t('settings.deleteBefore'), before), h('div', null, purgeBtn)),
+    title: h('span', { class: 'card-title-ic' }, icon('trash', 16), t('settings.maintenance')), subtitle: t('settings.maintenanceSub'),
+    body: h('div', { class: 'stack' }, field(t('settings.deleteBefore'), before), h('div', { class: 'row-sm' }, purgeBtn, h('span', { class: 'muted small' }, t('settings.purgeBg'))), purgeJob),
   }));
   async function purge() {
     if (!before.value) return;
@@ -340,9 +405,12 @@ export function render(el, ctx) {
     const ok = await confirmDialog({ title: t('settings.purgeTitle'), message: t('settings.purgeMsg', { d: fmtDateTime(iso, { seconds: false }) }), confirmText: t('settings.purge'), danger: true });
     if (!ok) return;
     await busy(purgeBtn, async () => {
-      try { const r = await del('/api/v1/logs', { before: iso }); toast(t('settings.purged', { n: fmtInt(r?.deleted ?? 0) }), 'success'); } catch (e) { toastError(e); }
+      try { const r = await del('/api/v1/logs', { before: iso }); purgeJob.track(asJob(r, 'purge_logs')); } catch (e) { toastError(e); }
     });
+    if (purgeJob.running()) purgeBtn.disabled = true;
   }
+  purgeJob.resume();
+  compactJob.resume();
 
   // ---- load ----
   (async () => {
