@@ -143,7 +143,7 @@ export function render(el, ctx) {
     let last = 1;
     const values = {
       requests: req,
-      success: req.map((r, i) => (r ? (last = ok[i] / r) : last)),
+      success: req.some((r) => r > 0) ? req.map((r, i) => (r ? (last = ok[i] / r) : last)) : [],
       tokens: alignedValues(buckets, pts, (p) => p.total_tokens),
       cost: alignedValues(buckets, pts, (p) => p.cost_usd),
       latency: lat,

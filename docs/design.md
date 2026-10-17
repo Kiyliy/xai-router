@@ -133,3 +133,26 @@ Everything collapses under `prefers-reduced-motion`.
 Use the existing classes before adding new ones. If a new colour seems necessary, add a token to
 all three theme blocks instead of hard-coding it. Check every change at 1440px and 390px in both
 themes.
+
+## v0.4.0 components
+
+- **Grouped sidebar** — Overview on top, then *Gateway / System / Docs* labels (`.nav-group-label`:
+  11px, 600, `--text-3`; uppercase in English, letter-spaced in Chinese). Groups are separated by
+  the label's top spacing, not by rules.
+- **Account menu** — the sidebar foot is a button (`.me-btn`): 26px avatar with an online dot, name,
+  sign-in method, chevron. It opens a `.menu-pop` upwards: change password, admin access, log out.
+- **Banners** — `.banner-warning` (initial password) and `.banner-danger` (no upstream key available;
+  solid red action button). The danger banner sits on top when both show.
+- **Getting-started checklist** — `.onboard` card with a progress bar and four step tiles; only the
+  current step is highlighted (accent ring) and carries the one primary button; done steps turn
+  `--th-bg` with a green check. 4 → 2 → 1 columns.
+- **Entity drawers** (upstream key, client token) — `drawer-lg`; header with status badge and
+  `.entity-sub` meta line; `.usage-grid` (24h / 7d / 30d, cost first, errors red when > 0);
+  `.quota-block`; `.test-hero` for the last check; `.mini-list` of recent failures linking to logs.
+- **Credential labels** — `.cred`: name, then a grey mono prefix (`· sk-xr-nZja`). The name keeps
+  priority when space is short; the prefix truncates first.
+- **Menu items with an explanation** — second line in `--text-3`; actions that spend credits use
+  `--warning` for that line.
+- **Pages** — `#/settings` and `#/access` use `.page-narrow` (920px). `#/data` is a two-column grid:
+  storage stats across the top, then retention, clean-up (`.estimate` turns danger-soft when rows
+  would be deleted), compaction and system status. Numbers there are tabular sans, not mono.

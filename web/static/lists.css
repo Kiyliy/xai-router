@@ -113,3 +113,10 @@ a.link .cred-name { color: inherit; }
   .modal-footer .footer-check { flex-basis: 100%; }
 }
 .num-inline { font-variant-numeric: tabular-nums; }
+
+/* v0.4.0 polish: "name · prefix" in the logs table — the name keeps priority, the prefix gives way first */
+.table-logs .truncate-cell { max-width: 210px; }
+.table-logs .m-who .cred { display: flex; }
+.table-logs .m-who .cred-name { flex: 0 1 auto; }
+.table-logs .m-who .cred-prefix { flex: 0 100 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 1360px) { .table-logs .truncate-cell { max-width: 160px; } }

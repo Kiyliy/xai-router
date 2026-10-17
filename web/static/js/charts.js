@@ -253,7 +253,8 @@ export function sparkline(values, color = 'var(--accent)') {
   const max = Math.max(...values), lo = Math.min(...values);
   const min = lo > 0 && (max - lo) / max < 0.5 ? lo - (max - lo) * 0.5 : 0; // zoom in on narrow ranges (e.g. success rate)
   const span = max - min || 1;
-  const pts = values.map((v, i) => [(i / (n - 1)) * W, H - 2 - (((v || 0) - min) / span) * (H - 8)]);
+  const flat = max === lo; // a constant series sits mid-height instead of on the bottom edge
+  const pts = values.map((v, i) => [(i / (n - 1)) * W, flat ? H / 2 : H - 2 - (((v || 0) - min) / span) * (H - 8)]);
   const line = smoothPath(pts);
   const gid = `sp${Math.random().toString(36).slice(2, 8)}`;
   svg.appendChild(s('defs', null, s('linearGradient', { id: gid, x1: 0, y1: 0, x2: 0, y2: 1 },
