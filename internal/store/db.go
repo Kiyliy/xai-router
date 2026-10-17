@@ -340,6 +340,14 @@ CREATE INDEX idx_logs_upstream ON request_logs(upstream_id);
 	`
 CREATE INDEX idx_logs_errored ON request_logs(created_at) WHERE error <> '';
 `,
+	// v5: resolution-tiered video prices and media input prices; the request
+	// parameters an async job is priced by.
+	`
+ALTER TABLE models ADD COLUMN video_tiers TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE models ADD COLUMN input_image_ticks INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE models ADD COLUMN input_video_ticks_per_sec INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE bindings ADD COLUMN price_meta TEXT NOT NULL DEFAULT '';
+`,
 }
 
 func (db *DB) migrate(ctx context.Context) error {

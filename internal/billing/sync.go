@@ -121,15 +121,20 @@ func (s *Syncer) Sync(ctx context.Context, baseURL, apiKey string, overwriteManu
 	}
 	for _, m := range vid.Models {
 		raw, _ := json.Marshal(m)
-		price := USDToTicks(VideoPrices[m.ID])
-		if old := existing[m.ID]; old != nil && old.VideoTicksPerSec > 0 && (price == 0 || old.Source == "manual") {
-			price = old.VideoTicksPerSec
+		v := &store.Model{ID: m.ID, Kind: "video", Aliases: m.Aliases, Raw: string(raw)}
+		if old := existing[m.ID]; old != nil && builtinModel(m.ID) == nil {
+			// Prices of a video model unknown to the built-in table are kept.
+			v.VideoTicksPerSec, v.VideoTiers = old.VideoTicksPerSec, old.VideoTiers
+			v.InputImageTicks, v.InputVideoTicksPerSec = old.InputImageTicks, old.InputVideoTicksPerSec
 		}
-		incoming = append(incoming, &store.Model{ID: m.ID, Kind: "video", Aliases: m.Aliases, VideoTicksPerSec: price, Raw: string(raw)})
+		incoming = append(incoming, v)
 	}
 	for _, m := range emb.Models {
 		raw, _ := json.Marshal(m)
 		incoming = append(incoming, &store.Model{ID: m.ID, Kind: "embedding", Aliases: m.Aliases, Raw: string(raw)})
+	}
+	for _, m := range incoming {
+		FillMediaPrices(m)
 	}
 	for _, m := range incoming {
 		old := existing[m.ID]
@@ -173,7 +178,9 @@ func samePrices(a, b *store.Model) bool {
 		a.LongInputTicks != b.LongInputTicks || a.LongCachedTicks != b.LongCachedTicks ||
 		a.LongOutputTicks != b.LongOutputTicks || a.ImageTicks != b.ImageTicks ||
 		a.VideoTicksPerSec != b.VideoTicksPerSec || a.ContextLength != b.ContextLength ||
-		len(a.Aliases) != len(b.Aliases) || len(a.ImageTiers) != len(b.ImageTiers) {
+		a.InputImageTicks != b.InputImageTicks || a.InputVideoTicksPerSec != b.InputVideoTicksPerSec ||
+		!sameTiers(a.ImageTiers, b.ImageTiers) || !sameTiers(a.VideoTiers, b.VideoTiers) ||
+		len(a.Aliases) != len(b.Aliases) {
 		return false
 	}
 	for i := range a.Aliases {
@@ -181,8 +188,15 @@ func samePrices(a, b *store.Model) bool {
 			return false
 		}
 	}
-	for i := range a.ImageTiers {
-		if a.ImageTiers[i] != b.ImageTiers[i] {
+	return true
+}
+
+func sameTiers(a, b []store.ImageTier) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
 			return false
 		}
 	}
@@ -212,11 +226,22 @@ func (s *Syncer) get(ctx context.Context, url, apiKey string, dst any) error {
 	return json.Unmarshal(body, dst)
 }
 
-// SeedBuiltin inserts built-in models that are not in the database yet.
+// SeedBuiltin inserts built-in models that are not in the database yet, and
+// completes synced or built-in media models with prices added in later
+// versions (resolution tiers, input prices). Manual edits are kept.
 func SeedBuiltin(ctx context.Context, db *store.DB) error {
 	for _, m := range BuiltinModels() {
-		if _, err := db.GetModel(ctx, m.ID); err == nil {
-			continue
+		old, err := db.GetModel(ctx, m.ID)
+		if err == nil {
+			if old.Source == "manual" {
+				continue
+			}
+			before := *old
+			FillMediaPrices(old)
+			if samePrices(&before, old) {
+				continue
+			}
+			m = old
 		}
 		if err := db.UpsertModel(ctx, m); err != nil {
 			return err

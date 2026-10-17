@@ -826,16 +826,27 @@ components:
         long_input_price: { type: number }
         long_cached_input_price: { type: number }
         long_output_price: { type: number }
-        image_price: { type: number, description: USD per generated image }
+        image_price: { type: number, description: "USD per generated image when no tier matches (the default tier's price)" }
         image_tiers:
           type: array
+          description: "Per-image price by resolution (1k, 1.5k, 2k) and, optionally, quality. Requests without a resolution use 1k."
           items:
             type: object
             properties:
-              quality: { type: string }
+              quality: { type: string, description: "Empty when only the resolution matters" }
               resolution: { type: string }
               price: { type: number }
-        video_price_per_second: { type: number }
+        video_price_per_second: { type: number, description: "USD per second when no tier matches" }
+        video_tiers:
+          type: array
+          description: "Per-second price by resolution (480p, 720p, 1080p). Requests without a resolution use 480p."
+          items:
+            type: object
+            properties:
+              resolution: { type: string }
+              price_per_second: { type: number }
+        input_image_price: { type: number, description: "USD per input image (image edits, image-to-video, reference images, keyframes)" }
+        input_video_price_per_second: { type: number, description: "USD per second of input video (video edits)" }
         synced_at: { type: string, format: date-time, nullable: true }
         updated_at: { type: string, format: date-time }
     SyncResult:

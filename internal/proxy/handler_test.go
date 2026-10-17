@@ -648,3 +648,65 @@ func TestBindingCreatedForDeferredChat(t *testing.T) {
 		t.Fatalf("binding %+v %v", b, err)
 	}
 }
+
+// Acceptance E2: without an upstream cost, media is priced at the requested
+// resolution plus input fees, and the job's quota hold uses the same tier.
+func TestMediaTierPricing(t *testing.T) {
+	hs := newHarness(t, nil)
+	var done atomic.Bool
+	up := newMockUp(t, nil)
+	up.set(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/v1/images/generations" || r.URL.Path == "/v1/images/edits":
+			_, _ = io.WriteString(w, `{"data":[{"url":"https://x/1.png"}]}`)
+		case r.Method == http.MethodPost:
+			_, _ = io.WriteString(w, `{"request_id":"vid-720"}`)
+		case !done.Load():
+			_, _ = io.WriteString(w, `{"status":"pending"}`)
+		default:
+			_, _ = io.WriteString(w, `{"status":"done","video":{"url":"https://x/v.mp4","duration":5}}`)
+		}
+	})
+	hs.addKey("a", up.srv.URL, nil)
+	raw, tok := hs.addToken("quota", func(t *store.Token) { t.QuotaTicks = billing.USDToTicks(10) })
+
+	// grok-imagine-image-quality at 2k: $0.07 (not the 1k $0.05).
+	if resp, b := hs.doAs(raw, http.MethodPost, "/v1/images/generations",
+		`{"model":"grok-imagine-image-quality","prompt":"x","n":1,"resolution":"2k"}`); resp.StatusCode != 200 {
+		t.Fatalf("%d %s", resp.StatusCode, b)
+	}
+	if l := hs.lastLog(1); l.CostTicks != 700_000_000 || l.CostSource != "computed" {
+		t.Fatalf("2k image: %d %s", l.CostTicks, l.CostSource)
+	}
+	// Image edit with two input images: $0.02 + 2 × $0.002.
+	if resp, b := hs.doAs(raw, http.MethodPost, "/v1/images/edits",
+		`{"model":"grok-imagine-image","prompt":"x","images":[{"url":"https://x/a.png"},{"url":"https://x/b.png"}]}`); resp.StatusCode != 200 {
+		t.Fatalf("%d %s", resp.StatusCode, b)
+	}
+	if l := hs.lastLog(2); l.CostTicks != 200_000_000+2*20_000_000 {
+		t.Fatalf("edit: %d", l.CostTicks)
+	}
+
+	// grok-imagine-video-1.5, 720p, 5 s, image to video: 5 × $0.14 + $0.01.
+	before := hs.h.Quota.Remaining(tok)
+	if resp, b := hs.doAs(raw, http.MethodPost, "/v1/videos/generations",
+		`{"model":"grok-imagine-video-1.5","prompt":"x","duration":5,"resolution":"720p","image":{"url":"https://x/i.png"}}`); resp.StatusCode != 200 {
+		t.Fatalf("%d %s", resp.StatusCode, b)
+	}
+	hs.waitLogs(3)
+	want := int64(5*1_400_000_000 + 100_000_000)
+	if got := before - hs.h.Quota.Remaining(tok); got != want {
+		t.Fatalf("hold %d want %d", got, want)
+	}
+	done.Store(true)
+	if resp, _ := hs.doAs(raw, http.MethodGet, "/v1/videos/vid-720", ""); resp.StatusCode != 200 {
+		t.Fatal(resp.Status)
+	}
+	if l := hs.lastLog(4); l.CostTicks != want || l.CostSource != "computed" || l.VideoSeconds != 5 {
+		t.Fatalf("video poll: %d %s %v", l.CostTicks, l.CostSource, l.VideoSeconds)
+	}
+	if got := before - hs.h.Quota.Remaining(tok); got != want {
+		t.Fatalf("after billing %d want %d", got, want)
+	}
+}

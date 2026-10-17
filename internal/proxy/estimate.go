@@ -43,13 +43,29 @@ func (st *state) estimate(method, path string) int64 {
 		for _, t := range m.ImageTiers {
 			price = max(price, t.Ticks)
 		}
-		return n * price
+		return n*price + st.info.InputImages*m.InputImageTicks
 	case strings.HasPrefix(path, "/v1/videos/"):
 		secs := st.info.Duration
-		if secs <= 0 {
+		if secs <= 0 || path != "/v1/videos/generations" {
+			// Edits keep the input's length and extensions add to it; neither
+			// sets a duration, so assume the longest.
 			secs = defaultVideoSeconds
+			if path != "/v1/videos/generations" {
+				secs = maxVideoSeconds
+			}
 		}
-		return min(secs, maxVideoSeconds) * m.VideoTicksPerSec
+		secs = min(secs, maxVideoSeconds)
+		// Reserve at the requested resolution's price (the highest when the
+		// resolution is not one of the model's tiers).
+		price := billing.VideoPrice(m, st.info.Resolution)
+		if !billing.HasVideoTier(m, st.info.Resolution) {
+			price = billing.MaxVideoPrice(m)
+		}
+		cost := secs*price + st.info.InputImages*m.InputImageTicks
+		if path == "/v1/videos/edits" {
+			cost += secs * m.InputVideoTicksPerSec
+		}
+		return cost
 	case m.Kind == "language":
 		return languageEstimate(m, int64(len(st.reqBody)), st.info.MaxTokens, st.info.ServiceTier) +
 			toolAllowance(st.reqBody)

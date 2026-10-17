@@ -102,9 +102,16 @@ func (t *Table) Cheapest() string {
 
 // Request carries request parameters that influence media prices.
 type Request struct {
-	Quality    string
-	Resolution string
-	Edit       bool // image edit (default quality differs from generation)
+	Quality    string `json:"quality,omitempty"`
+	Resolution string `json:"resolution,omitempty"`
+	Edit       bool   `json:"edit,omitempty"` // image edit (default quality differs from generation)
+	// VideoEdit marks a video edit: its input video is as long as the output,
+	// so InputVideoSeconds defaults to the generated seconds.
+	VideoEdit bool `json:"video_edit,omitempty"`
+	// Media inputs: images attached to an image edit or video request, and
+	// seconds of input video (video edits).
+	InputImages       int64   `json:"input_images,omitempty"`
+	InputVideoSeconds float64 `json:"input_video_seconds,omitempty"`
 }
 
 // Cost prices usage. Upstream-reported cost always wins; otherwise the price
@@ -119,10 +126,13 @@ func (t *Table) Cost(model string, u Usage, req Request) (int64, string) {
 	}
 	var cost int64
 	switch {
-	case u.VideoSeconds > 0 && m.VideoTicksPerSec > 0:
-		cost = int64(math.Round(u.VideoSeconds * float64(m.VideoTicksPerSec)))
+	case u.VideoSeconds > 0 && (m.VideoTicksPerSec > 0 || len(m.VideoTiers) > 0):
+		if req.VideoEdit && req.InputVideoSeconds == 0 {
+			req.InputVideoSeconds = u.VideoSeconds
+		}
+		cost = int64(math.Round(u.VideoSeconds*float64(VideoPrice(m, req.Resolution)))) + inputCost(m, req)
 	case u.Images > 0 && (m.ImageTicks > 0 || len(m.ImageTiers) > 0):
-		cost = u.Images * imagePrice(m, req)
+		cost = u.Images*imagePrice(m, req) + inputCost(m, req)
 	default:
 		cost = tokenCost(m, u)
 	}
@@ -132,14 +142,78 @@ func (t *Table) Cost(model string, u Usage, req Request) (int64, string) {
 	return cost, "computed"
 }
 
-// imagePrice picks the per-image price. Models with quality/resolution tiers
-// (grok-imagine-image-2.0) default to resolution 1k and quality "auto", which
-// xAI serves as low for generations and medium for edits.
+// inputCost is the fee for media inputs (per input image, per second of
+// input video).
+func inputCost(m *store.Model, req Request) int64 {
+	return req.InputImages*m.InputImageTicks + int64(math.Round(req.InputVideoSeconds*float64(m.InputVideoTicksPerSec)))
+}
+
+// Default resolutions when a request sets none (docs.x.ai).
+const (
+	DefaultImageResolution = "1k"
+	DefaultVideoResolution = "480p"
+)
+
+// normRes normalises a resolution parameter: "2K" → "2k", "720" → "720p".
+func normRes(res string, video bool) string {
+	res = strings.ToLower(strings.TrimSpace(res))
+	if video && res != "" && strings.Trim(res, "0123456789") == "" {
+		res += "p"
+	}
+	return res
+}
+
+// VideoPrice is the per-second price for the requested resolution: the
+// matching tier, else the base price.
+func VideoPrice(m *store.Model, resolution string) int64 {
+	res := normRes(resolution, true)
+	if res == "" {
+		res = DefaultVideoResolution
+	}
+	for _, tr := range m.VideoTiers {
+		if normRes(tr.Resolution, true) == res {
+			return tr.Ticks
+		}
+	}
+	return m.VideoTicksPerSec
+}
+
+// HasVideoTier reports whether resolution (default 480p) has its own price,
+// or the model has no tiers at all.
+func HasVideoTier(m *store.Model, resolution string) bool {
+	if len(m.VideoTiers) == 0 {
+		return true
+	}
+	res := normRes(resolution, true)
+	if res == "" {
+		res = DefaultVideoResolution
+	}
+	for _, tr := range m.VideoTiers {
+		if normRes(tr.Resolution, true) == res {
+			return true
+		}
+	}
+	return false
+}
+
+// MaxVideoPrice is the highest per-second price of a model (reservations).
+func MaxVideoPrice(m *store.Model) int64 {
+	p := m.VideoTicksPerSec
+	for _, tr := range m.VideoTiers {
+		p = max(p, tr.Ticks)
+	}
+	return p
+}
+
+// imagePrice picks the per-image price. Tiers match on resolution (default
+// 1k) and, when a tier names one, quality: grok-imagine-image-2.0 defaults to
+// quality "auto", which xAI serves as low for generations and medium for
+// edits.
 func imagePrice(m *store.Model, req Request) int64 {
 	if len(m.ImageTiers) == 0 {
 		return m.ImageTicks
 	}
-	q, res := strings.ToLower(req.Quality), strings.ToLower(req.Resolution)
+	q, res := strings.ToLower(req.Quality), normRes(req.Resolution, false)
 	if q == "" || q == "auto" {
 		q = "low"
 		if req.Edit {
@@ -147,10 +221,10 @@ func imagePrice(m *store.Model, req Request) int64 {
 		}
 	}
 	if res == "" {
-		res = "1k"
+		res = DefaultImageResolution
 	}
 	for _, tr := range m.ImageTiers {
-		if strings.EqualFold(tr.Quality, q) && strings.EqualFold(tr.Resolution, res) {
+		if (tr.Quality == "" || strings.EqualFold(tr.Quality, q)) && normRes(tr.Resolution, false) == res {
 			return tr.Ticks
 		}
 	}

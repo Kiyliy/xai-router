@@ -19,6 +19,9 @@ type Binding struct {
 	Billed     bool
 	CreatedAt  int64
 	ExpiresAt  int64
+	// PriceMeta holds the submission parameters an async job is priced by
+	// when the upstream reports no cost (JSON, see billing.Request).
+	PriceMeta string
 }
 
 // Bindings are written on the request path (every /v1/responses call
@@ -131,10 +134,10 @@ func (db *DB) PutBinding(ctx context.Context, b *Binding) error {
 }
 
 func (db *DB) putBindingDB(ctx context.Context, b *Binding) error {
-	_, err := db.W.ExecContext(ctx, `INSERT INTO bindings (resource_id, kind, key_id, token_id, model, billed, created_at, expires_at)
-VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(resource_id) DO UPDATE SET kind=excluded.kind, key_id=excluded.key_id,
-token_id=excluded.token_id, model=excluded.model, billed=MAX(billed, excluded.billed), expires_at=excluded.expires_at`,
-		b.ResourceID, b.Kind, b.KeyID, nullID(b.TokenID), b.Model, boolInt(b.Billed), b.CreatedAt, b.ExpiresAt)
+	_, err := db.W.ExecContext(ctx, `INSERT INTO bindings (resource_id, kind, key_id, token_id, model, billed, created_at, expires_at, price_meta)
+VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(resource_id) DO UPDATE SET kind=excluded.kind, key_id=excluded.key_id,
+token_id=excluded.token_id, model=excluded.model, billed=MAX(billed, excluded.billed), expires_at=excluded.expires_at, price_meta=excluded.price_meta`,
+		b.ResourceID, b.Kind, b.KeyID, nullID(b.TokenID), b.Model, boolInt(b.Billed), b.CreatedAt, b.ExpiresAt, b.PriceMeta)
 	return err
 }
 
@@ -157,9 +160,9 @@ func (db *DB) GetBinding(ctx context.Context, id string) (*Binding, error) {
 	}
 	var b Binding
 	var billed int
-	err := db.R.QueryRowContext(ctx, `SELECT resource_id, kind, key_id, COALESCE(token_id,0), model, billed, created_at, expires_at
+	err := db.R.QueryRowContext(ctx, `SELECT resource_id, kind, key_id, COALESCE(token_id,0), model, billed, created_at, expires_at, price_meta
 FROM bindings WHERE resource_id = ? AND expires_at > ?`, id, NowMs()).
-		Scan(&b.ResourceID, &b.Kind, &b.KeyID, &b.TokenID, &b.Model, &billed, &b.CreatedAt, &b.ExpiresAt)
+		Scan(&b.ResourceID, &b.Kind, &b.KeyID, &b.TokenID, &b.Model, &billed, &b.CreatedAt, &b.ExpiresAt, &b.PriceMeta)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

@@ -16,6 +16,10 @@ func modelJSON(m *store.Model) map[string]any {
 	for _, t := range m.ImageTiers {
 		tiers = append(tiers, map[string]any{"quality": t.Quality, "resolution": t.Resolution, "price": usd(t.Ticks)})
 	}
+	vtiers := make([]map[string]any, 0, len(m.VideoTiers))
+	for _, t := range m.VideoTiers {
+		vtiers = append(vtiers, map[string]any{"resolution": t.Resolution, "price_per_second": usd(t.Ticks)})
+	}
 	pm := billing.TicksToUSDPerMillion
 	return map[string]any{
 		"id": m.ID, "kind": m.Kind, "aliases": m.Aliases, "enabled": m.Enabled, "source": m.Source,
@@ -25,7 +29,9 @@ func modelJSON(m *store.Model) map[string]any {
 		"long_context_threshold": m.LongThreshold, "long_input_price": pm(m.LongInputTicks),
 		"long_cached_input_price": pm(m.LongCachedTicks), "long_output_price": pm(m.LongOutputTicks),
 		"image_price": usd(m.ImageTicks), "image_tiers": tiers, "video_price_per_second": usd(m.VideoTicksPerSec),
-		"synced_at": msTime(m.SyncedAt), "updated_at": msTime(m.UpdatedAt),
+		"video_tiers": vtiers, "input_image_price": usd(m.InputImageTicks),
+		"input_video_price_per_second": usd(m.InputVideoTicksPerSec),
+		"synced_at":                    msTime(m.SyncedAt), "updated_at": msTime(m.UpdatedAt),
 	}
 }
 
@@ -50,9 +56,15 @@ type modelInput struct {
 		Resolution string  `json:"resolution"`
 		Price      float64 `json:"price"`
 	} `json:"image_tiers"`
-	VideoPricePerSecond *float64        `json:"video_price_per_second"`
-	SyncedAt            json.RawMessage `json:"synced_at"`  // read-only, ignored
-	UpdatedAt           json.RawMessage `json:"updated_at"` // read-only, ignored
+	VideoPricePerSecond *float64 `json:"video_price_per_second"`
+	VideoTiers          *[]struct {
+		Resolution     string  `json:"resolution"`
+		PricePerSecond float64 `json:"price_per_second"`
+	} `json:"video_tiers"`
+	InputImagePrice          *float64        `json:"input_image_price"`
+	InputVideoPricePerSecond *float64        `json:"input_video_price_per_second"`
+	SyncedAt                 json.RawMessage `json:"synced_at"`  // read-only, ignored
+	UpdatedAt                json.RawMessage `json:"updated_at"` // read-only, ignored
 }
 
 func (in *modelInput) apply(m *store.Model) string {
@@ -97,15 +109,36 @@ func (in *modelInput) apply(m *store.Model) string {
 	if in.VideoPricePerSecond != nil {
 		m.VideoTicksPerSec = billing.USDToTicks(*in.VideoPricePerSecond)
 	}
+	if in.VideoTiers != nil {
+		m.VideoTiers = m.VideoTiers[:0:0]
+		for _, t := range *in.VideoTiers {
+			m.VideoTiers = append(m.VideoTiers, store.ImageTier{Resolution: t.Resolution, Ticks: billing.USDToTicks(t.PricePerSecond)})
+		}
+	}
+	if in.InputImagePrice != nil {
+		m.InputImageTicks = billing.USDToTicks(*in.InputImagePrice)
+	}
+	if in.InputVideoPricePerSecond != nil {
+		m.InputVideoTicksPerSec = billing.USDToTicks(*in.InputVideoPricePerSecond)
+	}
 	switch m.Kind {
 	case "language", "image", "video", "embedding":
 	default:
 		return "kind must be language, image, video or embedding"
 	}
 	for _, v := range []int64{m.InputTicks, m.CachedTicks, m.ImageInputTicks, m.OutputTicks, m.LongInputTicks,
-		m.LongCachedTicks, m.LongOutputTicks, m.ImageTicks, m.VideoTicksPerSec, m.LongThreshold} {
+		m.LongCachedTicks, m.LongOutputTicks, m.ImageTicks, m.VideoTicksPerSec, m.LongThreshold, m.InputImageTicks,
+		m.InputVideoTicksPerSec} {
 		if v < 0 {
 			return "prices must be >= 0"
+		}
+	}
+	for _, t := range append(append([]store.ImageTier{}, m.ImageTiers...), m.VideoTiers...) {
+		if t.Ticks < 0 {
+			return "prices must be >= 0"
+		}
+		if strings.TrimSpace(t.Resolution) == "" {
+			return "every price tier needs a resolution"
 		}
 	}
 	m.Source = "manual"

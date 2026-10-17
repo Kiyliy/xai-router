@@ -77,6 +77,7 @@ type reqInfo struct {
 	Ambiguous          bool   // the model could not be determined reliably
 	N                  int64
 	Duration           int64
+	InputImages        int64 // images attached to an image edit or video request
 	ServiceTier        string
 }
 
@@ -92,9 +93,10 @@ type state struct {
 	ttfbSet    bool
 	attempts   []store.Attempt
 	res        *quota.Reservation
-	jobID      string // async job created by this request (quota hold)
-	preCharged int64  // cost already booked against the quota (WebSocket sessions)
-	lastErrSig string // last client-class upstream error (status + message)
+	jobID      string           // async job created by this request (quota hold)
+	priceReq   *billing.Request // pricing parameters of the job a poll finishes
+	preCharged int64            // cost already booked against the quota (WebSocket sessions)
+	lastErrSig string           // last client-class upstream error (status + message)
 }
 
 // echo lists client-supplied values that upstream errors may repeat back;
@@ -602,6 +604,10 @@ func (st *state) handleBody(r *http.Request, body []byte) {
 			if st.log.Model == "" {
 				st.log.Model = b.Model
 			}
+			var pr billing.Request
+			if b.PriceMeta != "" && json.Unmarshal([]byte(b.PriceMeta), &pr) == nil {
+				st.priceReq = &pr // priced by the submission's resolution and inputs
+			}
 			first, err := st.h.DB.MarkBindingBilled(r.Context(), id)
 			if err == nil && !first {
 				st.h.Log.Debug("async job already billed", "kind", kind, "id", id)
@@ -662,8 +668,18 @@ func (st *state) applyUsage(u billing.Usage) {
 	l.PromptTokens, l.CompletionTokens, l.CachedTokens = u.PromptTokens, u.CompletionTokens, u.CachedTokens
 	l.ReasoningTokens, l.ImageTokens, l.TotalTokens = u.ReasoningTokens, u.ImageTokens, u.TotalTokens
 	l.Images, l.VideoSeconds = u.Images, u.VideoSeconds
-	l.CostTicks, l.CostSource = st.h.Prices.Cost(l.Model, u, billing.Request{
-		Quality: st.info.Quality, Resolution: st.info.Resolution, Edit: st.log.Path == "/v1/images/edits"})
+	l.CostTicks, l.CostSource = st.h.Prices.Cost(l.Model, u, st.pricingRequest())
+}
+
+// pricingRequest returns the parameters media prices depend on: those of an
+// async job's submission when billing its finished poll, else this request's.
+func (st *state) pricingRequest() billing.Request {
+	if st.priceReq != nil {
+		return *st.priceReq
+	}
+	return billing.Request{Quality: st.info.Quality, Resolution: st.info.Resolution,
+		Edit: st.log.Path == "/v1/images/edits", VideoEdit: st.log.Path == "/v1/videos/edits",
+		InputImages: st.info.InputImages}
 }
 
 // applyEstimatedUsage bills a stream that ended without usage: prompt tokens
@@ -691,6 +707,10 @@ func (st *state) bind(kind, id string) {
 	ttl := time.Duration(st.s.TaskBindingTTLHours) * time.Hour
 	b := &store.Binding{ResourceID: id, Kind: kind, KeyID: st.log.KeyID, TokenID: st.log.TokenID,
 		Model: st.log.Model, ExpiresAt: time.Now().Add(ttl).UnixMilli()}
+	if kind == KindVideo || kind == KindImage {
+		meta, _ := json.Marshal(st.pricingRequest())
+		b.PriceMeta = string(meta)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := st.h.DB.PutBinding(ctx, b); err != nil {
@@ -924,6 +944,7 @@ func parseRequest(contentType string, body []byte) reqInfo {
 	if ri.Duration == 0 {
 		ri.Duration = number("seconds")
 	}
+	ri.InputImages = countInputImages(m)
 	return ri
 }
 
@@ -954,6 +975,9 @@ func parseMultipart(boundary string, body []byte) reqInfo {
 					ri.Ambiguous = true
 				}
 			}
+		}
+		if p.FileName() != "" && strings.HasPrefix(strings.ToLower(name), "image") {
+			ri.InputImages++
 		}
 		if p.FileName() == "" {
 			switch name {
@@ -1131,3 +1155,24 @@ func firstNonEmpty(v ...string) string {
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+// countInputImages counts the media inputs of an image edit or video
+// request that xAI bills per image: image / images, reference_images,
+// last_frame and keyframes.
+func countInputImages(m map[string]json.RawMessage) int64 {
+	count := func(k string) int64 {
+		raw := bytes.TrimSpace(m[k])
+		if len(raw) == 0 || string(raw) == "null" || string(raw) == `""` {
+			return 0
+		}
+		if raw[0] == '[' {
+			var a []json.RawMessage
+			if json.Unmarshal(raw, &a) != nil {
+				return 0
+			}
+			return int64(len(a))
+		}
+		return 1
+	}
+	return count("image") + count("images") + count("reference_images") + count("last_frame") + count("keyframes")
+}

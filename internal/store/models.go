@@ -7,7 +7,9 @@ import (
 	"errors"
 )
 
-// ImageTier is a quality/resolution specific image price.
+// ImageTier is a quality/resolution specific price: per image for image
+// models (Quality may be empty when only the resolution matters), per second
+// for video models (VideoTiers; Quality unused).
 type ImageTier struct {
 	Quality    string `json:"quality"`
 	Resolution string `json:"resolution"`
@@ -34,22 +36,27 @@ type Model struct {
 	ImageTicks       int64
 	ImageTiers       []ImageTier
 	VideoTicksPerSec int64
-	Raw              string
-	SyncedAt         int64
-	UpdatedAt        int64
+	VideoTiers       []ImageTier // per-second price by resolution
+	// Media input prices: per input image, per second of input video.
+	InputImageTicks       int64
+	InputVideoTicksPerSec int64
+	Raw                   string
+	SyncedAt              int64
+	UpdatedAt             int64
 }
 
 const modelCols = `id, kind, aliases, enabled, source, context_length, input_ticks, cached_ticks, image_input_ticks,
 output_ticks, long_threshold, long_input_ticks, long_cached_ticks, long_output_ticks, image_ticks, image_tiers,
-video_ticks_per_sec, raw, synced_at, updated_at`
+video_ticks_per_sec, raw, synced_at, updated_at, video_tiers, input_image_ticks, input_video_ticks_per_sec`
 
 func scanModel(s interface{ Scan(...any) error }) (*Model, error) {
 	var m Model
-	var aliases, tiers string
+	var aliases, tiers, vtiers string
 	var en int
 	err := s.Scan(&m.ID, &m.Kind, &aliases, &en, &m.Source, &m.ContextLength, &m.InputTicks, &m.CachedTicks,
 		&m.ImageInputTicks, &m.OutputTicks, &m.LongThreshold, &m.LongInputTicks, &m.LongCachedTicks, &m.LongOutputTicks,
-		&m.ImageTicks, &tiers, &m.VideoTicksPerSec, &m.Raw, &m.SyncedAt, &m.UpdatedAt)
+		&m.ImageTicks, &tiers, &m.VideoTicksPerSec, &m.Raw, &m.SyncedAt, &m.UpdatedAt, &vtiers,
+		&m.InputImageTicks, &m.InputVideoTicksPerSec)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -59,11 +66,15 @@ func scanModel(s interface{ Scan(...any) error }) (*Model, error) {
 	m.Enabled = en == 1
 	_ = json.Unmarshal([]byte(aliases), &m.Aliases)
 	_ = json.Unmarshal([]byte(tiers), &m.ImageTiers)
+	_ = json.Unmarshal([]byte(vtiers), &m.VideoTiers)
 	if m.Aliases == nil {
 		m.Aliases = []string{}
 	}
 	if m.ImageTiers == nil {
 		m.ImageTiers = []ImageTier{}
+	}
+	if m.VideoTiers == nil {
+		m.VideoTiers = []ImageTier{}
 	}
 	return &m, nil
 }
@@ -106,17 +117,24 @@ func (db *DB) UpsertModel(ctx context.Context, m *Model) error {
 		tiers = []ImageTier{}
 	}
 	tj, _ := json.Marshal(tiers)
-	_, err := db.W.ExecContext(ctx, `INSERT INTO models (`+modelCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	vt := m.VideoTiers
+	if vt == nil {
+		vt = []ImageTier{}
+	}
+	vj, _ := json.Marshal(vt)
+	_, err := db.W.ExecContext(ctx, `INSERT INTO models (`+modelCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, aliases=excluded.aliases, enabled=excluded.enabled,
 source=excluded.source, context_length=excluded.context_length, input_ticks=excluded.input_ticks,
 cached_ticks=excluded.cached_ticks, image_input_ticks=excluded.image_input_ticks, output_ticks=excluded.output_ticks,
 long_threshold=excluded.long_threshold, long_input_ticks=excluded.long_input_ticks,
 long_cached_ticks=excluded.long_cached_ticks, long_output_ticks=excluded.long_output_ticks,
 image_ticks=excluded.image_ticks, image_tiers=excluded.image_tiers, video_ticks_per_sec=excluded.video_ticks_per_sec,
-raw=excluded.raw, synced_at=excluded.synced_at, updated_at=excluded.updated_at`,
+raw=excluded.raw, synced_at=excluded.synced_at, updated_at=excluded.updated_at, video_tiers=excluded.video_tiers,
+input_image_ticks=excluded.input_image_ticks, input_video_ticks_per_sec=excluded.input_video_ticks_per_sec`,
 		m.ID, m.Kind, string(aliases), boolInt(m.Enabled), m.Source, m.ContextLength, m.InputTicks, m.CachedTicks,
 		m.ImageInputTicks, m.OutputTicks, m.LongThreshold, m.LongInputTicks, m.LongCachedTicks, m.LongOutputTicks,
-		m.ImageTicks, string(tj), m.VideoTicksPerSec, m.Raw, m.SyncedAt, m.UpdatedAt)
+		m.ImageTicks, string(tj), m.VideoTicksPerSec, m.Raw, m.SyncedAt, m.UpdatedAt, string(vj),
+		m.InputImageTicks, m.InputVideoTicksPerSec)
 	return err
 }
 

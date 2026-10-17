@@ -27,14 +27,27 @@ var builtinLanguage = []langPrice{
 	{"grok-build-0.1", []string{"grok-code-fast-1", "grok-code-fast", "grok-code-fast-1-0825"}, 256_000, 1.00, 0.20, 2.00, 2.00, 0.40, 4.00, 200_000},
 }
 
+// res builds resolution-only tiers from (resolution, USD) pairs.
+func res(pairs ...any) []store.ImageTier {
+	var out []store.ImageTier
+	for i := 0; i+1 < len(pairs); i += 2 {
+		out = append(out, store.ImageTier{Resolution: pairs[i].(string), Ticks: USDToTicks(pairs[i+1].(float64))})
+	}
+	return out
+}
+
+// Image prices are USD per generated image; inputUSD is per input image
+// (edits). docs.x.ai/developers/pricing, 2026-10-10.
 var builtinImage = []struct {
-	id      string
-	aliases []string
-	usd     float64
-	tiers   []store.ImageTier
+	id       string
+	aliases  []string
+	usd      float64
+	tiers    []store.ImageTier
+	inputUSD float64
 }{
-	{"grok-imagine-image", []string{"grok-imagine-image-2026-03-02"}, 0.02, nil},
-	{"grok-imagine-image-quality", []string{"grok-imagine-image-quality-latest", "grok-imagine-image-pro"}, 0.05, nil},
+	{"grok-imagine-image", []string{"grok-imagine-image-2026-03-02"}, 0.02, res("1k", 0.02, "2k", 0.02), 0.002},
+	{"grok-imagine-image-quality", []string{"grok-imagine-image-quality-latest", "grok-imagine-image-pro"}, 0.05,
+		res("1k", 0.05, "1.5k", 0.06, "2k", 0.07), 0.01},
 	{"grok-imagine-image-2.0", nil, 0.04, []store.ImageTier{
 		{Quality: "low", Resolution: "1k", Ticks: 400_000_000},
 		{Quality: "low", Resolution: "1.5k", Ticks: 500_000_000},
@@ -42,19 +55,24 @@ var builtinImage = []struct {
 		{Quality: "medium", Resolution: "1k", Ticks: 600_000_000},
 		{Quality: "medium", Resolution: "1.5k", Ticks: 700_000_000},
 		{Quality: "medium", Resolution: "2k", Ticks: 800_000_000},
-	}},
+	}, 0.01},
 }
 
-// VideoPrices are USD per second of generated video. The xAI model-list API
-// does not expose them, so sync keeps these values.
-var VideoPrices = map[string]float64{
-	"grok-imagine-video":          0.050,
-	"grok-imagine-video-1.5":      0.080,
-	"grok-imagine-video-1.5-lite": 0.020,
-}
-
-var videoAliases = map[string][]string{
-	"grok-imagine-video-1.5": {"grok-imagine-video-1.5-preview", "grok-imagine-video-1.5-2026-05-30"},
+// builtinVideo holds video prices: USD per second of output by resolution
+// (the first tier, 480p, is the default and base price), per input image and
+// per second of input video. The xAI model-list API does not expose them, so
+// sync keeps these values.
+var builtinVideo = []struct {
+	id                  string
+	aliases             []string
+	tiers               []store.ImageTier
+	inputImageUSD       float64
+	inputVideoUSDPerSec float64
+}{
+	{"grok-imagine-video", nil, res("480p", 0.05, "720p", 0.07), 0.002, 0.01},
+	{"grok-imagine-video-1.5", []string{"grok-imagine-video-1.5-preview", "grok-imagine-video-1.5-2026-05-30"},
+		res("480p", 0.08, "720p", 0.14, "1080p", 0.25), 0.01, 0},
+	{"grok-imagine-video-1.5-lite", nil, res("480p", 0.02, "720p", 0.03, "1080p", 0.14), 0.01, 0},
 }
 
 // BuiltinModels returns the built-in price table.
@@ -71,11 +89,54 @@ func BuiltinModels() []*store.Model {
 	}
 	for _, p := range builtinImage {
 		out = append(out, &store.Model{ID: p.id, Kind: "image", Aliases: p.aliases, Enabled: true, Source: "builtin",
-			ImageTicks: USDToTicks(p.usd), ImageTiers: p.tiers})
+			ImageTicks: USDToTicks(p.usd), ImageTiers: p.tiers, InputImageTicks: USDToTicks(p.inputUSD)})
 	}
-	for _, id := range []string{"grok-imagine-video", "grok-imagine-video-1.5", "grok-imagine-video-1.5-lite"} {
-		out = append(out, &store.Model{ID: id, Kind: "video", Aliases: videoAliases[id], Enabled: true, Source: "builtin",
-			VideoTicksPerSec: USDToTicks(VideoPrices[id])})
+	for _, p := range builtinVideo {
+		out = append(out, &store.Model{ID: p.id, Kind: "video", Aliases: p.aliases, Enabled: true, Source: "builtin",
+			VideoTicksPerSec: p.tiers[0].Ticks, VideoTiers: p.tiers, InputImageTicks: USDToTicks(p.inputImageUSD),
+			InputVideoTicksPerSec: USDToTicks(p.inputVideoUSDPerSec)})
 	}
 	return out
+}
+
+// builtinModel returns the built-in entry for id, or nil.
+func builtinModel(id string) *store.Model {
+	for _, m := range BuiltinModels() {
+		if m.ID == id {
+			return m
+		}
+	}
+	return nil
+}
+
+// FillMediaPrices completes a synced media model with the built-in prices
+// the xAI model-list API does not expose: resolution tiers, video prices and
+// media input prices. A model with resolution/quality tiers is listed at its
+// default tier (1k, quality auto→low), so the base price is the same whether
+// it came from sync or from the built-in table.
+func FillMediaPrices(m *store.Model) {
+	b := builtinModel(m.ID)
+	if b == nil || b.Kind != m.Kind {
+		return
+	}
+	if len(m.ImageTiers) == 0 {
+		m.ImageTiers = b.ImageTiers
+	}
+	if len(m.VideoTiers) == 0 {
+		m.VideoTiers = b.VideoTiers
+	}
+	if m.VideoTicksPerSec == 0 {
+		m.VideoTicksPerSec = b.VideoTicksPerSec
+	}
+	if m.InputImageTicks == 0 {
+		m.InputImageTicks = b.InputImageTicks
+	}
+	if m.InputVideoTicksPerSec == 0 {
+		m.InputVideoTicksPerSec = b.InputVideoTicksPerSec
+	}
+	if m.Kind == "image" && len(m.ImageTiers) > 0 {
+		if p := imagePrice(&store.Model{ImageTiers: m.ImageTiers}, Request{}); p > 0 {
+			m.ImageTicks = p
+		}
+	}
 }

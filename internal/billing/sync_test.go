@@ -131,7 +131,7 @@ func TestSyncAddsUpdatesAndPreserves(t *testing.T) {
 	if got, _ = db.GetModel(ctx, "grok-4.3"); got.Source != "manual" || got.InputTicks != 77 {
 		t.Fatalf("manual model overwritten: %+v", got)
 	}
-	if got, _ = db.GetModel(ctx, "grok-imagine-video"); got.VideoTicksPerSec != USDToTicks(VideoPrices["grok-imagine-video"]) {
+	if got, _ = db.GetModel(ctx, "grok-imagine-video"); got.VideoTicksPerSec != 500_000_000 || len(got.VideoTiers) != 2 || got.InputVideoTicksPerSec != 100_000_000 {
 		t.Fatalf("video price: %+v", got)
 	}
 	if got, _ = db.GetModel(ctx, "vid-unpriced"); got.VideoTicksPerSec != 0 || got.Kind != "video" {

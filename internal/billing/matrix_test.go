@@ -3,7 +3,10 @@ package billing
 import (
 	"fmt"
 	"math"
+	"strings"
 	"testing"
+
+	"github.com/Kiyliy/xai-router/internal/store"
 )
 
 // Acceptance E5: every model class × billing scenario has a case.
@@ -147,5 +150,86 @@ func TestBillingMatrix(t *testing.T) {
 	}
 	if n := len(officialTextPrices); n != 8 {
 		t.Fatal(fmt.Sprint("text model table size ", n))
+	}
+}
+
+// Acceptance E1/E2: resolution tiers and media input prices, typed from
+// docs.x.ai/developers/pricing (2026-10-10) independently of builtin.go.
+var officialImageResTiers = map[string]map[string]float64{ // USD per image
+	"grok-imagine-image":         {"1k": 0.02, "2k": 0.02},
+	"grok-imagine-image-quality": {"1k": 0.05, "1.5k": 0.06, "2k": 0.07},
+}
+
+var officialInputImage = map[string]float64{ // USD per input image
+	"grok-imagine-image":          0.002,
+	"grok-imagine-image-quality":  0.01,
+	"grok-imagine-image-2.0":      0.01,
+	"grok-imagine-video":          0.002,
+	"grok-imagine-video-1.5":      0.01,
+	"grok-imagine-video-1.5-lite": 0.01,
+}
+
+var officialVideoResTiers = map[string]map[string]float64{ // USD per second
+	"grok-imagine-video":          {"480p": 0.05, "720p": 0.07},
+	"grok-imagine-video-1.5":      {"480p": 0.08, "720p": 0.14, "1080p": 0.25},
+	"grok-imagine-video-1.5-lite": {"480p": 0.02, "720p": 0.03, "1080p": 0.14},
+}
+
+func TestMediaTierMatrix(t *testing.T) {
+	tb := table()
+	t.Log("| model | case | expected USD | gateway USD |")
+	check := func(model, name string, u Usage, req Request, want float64) {
+		t.Helper()
+		got, src := tb.Cost(model, u, req)
+		t.Logf("| %s | %s | %.10f | %.10f |", model, name, want, usdOf(got))
+		if src != "computed" || !near(usdOf(got), want) {
+			t.Errorf("%s / %s: got $%.10f (%s), want $%.10f", model, name, usdOf(got), src, want)
+		}
+	}
+	for model, tiers := range officialImageResTiers {
+		for res, price := range tiers {
+			check(model, "2 images "+res, Usage{Found: true, Images: 2}, Request{Resolution: res}, 2*price)
+			check(model, "1 image "+strings.ToUpper(res), Usage{Found: true, Images: 1}, Request{Resolution: strings.ToUpper(res)}, price)
+		}
+	}
+	for model, tiers := range officialVideoResTiers {
+		for res, price := range tiers {
+			check(model, "5 s "+res, Usage{Found: true, VideoSeconds: 5}, Request{Resolution: res}, 5*price)
+		}
+		check(model, "6 s default (480p)", Usage{Found: true, VideoSeconds: 6}, Request{}, 6*tiers["480p"])
+		in := officialInputImage[model]
+		check(model, "image-to-video 5 s 720p", Usage{Found: true, VideoSeconds: 5},
+			Request{Resolution: "720p", InputImages: 1}, 5*tiers["720p"]+in)
+	}
+	// Video edit: the input video (same length as the output) is billed per second.
+	check("grok-imagine-video", "edit 4 s", Usage{Found: true, VideoSeconds: 4}, Request{VideoEdit: true}, 4*0.05+4*0.01)
+	// Image edits: per input image.
+	for _, model := range []string{"grok-imagine-image", "grok-imagine-image-quality"} {
+		check(model, "edit, 2 inputs, 1 output", Usage{Found: true, Images: 1}, Request{Edit: true, InputImages: 2},
+			officialImagePrices[model]+2*officialInputImage[model])
+	}
+	check("grok-imagine-image-2.0", "edit medium 1k, 1 input", Usage{Found: true, Images: 1},
+		Request{Edit: true, InputImages: 1}, 0.06+0.01)
+	// The two cases of the acceptance report.
+	check("grok-imagine-image-quality", "E2 repro: 2k", Usage{Found: true, Images: 1}, Request{Resolution: "2k"}, 0.07)
+	check("grok-imagine-video-1.5", "E2 repro: 720p 5 s", Usage{Found: true, VideoSeconds: 5}, Request{Resolution: "720p"}, 0.70)
+}
+
+func TestBuiltinAndSyncDefaultsAgree(t *testing.T) {
+	// The listed price of a tiered image model is its default tier, whichever
+	// way the model got into the table.
+	for _, m := range BuiltinModels() {
+		if m.Kind != "image" {
+			continue
+		}
+		synced := &store.Model{ID: m.ID, Kind: "image", ImageTicks: 600_000_000, ImageTiers: m.ImageTiers}
+		FillMediaPrices(synced)
+		if synced.ImageTicks != m.ImageTicks || synced.InputImageTicks != m.InputImageTicks {
+			t.Errorf("%s: synced %d/%d, builtin %d/%d", m.ID, synced.ImageTicks, synced.InputImageTicks,
+				m.ImageTicks, m.InputImageTicks)
+		}
+	}
+	if m := builtinModel("grok-imagine-image-2.0"); m.ImageTicks != USDToTicks(officialImagePrices["grok-imagine-image-2.0"]) {
+		t.Errorf("image-2.0 default %d", m.ImageTicks)
 	}
 }
