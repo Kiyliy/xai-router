@@ -1,4 +1,5 @@
 // i18n: English + Simplified Chinese. t('a.b', { n: 1 }) with {placeholder} interpolation.
+import * as lists from './i18n-lists.js';
 const KEY = 'xr.lang';
 
 const en = {
@@ -545,7 +546,9 @@ const zh = {
   'settings.goHeap': 'Go 堆内存', 'settings.goSys': 'Go 内存（系统）', 'settings.goSysHint': 'Go 运行时从操作系统获取的内存', 'settings.goroutines': 'Goroutine 数',
 };
 
-const DICTS = { en, zh };
+// Page-specific dictionaries are kept in their own modules and merged here;
+// keys defined in this file win.
+const DICTS = { en: { ...lists.en, ...en }, zh: { ...lists.zh, ...zh } };
 
 function detect() {
   try { const v = localStorage.getItem(KEY); if (v === 'en' || v === 'zh') return v; } catch { /* ignore */ }
@@ -560,12 +563,12 @@ export function setLang(l) {
 }
 
 /** True when `key` exists in the current (or English) dictionary. */
-export function hasT(key) { return DICTS[lang][key] !== undefined || en[key] !== undefined; }
+export function hasT(key) { return DICTS[lang][key] !== undefined || DICTS.en[key] !== undefined; }
 
 const warned = new Set();
 export function t(key, params) {
   let s = DICTS[lang][key];
-  if (s === undefined) s = en[key];
+  if (s === undefined) s = DICTS.en[key];
   if (s === undefined) {
     if (!warned.has(key)) { warned.add(key); console.warn('[i18n] missing key', key); }
     return key.includes('.') && /^(test|action|costsrc|source)\./.test(key) ? '' : key;
