@@ -366,6 +366,22 @@ DROP INDEX idx_logs_model;
 DROP INDEX idx_logs_key;
 DROP INDEX idx_logs_token;
 `,
+	// v8 (v0.4.0, schema review): upstream keys and client tokens are soft
+	// deleted so their spend, name and prefix stay with the history; a token
+	// usage reset is recorded instead of lost; the key counters are named for
+	// what they count (upstream attempts); the per-image-token price is no
+	// longer one letter away from the per-input-image price; the unused v1
+	// stats table goes. All small tables: no rebuild of the log tables.
+	`
+ALTER TABLE keys ADD COLUMN deleted_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE keys RENAME COLUMN requests TO attempts;
+ALTER TABLE keys RENAME COLUMN errors TO attempt_errors;
+ALTER TABLE tokens ADD COLUMN deleted_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tokens ADD COLUMN reset_ticks INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tokens ADD COLUMN used_reset_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE models RENAME COLUMN image_input_ticks TO image_token_ticks;
+DROP TABLE stats_hourly;
+`,
 }
 
 func (db *DB) migrate(ctx context.Context) error {
@@ -380,6 +396,12 @@ func (db *DB) migrate(ctx context.Context) error {
 		}
 	} else if err != nil {
 		return err
+	}
+	if v > len(migrations) {
+		// An older binary on a newer database would misread it (for example
+		// treat soft-deleted tokens as live): refuse instead.
+		return fmt.Errorf("database schema v%d is newer than this version of xai-router supports (v%d); upgrade xai-router",
+			v, len(migrations))
 	}
 	for i := v; i < len(migrations); i++ {
 		tx, err := db.W.BeginTx(ctx, nil)

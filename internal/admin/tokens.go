@@ -25,6 +25,9 @@ func tokenJSON(t *store.Token) map[string]any {
 		"expires_at": msTime(t.ExpiresAt), "expired": expired, "allowed_models": t.AllowedModels,
 		"requests": t.Requests, "last_used_at": msTime(t.LastUsedAt), "notes": t.Notes,
 		"created_at": msTime(t.CreatedAt), "updated_at": msTime(t.UpdatedAt),
+		// used_usd is the quota usage since the last reset (used_reset_at);
+		// spent_usd is everything the token has spent.
+		"used_reset_at": msTime(t.UsedResetAt), "spent_usd": usd(t.UsedTicks + t.ResetTicks),
 	}
 }
 

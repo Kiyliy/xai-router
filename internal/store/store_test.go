@@ -47,7 +47,7 @@ func TestLogsStatsAndCounters(t *testing.T) {
 		t.Fatalf("stats: %+v", a)
 	}
 	k2, _ := db.GetKey(ctx, k.ID)
-	if k2.Requests != 2 || k2.Errors != 1 || k2.CostTicks != 300 || k2.LastError != "rl" {
+	if k2.Attempts != 2 || k2.AttemptErrors != 1 || k2.CostTicks != 300 || k2.LastError != "rl" {
 		t.Fatalf("key counters: %+v", k2)
 	}
 	t2, _ := db.GetToken(ctx, tok.ID)

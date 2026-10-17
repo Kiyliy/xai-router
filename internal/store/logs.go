@@ -119,7 +119,7 @@ ttfb_ms, latency_ms, started_at) VALUES (?,?,?,?,?,?,?,?,?,?)`)
 		return err
 	}
 	defer insAtt.Close()
-	updKey, err := tx.PrepareContext(ctx, `UPDATE keys SET requests = requests + ?, errors = errors + ?,
+	updKey, err := tx.PrepareContext(ctx, `UPDATE keys SET attempts = attempts + ?, attempt_errors = attempt_errors + ?,
 cost_ticks = cost_ticks + ?, last_used_at = MAX(last_used_at, ?), last_error = CASE WHEN ? <> '' THEN ? ELSE last_error END WHERE id = ?`)
 	if err != nil {
 		return err
@@ -376,6 +376,19 @@ func (db *DB) listLogsPage(ctx context.Context, f LogFilter) (*LogPage, error) {
 		// another filter the planner would rather walk that filter's index
 		// and read every (wide) row to test the error text.
 		from = " FROM request_logs INDEXED BY idx_logs_errsearch"
+	} else if f.Q == "" {
+		// A dimension filter is answered from its covering index (it also
+		// holds the status, path and other dimensions). Combined with a
+		// status filter the planner would otherwise walk the much larger
+		// status index and read a wide row per match. Most selective first.
+		switch {
+		case f.TokenID != 0:
+			from = " FROM request_logs INDEXED BY idx_logs_token_f"
+		case f.KeyID != 0:
+			from = " FROM request_logs INDEXED BY idx_logs_key_f"
+		case f.Model != "":
+			from = " FROM request_logs INDEXED BY idx_logs_model_f"
+		}
 	}
 	// Count first, then fetch the page: logs written in between can only
 	// add rows, so the total never exceeds what the page shows.

@@ -553,7 +553,7 @@ func TestAsyncVideoBindingAndBilling(t *testing.T) {
 		}
 	}
 	// Once the key is gone the job is unavailable.
-	if err := hs.db.DeleteKey(context.Background(), keyA.ID); err != nil {
+	if err := hs.db.DeleteKey(context.Background(), keyA.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	_ = hs.pool.Reload(context.Background())

@@ -106,7 +106,7 @@ func (s *Syncer) Sync(ctx context.Context, baseURL, apiKey string, overwriteManu
 		}
 		raw, _ := json.Marshal(m)
 		incoming = append(incoming, &store.Model{ID: m.ID, Kind: "language", Aliases: m.Aliases, ContextLength: m.ContextLength,
-			InputTicks: m.PromptTextTokenPrice, CachedTicks: m.CachedPromptTokenPrice, ImageInputTicks: m.PromptImageTokenPrice,
+			InputTicks: m.PromptTextTokenPrice, CachedTicks: m.CachedPromptTokenPrice, ImageTokenTicks: m.PromptImageTokenPrice,
 			OutputTicks: m.CompletionTokenPrice, LongThreshold: m.LongContextThreshold, LongInputTicks: m.PromptPriceLong,
 			LongCachedTicks: m.CachedPriceLong, LongOutputTicks: m.CompletionPriceLong, Raw: string(raw)})
 	}
@@ -174,7 +174,7 @@ func (s *Syncer) Sync(ctx context.Context, baseURL, apiKey string, overwriteManu
 
 func samePrices(a, b *store.Model) bool {
 	if a.Kind != b.Kind || a.InputTicks != b.InputTicks || a.CachedTicks != b.CachedTicks ||
-		a.ImageInputTicks != b.ImageInputTicks || a.OutputTicks != b.OutputTicks || a.LongThreshold != b.LongThreshold ||
+		a.ImageTokenTicks != b.ImageTokenTicks || a.OutputTicks != b.OutputTicks || a.LongThreshold != b.LongThreshold ||
 		a.LongInputTicks != b.LongInputTicks || a.LongCachedTicks != b.LongCachedTicks ||
 		a.LongOutputTicks != b.LongOutputTicks || a.ImageTicks != b.ImageTicks ||
 		a.VideoTicksPerSec != b.VideoTicksPerSec || a.ContextLength != b.ContextLength ||

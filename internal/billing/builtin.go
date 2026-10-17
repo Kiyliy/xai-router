@@ -82,7 +82,7 @@ func BuiltinModels() []*store.Model {
 		out = append(out, &store.Model{
 			ID: p.id, Kind: "language", Aliases: p.aliases, Enabled: true, Source: "builtin", ContextLength: p.ctx,
 			InputTicks: USDPerMillionToTicks(p.in), CachedTicks: USDPerMillionToTicks(p.cached),
-			ImageInputTicks: USDPerMillionToTicks(p.in), OutputTicks: USDPerMillionToTicks(p.out),
+			ImageTokenTicks: USDPerMillionToTicks(p.in), OutputTicks: USDPerMillionToTicks(p.out),
 			LongThreshold: p.threshold, LongInputTicks: USDPerMillionToTicks(p.longIn),
 			LongCachedTicks: USDPerMillionToTicks(p.longCached), LongOutputTicks: USDPerMillionToTicks(p.longOut),
 		})

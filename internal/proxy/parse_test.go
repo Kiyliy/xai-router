@@ -308,7 +308,7 @@ func TestEstimate(t *testing.T) {
 }
 
 func TestLanguageEstimate(t *testing.T) {
-	m := &store.Model{ID: "grok-x", InputTicks: 10, ImageInputTicks: 15, OutputTicks: 100,
+	m := &store.Model{ID: "grok-x", InputTicks: 10, ImageTokenTicks: 15, OutputTicks: 100,
 		LongThreshold: 1000, LongInputTicks: 20, LongOutputTicks: 200}
 	nr := &store.Model{ID: "grok-x-non-reasoning", InputTicks: 10, OutputTicks: 100}
 	cases := []struct {

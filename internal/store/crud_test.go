@@ -149,10 +149,10 @@ func TestKeysCRUD(t *testing.T) {
 		t.Fatalf("paging: %d %v", n, page)
 	}
 
-	if err := db.DeleteKey(ctx, c.ID); err != nil {
+	if err := db.DeleteKey(ctx, c.ID, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.DeleteKey(ctx, c.ID); !errors.Is(err, ErrNotFound) {
+	if err := db.DeleteKey(ctx, c.ID, ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("second delete: %v", err)
 	}
 }
@@ -434,7 +434,7 @@ func TestClosedDatabaseErrors(t *testing.T) {
 	_, errs["CountKeys"] = db.CountKeys(ctx)
 	errs["CreateKey"] = db.CreateKey(ctx, &Key{Key: "k"})
 	errs["UpdateKey"] = db.UpdateKey(ctx, &Key{ID: 1})
-	errs["DeleteKey"] = db.DeleteKey(ctx, 1)
+	errs["DeleteKey"] = db.DeleteKey(ctx, 1, "")
 	_, _, errs["ListTokens"] = db.ListTokens(ctx, "", 1, 0)
 	errs["CreateToken"] = db.CreateToken(ctx, &Token{Hash: "x"})
 	errs["UpdateToken"] = db.UpdateToken(ctx, &Token{ID: 1})

@@ -25,7 +25,7 @@ func modelJSON(m *store.Model) map[string]any {
 		"id": m.ID, "kind": m.Kind, "aliases": m.Aliases, "enabled": m.Enabled, "source": m.Source,
 		"context_length": m.ContextLength,
 		"input_price":    pm(m.InputTicks), "cached_input_price": pm(m.CachedTicks),
-		"image_input_price": pm(m.ImageInputTicks), "output_price": pm(m.OutputTicks),
+		"image_input_price": pm(m.ImageTokenTicks), "output_price": pm(m.OutputTicks),
 		"long_context_threshold": m.LongThreshold, "long_input_price": pm(m.LongInputTicks),
 		"long_cached_input_price": pm(m.LongCachedTicks), "long_output_price": pm(m.LongOutputTicks),
 		"image_price": usd(m.ImageTicks), "image_tiers": tiers, "video_price_per_second": usd(m.VideoTicksPerSec),
@@ -88,7 +88,7 @@ func (in *modelInput) apply(m *store.Model) string {
 	}
 	setP(&m.InputTicks, in.InputPrice)
 	setP(&m.CachedTicks, in.CachedInputPrice)
-	setP(&m.ImageInputTicks, in.ImageInputPrice)
+	setP(&m.ImageTokenTicks, in.ImageInputPrice)
 	setP(&m.OutputTicks, in.OutputPrice)
 	setP(&m.LongInputTicks, in.LongInputPrice)
 	setP(&m.LongCachedTicks, in.LongCachedInputPrice)
@@ -126,7 +126,7 @@ func (in *modelInput) apply(m *store.Model) string {
 	default:
 		return "kind must be language, image, video or embedding"
 	}
-	for _, v := range []int64{m.InputTicks, m.CachedTicks, m.ImageInputTicks, m.OutputTicks, m.LongInputTicks,
+	for _, v := range []int64{m.InputTicks, m.CachedTicks, m.ImageTokenTicks, m.OutputTicks, m.LongInputTicks,
 		m.LongCachedTicks, m.LongOutputTicks, m.ImageTicks, m.VideoTicksPerSec, m.LongThreshold, m.InputImageTicks,
 		m.InputVideoTicksPerSec} {
 		if v < 0 {

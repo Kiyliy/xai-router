@@ -51,7 +51,10 @@ func (s *Server) keyJSON(k *store.Key) map[string]any {
 		"priority": k.Priority, "weight": k.Weight, "enabled": k.Enabled, "status": status,
 		"status_reason": reason, "auto_disabled": k.AutoDisabled || rs.AutoDisabled, "cooldown_until": cooldown,
 		"max_concurrency": k.MaxConcurrency, "rpm_limit": k.RPMLimit, "inflight": rs.Inflight,
-		"requests": k.Requests, "errors": k.Errors, "cost_usd": usd(k.CostTicks),
+		// requests/errors are kept for compatibility; they count upstream
+		// attempts, like attempts/attempt_errors.
+		"requests": k.Attempts, "errors": k.AttemptErrors, "attempts": k.Attempts, "attempt_errors": k.AttemptErrors,
+		"cost_usd":     usd(k.CostTicks),
 		"last_used_at": msTime(k.LastUsedAt), "last_error": k.LastError, "last_test": lastTest,
 		"notes": k.Notes, "created_at": msTime(k.CreatedAt), "updated_at": msTime(k.UpdatedAt),
 	}
@@ -209,7 +212,12 @@ func (s *Server) deleteKey(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.DB.DeleteKey(r.Context(), id); err != nil {
+	k, err := s.DB.GetKey(r.Context(), id)
+	if err != nil {
+		s.storeErr(w, err, "key")
+		return
+	}
+	if err := s.DB.DeleteKey(r.Context(), id, reqlog.MaskSecret(k.Key)); err != nil {
 		s.storeErr(w, err, "key")
 		return
 	}

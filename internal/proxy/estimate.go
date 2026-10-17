@@ -82,7 +82,7 @@ func languageEstimate(m *store.Model, bodyBytes, maxTokens int64, tier string) i
 	if !strings.Contains(m.ID, "non-reasoning") {
 		out += reasoningAllowance
 	}
-	inP, outP := max(m.InputTicks, m.ImageInputTicks), m.OutputTicks
+	inP, outP := max(m.InputTicks, m.ImageTokenTicks), m.OutputTicks
 	if m.LongThreshold > 0 && in >= m.LongThreshold {
 		inP, outP = max(m.LongInputTicks, inP), max(m.LongOutputTicks, outP)
 	}

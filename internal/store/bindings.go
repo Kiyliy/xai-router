@@ -181,12 +181,16 @@ func (db *DB) MarkBindingBilled(ctx context.Context, id string) (bool, error) {
 		if e := db.bind.entries[id]; e != nil {
 			first := !e.b.Billed
 			e.b.Billed = true
+			cp := e.b
 			db.bind.mu.Unlock()
 			if first {
-				// Queued after the binding's own insert, so applied in order.
-				db.bind.enqueue(bindingOp{billed: id})
+				// Written synchronously (once per job): a crash right after
+				// billing must not let the job be billed again after a
+				// restart. The upsert keeps billed = MAX(...), so a queued
+				// older write of this binding cannot undo it.
+				return true, db.putBindingDB(ctx, &cp)
 			}
-			return first, nil
+			return false, nil
 		}
 		db.bind.mu.Unlock()
 	}

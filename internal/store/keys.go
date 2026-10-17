@@ -21,8 +21,8 @@ type Key struct {
 	CooldownUntil  int64 // unix ms
 	MaxConcurrency int
 	RPMLimit       int
-	Requests       int64
-	Errors         int64
+	Attempts       int64 // upstream attempts made with this key (a client request may try several keys)
+	AttemptErrors  int64
 	CostTicks      int64
 	LastUsedAt     int64
 	LastError      string
@@ -34,14 +34,14 @@ type Key struct {
 }
 
 const keyCols = `id, name, key, base_url, priority, weight, enabled, auto_disabled, status_reason,
-cooldown_until, max_concurrency, rpm_limit, requests, errors, cost_ticks, last_used_at, last_error,
+cooldown_until, max_concurrency, rpm_limit, attempts, attempt_errors, cost_ticks, last_used_at, last_error,
 last_test, last_tested_at, notes, created_at, updated_at`
 
 func scanKey(s interface{ Scan(...any) error }) (*Key, error) {
 	var k Key
 	var en, ad int
 	err := s.Scan(&k.ID, &k.Name, &k.Key, &k.BaseURL, &k.Priority, &k.Weight, &en, &ad, &k.StatusReason,
-		&k.CooldownUntil, &k.MaxConcurrency, &k.RPMLimit, &k.Requests, &k.Errors, &k.CostTicks, &k.LastUsedAt,
+		&k.CooldownUntil, &k.MaxConcurrency, &k.RPMLimit, &k.Attempts, &k.AttemptErrors, &k.CostTicks, &k.LastUsedAt,
 		&k.LastError, &k.LastTest, &k.LastTestedAt, &k.Notes, &k.CreatedAt, &k.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -53,9 +53,9 @@ func scanKey(s interface{ Scan(...any) error }) (*Key, error) {
 	return &k, nil
 }
 
-// ListAllKeys returns every key ordered by priority then id.
+// ListAllKeys returns every key (not deleted) ordered by priority then id.
 func (db *DB) ListAllKeys(ctx context.Context) ([]*Key, error) {
-	rows, err := db.R.QueryContext(ctx, `SELECT `+keyCols+` FROM keys ORDER BY priority, id`)
+	rows, err := db.R.QueryContext(ctx, `SELECT `+keyCols+` FROM keys WHERE deleted_at = 0 ORDER BY priority, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +73,7 @@ func (db *DB) ListAllKeys(ctx context.Context) ([]*Key, error) {
 
 // GetKey returns one key.
 func (db *DB) GetKey(ctx context.Context, id int64) (*Key, error) {
-	return scanKey(db.R.QueryRowContext(ctx, `SELECT `+keyCols+` FROM keys WHERE id = ?`, id))
+	return scanKey(db.R.QueryRowContext(ctx, `SELECT `+keyCols+` FROM keys WHERE id = ? AND deleted_at = 0`, id))
 }
 
 // CreateKey inserts k and sets its ID.
@@ -100,7 +100,7 @@ max_concurrency, rpm_limit, notes, created_at, updated_at) VALUES (?,?,?,?,?,?,?
 func (db *DB) UpdateKey(ctx context.Context, k *Key) error {
 	k.UpdatedAt = NowMs()
 	res, err := db.W.ExecContext(ctx, `UPDATE keys SET name=?, key=?, base_url=?, priority=?, weight=?, enabled=?,
-max_concurrency=?, rpm_limit=?, notes=?, updated_at=? WHERE id=?`,
+max_concurrency=?, rpm_limit=?, notes=?, updated_at=? WHERE id=? AND deleted_at = 0`,
 		k.Name, k.Key, k.BaseURL, k.Priority, k.Weight, boolInt(k.Enabled), k.MaxConcurrency, k.RPMLimit, k.Notes,
 		k.UpdatedAt, k.ID)
 	if isUnique(err) {
@@ -115,9 +115,14 @@ max_concurrency=?, rpm_limit=?, notes=?, updated_at=? WHERE id=?`,
 	return nil
 }
 
-// DeleteKey removes a key. Logs keep the key name.
-func (db *DB) DeleteKey(ctx context.Context, id int64) error {
-	res, err := db.W.ExecContext(ctx, `DELETE FROM keys WHERE id = ?`, id)
+// DeleteKey soft-deletes a key: it leaves the pool and the console, but the
+// row (name, spend) stays for the history. The secret is replaced by
+// "deleted:<id>:<masked>", which wipes the plaintext, frees the UNIQUE value
+// for re-adding the same key, and keeps a masked hint for old logs.
+func (db *DB) DeleteKey(ctx context.Context, id int64, masked string) error {
+	now := NowMs()
+	res, err := db.W.ExecContext(ctx, `UPDATE keys SET deleted_at = ?, enabled = 0, key = 'deleted:' || id || ':' || ?,
+updated_at = ? WHERE id = ? AND deleted_at = 0`, now, masked, now, id)
 	if err != nil {
 		return err
 	}
@@ -152,7 +157,7 @@ type KeyFilter struct {
 // ListKeys returns a page of keys and the total count. Status filtering
 // needs the current time because cooldown is time-based.
 func (db *DB) ListKeys(ctx context.Context, f KeyFilter) ([]*Key, int, error) {
-	var where []string
+	where := []string{`deleted_at = 0`}
 	var args []any
 	if f.Q != "" {
 		where = append(where, `(name LIKE ? OR key LIKE ? OR notes LIKE ?)`)
@@ -170,10 +175,7 @@ func (db *DB) ListKeys(ctx context.Context, f KeyFilter) ([]*Key, int, error) {
 		where = append(where, `(enabled = 1 AND auto_disabled = 0 AND cooldown_until <= ?)`)
 		args = append(args, now)
 	}
-	w := ""
-	if len(where) > 0 {
-		w = " WHERE " + strings.Join(where, " AND ")
-	}
+	w := " WHERE " + strings.Join(where, " AND ")
 	var total int
 	if err := db.R.QueryRowContext(ctx, `SELECT COUNT(*) FROM keys`+w, args...).Scan(&total); err != nil {
 		return nil, 0, err
@@ -205,7 +207,43 @@ func (db *DB) CountKeys(ctx context.Context) (KeyCounts, error) {
 	err := db.R.QueryRowContext(ctx, `SELECT COUNT(*),
 COALESCE(SUM(CASE WHEN enabled=1 AND auto_disabled=0 AND cooldown_until<=? THEN 1 ELSE 0 END),0),
 COALESCE(SUM(CASE WHEN enabled=1 AND auto_disabled=0 AND cooldown_until>? THEN 1 ELSE 0 END),0),
-COALESCE(SUM(CASE WHEN enabled=0 OR auto_disabled=1 THEN 1 ELSE 0 END),0) FROM keys`, now, now).
+COALESCE(SUM(CASE WHEN enabled=0 OR auto_disabled=1 THEN 1 ELSE 0 END),0) FROM keys WHERE deleted_at = 0`, now, now).
 		Scan(&c.Total, &c.Active, &c.Cooldown, &c.Disabled)
 	return c, err
+}
+
+// Label names a key or token for display, including deleted ones (logs and
+// statistics outlive them). Hint is the masked key or the token prefix.
+type Label struct {
+	Name, Hint string
+	Deleted    bool
+}
+
+// KeyLabels returns every key's name and masked hint, including deleted
+// keys. mask masks a live key; a deleted key keeps the mask stored at
+// deletion.
+func (db *DB) KeyLabels(ctx context.Context, mask func(string) string) (map[int64]Label, error) {
+	rows, err := db.R.QueryContext(ctx, `SELECT id, name, key, deleted_at FROM keys`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]Label{}
+	for rows.Next() {
+		var id, del int64
+		var name, key string
+		if err := rows.Scan(&id, &name, &key, &del); err != nil {
+			return nil, err
+		}
+		l := Label{Name: name, Deleted: del > 0}
+		if l.Deleted {
+			if parts := strings.SplitN(key, ":", 3); len(parts) == 3 {
+				l.Hint = parts[2]
+			}
+		} else {
+			l.Hint = mask(key)
+		}
+		out[id] = l
+	}
+	return out, rows.Err()
 }

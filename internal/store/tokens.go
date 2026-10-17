@@ -24,17 +24,21 @@ type Token struct {
 	Notes         string
 	CreatedAt     int64
 	UpdatedAt     int64
+	// ResetTicks is the usage cleared by "reset usage" (UsedTicks + ResetTicks
+	// is the token's total spend); UsedResetAt the time of the last reset.
+	ResetTicks  int64
+	UsedResetAt int64
 }
 
 const tokenCols = `id, name, token_hash, prefix, enabled, quota_ticks, used_ticks, expires_at, allowed_models,
-requests, last_used_at, notes, created_at, updated_at`
+requests, last_used_at, notes, created_at, updated_at, reset_ticks, used_reset_at`
 
 func scanToken(s interface{ Scan(...any) error }) (*Token, error) {
 	var t Token
 	var en int
 	var models string
 	err := s.Scan(&t.ID, &t.Name, &t.Hash, &t.Prefix, &en, &t.QuotaTicks, &t.UsedTicks, &t.ExpiresAt, &models,
-		&t.Requests, &t.LastUsedAt, &t.Notes, &t.CreatedAt, &t.UpdatedAt)
+		&t.Requests, &t.LastUsedAt, &t.Notes, &t.CreatedAt, &t.UpdatedAt, &t.ResetTicks, &t.UsedResetAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -56,7 +60,7 @@ func (db *DB) GetTokenByHash(ctx context.Context, hash string) (*Token, error) {
 
 // GetToken returns one token.
 func (db *DB) GetToken(ctx context.Context, id int64) (*Token, error) {
-	return scanToken(db.R.QueryRowContext(ctx, `SELECT `+tokenCols+` FROM tokens WHERE id = ?`, id))
+	return scanToken(db.R.QueryRowContext(ctx, `SELECT `+tokenCols+` FROM tokens WHERE id = ? AND deleted_at = 0`, id))
 }
 
 // ListTokens returns a page of tokens.
@@ -79,7 +83,7 @@ func ValidTokenStatus(s string) bool { _, ok := tokenStatusSQL[s]; return ok || 
 // ListTokensByStatus returns a page of tokens matching q and status
 // ("", enabled, disabled, expired or exhausted).
 func (db *DB) ListTokensByStatus(ctx context.Context, q, status string, limit, offset int) ([]*Token, int, error) {
-	var conds []string
+	conds := []string{`deleted_at = 0`}
 	args := []any{}
 	if q != "" {
 		conds = append(conds, `(name LIKE ? OR prefix LIKE ? OR notes LIKE ?)`)
@@ -92,10 +96,7 @@ func (db *DB) ListTokensByStatus(ctx context.Context, q, status string, limit, o
 			args = append(args, NowMs())
 		}
 	}
-	w := ""
-	if len(conds) > 0 {
-		w = " WHERE " + strings.Join(conds, " AND ")
-	}
+	w := " WHERE " + strings.Join(conds, " AND ")
 	var total int
 	if err := db.R.QueryRowContext(ctx, `SELECT COUNT(*) FROM tokens`+w, args...).Scan(&total); err != nil {
 		return nil, 0, err
@@ -141,7 +142,7 @@ func (db *DB) UpdateToken(ctx context.Context, t *Token) error {
 	t.UpdatedAt = NowMs()
 	models, _ := json.Marshal(nonNil(t.AllowedModels))
 	res, err := db.W.ExecContext(ctx, `UPDATE tokens SET name=?, token_hash=?, prefix=?, enabled=?, quota_ticks=?,
-expires_at=?, allowed_models=?, notes=?, updated_at=? WHERE id=?`,
+expires_at=?, allowed_models=?, notes=?, updated_at=? WHERE id=? AND deleted_at = 0`,
 		t.Name, t.Hash, t.Prefix, boolInt(t.Enabled), t.QuotaTicks, t.ExpiresAt, string(models), t.Notes,
 		t.UpdatedAt, t.ID)
 	if err != nil {
@@ -153,15 +154,22 @@ expires_at=?, allowed_models=?, notes=?, updated_at=? WHERE id=?`,
 	return nil
 }
 
-// ResetTokenUsage sets a token's spend back to zero.
+// ResetTokenUsage sets a token's quota usage back to zero. The cleared
+// amount is kept in reset_ticks, so the token's total spend still adds up.
 func (db *DB) ResetTokenUsage(ctx context.Context, id int64) error {
-	_, err := db.W.ExecContext(ctx, `UPDATE tokens SET used_ticks = 0, updated_at = ? WHERE id = ?`, NowMs(), id)
+	now := NowMs()
+	_, err := db.W.ExecContext(ctx, `UPDATE tokens SET reset_ticks = reset_ticks + used_ticks, used_ticks = 0,
+used_reset_at = ?, updated_at = ? WHERE id = ? AND deleted_at = 0`, now, now, id)
 	return err
 }
 
-// DeleteToken removes a token.
+// DeleteToken soft-deletes a token: it stops authenticating at once (the
+// hash is replaced) and leaves every list, but its name, prefix and spend
+// stay for the history.
 func (db *DB) DeleteToken(ctx context.Context, id int64) error {
-	res, err := db.W.ExecContext(ctx, `DELETE FROM tokens WHERE id = ?`, id)
+	now := NowMs()
+	res, err := db.W.ExecContext(ctx, `UPDATE tokens SET deleted_at = ?, enabled = 0, token_hash = 'deleted:' || id,
+updated_at = ? WHERE id = ? AND deleted_at = 0`, now, now, id)
 	if err != nil {
 		return err
 	}
@@ -173,8 +181,29 @@ func (db *DB) DeleteToken(ctx context.Context, id int64) error {
 
 // TokenCounts returns total and enabled token counts.
 func (db *DB) TokenCounts(ctx context.Context) (total, enabled int, err error) {
-	err = db.R.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(enabled),0) FROM tokens`).Scan(&total, &enabled)
+	err = db.R.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(enabled),0) FROM tokens WHERE deleted_at = 0`).Scan(&total, &enabled)
 	return
+}
+
+// TokenLabels returns every token's name and prefix, including deleted
+// tokens (logs and statistics outlive them).
+func (db *DB) TokenLabels(ctx context.Context) (map[int64]Label, error) {
+	rows, err := db.R.QueryContext(ctx, `SELECT id, name, prefix, deleted_at FROM tokens`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]Label{}
+	for rows.Next() {
+		var id, del int64
+		var l Label
+		if err := rows.Scan(&id, &l.Name, &l.Hint, &del); err != nil {
+			return nil, err
+		}
+		l.Deleted = del > 0
+		out[id] = l
+	}
+	return out, rows.Err()
 }
 
 func nonNil(s []string) []string {

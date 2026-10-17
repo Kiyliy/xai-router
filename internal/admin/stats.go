@@ -73,22 +73,33 @@ func (s *Server) statsOverview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// labels resolves key / token ids to names and hints (masked key, token
+// prefix), including deleted keys and tokens: statistics and logs outlive
+// them.
+func (s *Server) labels(ctx context.Context, by string) map[string]store.Label {
+	out := map[string]store.Label{}
+	var m map[int64]store.Label
+	var err error
+	switch by {
+	case "key":
+		m, err = s.DB.KeyLabels(ctx, reqlog.MaskSecret)
+	case "token":
+		m, err = s.DB.TokenLabels(ctx)
+	}
+	if err != nil {
+		s.Log.Error("labels", "by", by, "err", err)
+	}
+	for id, l := range m {
+		out[strconv.FormatInt(id, 10)] = l
+	}
+	return out
+}
+
 // names resolves key / token ids to display names.
 func (s *Server) names(ctx context.Context, by string) map[string]string {
 	m := map[string]string{"0": "(none)"}
-	switch by {
-	case "key":
-		if keys, err := s.DB.ListAllKeys(ctx); err == nil {
-			for _, k := range keys {
-				m[strconv.FormatInt(k.ID, 10)] = k.Name
-			}
-		}
-	case "token":
-		if ts, _, err := s.DB.ListTokens(ctx, "", 100000, 0); err == nil {
-			for _, t := range ts {
-				m[strconv.FormatInt(t.ID, 10)] = t.Name
-			}
-		}
+	for id, l := range s.labels(ctx, by) {
+		m[id] = l.Name
 	}
 	return m
 }
@@ -97,19 +108,8 @@ func (s *Server) names(ctx context.Context, by string) map[string]string {
 // (masked key, token prefix), so entries with the same name can be told apart.
 func (s *Server) hints(ctx context.Context, by string) map[string]string {
 	m := map[string]string{}
-	switch by {
-	case "key":
-		if keys, err := s.DB.ListAllKeys(ctx); err == nil {
-			for _, k := range keys {
-				m[strconv.FormatInt(k.ID, 10)] = reqlog.MaskSecret(k.Key)
-			}
-		}
-	case "token":
-		if ts, _, err := s.DB.ListTokens(ctx, "", 100000, 0); err == nil {
-			for _, t := range ts {
-				m[strconv.FormatInt(t.ID, 10)] = t.Prefix
-			}
-		}
+	for id, l := range s.labels(ctx, by) {
+		m[id] = l.Hint
 	}
 	return m
 }
@@ -139,13 +139,16 @@ func (s *Server) statsBreakdown(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid_group", "by must be model, key or token")
 		return
 	}
-	names, hints := s.names(r.Context(), by), s.hints(r.Context(), by)
+	names, labels := s.names(r.Context(), by), s.labels(r.Context(), by)
 	out := make([]map[string]any, 0, len(rows))
 	for _, g := range rows {
 		row := aggJSON(g.Agg)
 		row["id"] = g.Group
 		row["name"] = s.displayName(names, by, g.Group)
-		row["hint"] = hints[g.Group] // token prefix or masked key, to tell same names apart
+		row["hint"] = labels[g.Group].Hint // token prefix or masked key, to tell same names apart
+		if labels[g.Group].Deleted {
+			row["deleted"] = true
+		}
 		out = append(out, row)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": out})

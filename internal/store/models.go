@@ -27,7 +27,7 @@ type Model struct {
 	ContextLength    int64
 	InputTicks       int64
 	CachedTicks      int64
-	ImageInputTicks  int64
+	ImageTokenTicks  int64
 	OutputTicks      int64
 	LongThreshold    int64
 	LongInputTicks   int64
@@ -45,7 +45,7 @@ type Model struct {
 	UpdatedAt             int64
 }
 
-const modelCols = `id, kind, aliases, enabled, source, context_length, input_ticks, cached_ticks, image_input_ticks,
+const modelCols = `id, kind, aliases, enabled, source, context_length, input_ticks, cached_ticks, image_token_ticks,
 output_ticks, long_threshold, long_input_ticks, long_cached_ticks, long_output_ticks, image_ticks, image_tiers,
 video_ticks_per_sec, raw, synced_at, updated_at, video_tiers, input_image_ticks, input_video_ticks_per_sec`
 
@@ -54,7 +54,7 @@ func scanModel(s interface{ Scan(...any) error }) (*Model, error) {
 	var aliases, tiers, vtiers string
 	var en int
 	err := s.Scan(&m.ID, &m.Kind, &aliases, &en, &m.Source, &m.ContextLength, &m.InputTicks, &m.CachedTicks,
-		&m.ImageInputTicks, &m.OutputTicks, &m.LongThreshold, &m.LongInputTicks, &m.LongCachedTicks, &m.LongOutputTicks,
+		&m.ImageTokenTicks, &m.OutputTicks, &m.LongThreshold, &m.LongInputTicks, &m.LongCachedTicks, &m.LongOutputTicks,
 		&m.ImageTicks, &tiers, &m.VideoTicksPerSec, &m.Raw, &m.SyncedAt, &m.UpdatedAt, &vtiers,
 		&m.InputImageTicks, &m.InputVideoTicksPerSec)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -125,14 +125,14 @@ func (db *DB) UpsertModel(ctx context.Context, m *Model) error {
 	_, err := db.W.ExecContext(ctx, `INSERT INTO models (`+modelCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, aliases=excluded.aliases, enabled=excluded.enabled,
 source=excluded.source, context_length=excluded.context_length, input_ticks=excluded.input_ticks,
-cached_ticks=excluded.cached_ticks, image_input_ticks=excluded.image_input_ticks, output_ticks=excluded.output_ticks,
+cached_ticks=excluded.cached_ticks, image_token_ticks=excluded.image_token_ticks, output_ticks=excluded.output_ticks,
 long_threshold=excluded.long_threshold, long_input_ticks=excluded.long_input_ticks,
 long_cached_ticks=excluded.long_cached_ticks, long_output_ticks=excluded.long_output_ticks,
 image_ticks=excluded.image_ticks, image_tiers=excluded.image_tiers, video_ticks_per_sec=excluded.video_ticks_per_sec,
 raw=excluded.raw, synced_at=excluded.synced_at, updated_at=excluded.updated_at, video_tiers=excluded.video_tiers,
 input_image_ticks=excluded.input_image_ticks, input_video_ticks_per_sec=excluded.input_video_ticks_per_sec`,
 		m.ID, m.Kind, string(aliases), boolInt(m.Enabled), m.Source, m.ContextLength, m.InputTicks, m.CachedTicks,
-		m.ImageInputTicks, m.OutputTicks, m.LongThreshold, m.LongInputTicks, m.LongCachedTicks, m.LongOutputTicks,
+		m.ImageTokenTicks, m.OutputTicks, m.LongThreshold, m.LongInputTicks, m.LongCachedTicks, m.LongOutputTicks,
 		m.ImageTicks, string(tj), m.VideoTicksPerSec, m.Raw, m.SyncedAt, m.UpdatedAt, string(vj),
 		m.InputImageTicks, m.InputVideoTicksPerSec)
 	return err

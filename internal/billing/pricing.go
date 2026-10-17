@@ -222,7 +222,7 @@ func imagePrice(m *store.Model, req Request) int64 {
 
 func tokenCost(m *store.Model, u Usage) int64 {
 	in, cached, out := m.InputTicks, m.CachedTicks, m.OutputTicks
-	imgIn := m.ImageInputTicks
+	imgIn := m.ImageTokenTicks
 	if m.LongThreshold > 0 && u.PromptTokens >= m.LongThreshold {
 		in, cached, out = m.LongInputTicks, m.LongCachedTicks, m.LongOutputTicks
 		if imgIn == m.InputTicks { // image tokens follow the text input rate
