@@ -30,6 +30,7 @@ type DB struct {
 	W    *sql.DB
 	R    *sql.DB
 	Path string
+	bind *bindingCache // write-behind cache for bindings (see bindings.go)
 }
 
 // Open opens (creating if needed) the database at path and runs migrations.
@@ -74,11 +75,16 @@ func Open(path string) (*DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	db.bind = newBindingCache(db)
 	return db, nil
 }
 
 // Close closes both pools.
 func (db *DB) Close() error {
+	if db.bind != nil {
+		db.bind.close() // persist queued bindings first
+		db.bind = nil
+	}
 	err := db.W.Close()
 	if db.R != db.W {
 		if e := db.R.Close(); err == nil {
