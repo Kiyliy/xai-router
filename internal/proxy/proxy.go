@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -285,10 +286,28 @@ func (st *state) attempt(w http.ResponseWriter, r *http.Request, lease *pool.Lea
 		st.attempts = append(st.attempts, at)
 	}
 
-	ctx, cancel := context.WithCancelCause(r.Context())
+	// The upstream request outlives the client by up to clientGoneDrain: xAI
+	// bills a request it has started, so after a disconnect the response is
+	// still read to the end (not forwarded) to learn its usage.
+	ctx, cancel := context.WithCancelCause(context.WithoutCancel(r.Context()))
 	defer cancel(nil)
 	timer := time.AfterFunc(s.RequestTimeout(), func() { cancel(errUpstreamTimeout) })
 	defer timer.Stop()
+	var drainMu sync.Mutex
+	var drain *time.Timer
+	stopWatch := context.AfterFunc(r.Context(), func() {
+		drainMu.Lock()
+		drain = time.AfterFunc(clientGoneDrain, func() { cancel(errClientGone) })
+		drainMu.Unlock()
+	})
+	defer func() {
+		stopWatch()
+		drainMu.Lock()
+		if drain != nil {
+			drain.Stop()
+		}
+		drainMu.Unlock()
+	}()
 
 	if err := s.UpstreamPolicy().CheckURL(k.BaseURL); err != nil {
 		// The key's URL is not allowed by the current upstream policy.
@@ -371,7 +390,7 @@ func (st *state) attempt(w http.ResponseWriter, r *http.Request, lease *pool.Lea
 	if isSSE {
 		st.log.Stream = true
 		timer.Stop()
-		record(resp.StatusCode, st.streamBody(ctx, cancel, w, resp), pool.ActionSuccess)
+		record(resp.StatusCode, st.streamBody(ctx, r.Context(), cancel, w, resp), pool.ActionSuccess)
 		return true, nil
 	}
 	// Non-streaming: buffer the body so usage can be read, then forward it.
@@ -419,14 +438,29 @@ func (st *state) attempt(w http.ResponseWriter, r *http.Request, lease *pool.Lea
 	}
 	record(resp.StatusCode, "", pool.ActionSuccess)
 	st.handleBody(r, full)
+	if r.Context().Err() != nil {
+		// Billed from the body read after the client left.
+		st.log.Status, st.log.Error = 499, "client closed request"
+	}
 	return true, nil
 }
 
-var errUpstreamTimeout = errors.New("upstream timeout")
+var (
+	errUpstreamTimeout = errors.New("upstream timeout")
+	errClientGone      = errors.New("client gone; drain limit reached")
+)
+
+// clientGoneDrain bounds how long an upstream response is still read after
+// the client disconnected.
+var clientGoneDrain = 60 * time.Second
 
 // streamBody forwards an SSE response chunk by chunk, flushing each one, while
 // parsing events for usage and assembling the text for the log.
-func (st *state) streamBody(ctx context.Context, cancel context.CancelCauseFunc, w http.ResponseWriter, resp *http.Response) string {
+//
+// If the client disconnects, the rest of the stream is still read (but not
+// forwarded) so the usage at its end is billed; the log keeps status 499.
+// When no usage arrives at all, it is estimated from the content received.
+func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.CancelCauseFunc, w http.ResponseWriter, resp *http.Response) string {
 	s := st.s
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -447,20 +481,26 @@ func (st *state) streamBody(ctx context.Context, cancel context.CancelCauseFunc,
 	if s.AnthropicStreamFix && st.log.Path == "/v1/messages" {
 		fixer = &messagesFixer{}
 	}
-	forward := func(chunk []byte) bool {
+	gone := false
+	forward := func(chunk []byte) {
 		if len(chunk) == 0 {
-			return true
+			return
 		}
-		st.markTTFB()
-		if _, werr := w.Write(chunk); werr != nil {
-			return false
+		if !gone && clientCtx.Err() != nil {
+			gone = true
 		}
-		_ = rc.Flush()
+		if !gone {
+			st.markTTFB()
+			if _, werr := w.Write(chunk); werr != nil {
+				gone = true
+			} else {
+				_ = rc.Flush()
+			}
+		}
 		parser.Write(chunk)
 		if s.LogBodies {
 			capt.Write(chunk)
 		}
-		return true
 	}
 
 	buf := make([]byte, 32<<10)
@@ -473,11 +513,7 @@ func (st *state) streamBody(ctx context.Context, cancel context.CancelCauseFunc,
 			if fixer != nil {
 				chunk = fixer.Feed(chunk)
 			}
-			if !forward(chunk) {
-				errMsg = "client went away"
-				st.log.Status = 499
-				break
-			}
+			forward(chunk)
 		}
 		if err != nil {
 			if fixer != nil {
@@ -487,9 +523,8 @@ func (st *state) streamBody(ctx context.Context, cancel context.CancelCauseFunc,
 				switch {
 				case errors.Is(context.Cause(ctx), errStreamIdle):
 					errMsg = fmt.Sprintf("stream idle for %s; aborted", idle)
-				case ctx.Err() != nil:
-					errMsg = "client went away"
-					st.log.Status = 499
+				case errors.Is(context.Cause(ctx), errClientGone):
+					errMsg = fmt.Sprintf("client went away; upstream abandoned after %s", clientGoneDrain)
 				default:
 					errMsg = "upstream stream error: " + err.Error()
 				}
@@ -498,6 +533,12 @@ func (st *state) streamBody(ctx context.Context, cancel context.CancelCauseFunc,
 		}
 	}
 	parser.Close()
+	if gone || clientCtx.Err() != nil {
+		st.log.Status = 499
+		if errMsg == "" {
+			errMsg = "client went away"
+		}
+	}
 	if errMsg != "" {
 		st.log.Error = errMsg
 	}
@@ -511,7 +552,13 @@ func (st *state) streamBody(ctx context.Context, cancel context.CancelCauseFunc,
 		st.log.RespBody = string(capt.Bytes())
 		st.log.Truncated = st.log.Truncated || capt.truncated || ss.Truncated
 	}
-	st.applyUsage(ss.Usage)
+	if errMsg != "" && !ss.Usage.Found {
+		// Cut short before the usage event: never bill such a stream as
+		// free; estimate from the request and the text received.
+		st.applyEstimatedUsage(ss)
+	} else {
+		st.applyUsage(ss.Usage)
+	}
 	if ss.ID != "" && st.log.Path == "/v1/responses" {
 		st.bind(KindResponse, ss.ID)
 	}
@@ -617,6 +664,21 @@ func (st *state) applyUsage(u billing.Usage) {
 	l.Images, l.VideoSeconds = u.Images, u.VideoSeconds
 	l.CostTicks, l.CostSource = st.h.Prices.Cost(l.Model, u, billing.Request{
 		Quality: st.info.Quality, Resolution: st.info.Resolution, Edit: st.log.Path == "/v1/images/edits"})
+}
+
+// applyEstimatedUsage bills a stream that ended without usage: prompt tokens
+// from the request size, output tokens from the text received, at roughly
+// four bytes per token. The cost source is "estimated".
+func (st *state) applyEstimatedUsage(ss *billing.StreamState) {
+	u := billing.Usage{Found: true,
+		PromptTokens:     max(int64(len(st.reqBody))/4, 1),
+		CompletionTokens: (ss.TextBytes + 3) / 4,
+		ReasoningTokens:  (ss.ReasoningBytes + 3) / 4,
+	}
+	st.applyUsage(u)
+	if st.log.CostTicks > 0 {
+		st.log.CostSource = "estimated"
+	}
 }
 
 func (st *state) bind(kind, id string) {

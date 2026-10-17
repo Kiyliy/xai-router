@@ -235,6 +235,9 @@ type StreamState struct {
 	Reasoning strings.Builder
 	MaxText   int // cap for Text/Reasoning (bytes); 0 = unlimited
 	Truncated bool
+	// TextBytes and ReasoningBytes count all text received, including what
+	// MaxText cut off (used to estimate usage when the upstream sends none).
+	TextBytes, ReasoningBytes int64
 }
 
 // streamEvent covers chat chunks, Responses events and Messages events.
@@ -366,6 +369,11 @@ func deltaString(raw json.RawMessage) string {
 }
 
 func (s *StreamState) appendText(b *strings.Builder, t string) {
+	if b == &s.Reasoning {
+		s.ReasoningBytes += int64(len(t))
+	} else {
+		s.TextBytes += int64(len(t))
+	}
 	if s.MaxText > 0 && b.Len()+len(t) > s.MaxText {
 		if room := s.MaxText - b.Len(); room > 0 {
 			for room > 0 && !utf8.RuneStart(t[room]) {

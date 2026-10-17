@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Kiyliy/xai-router/internal/config"
 	"github.com/Kiyliy/xai-router/internal/pool"
@@ -148,17 +149,13 @@ func TestStreamUpstreamBreaks(t *testing.T) {
 	}
 }
 
-func TestStreamClientDisconnect(t *testing.T) {
-	hs := newHarness(t, nil)
-	upDone := make(chan struct{})
-	hs.addKey("k1", newMockUp(t, func(w http.ResponseWriter, r *http.Request) {
-		sseReply("data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n")(w, r)
-		<-r.Context().Done()
-		close(upDone)
-	}).srv.URL, nil)
+// startAndDrop starts a streaming chat request, reads the first line and
+// disconnects.
+func startAndDrop(t *testing.T, hs *harness) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, hs.srv.URL+"/v1/chat/completions",
-		strings.NewReader(`{"model":"grok-4.5","stream":true}`))
+		strings.NewReader(`{"model":"grok-4.5","stream":true,"messages":[{"role":"user","content":"count to sixty"}]}`))
 	req.Header.Set("Authorization", "Bearer "+hs.token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -170,13 +167,93 @@ func TestStreamClientDisconnect(t *testing.T) {
 	}
 	cancel()
 	resp.Body.Close()
-	<-upDone // the upstream request is cancelled too
+}
+
+// A client that disconnects mid-stream is still billed what the upstream
+// reports at the end of the stream (acceptance F7).
+func TestStreamClientDisconnect(t *testing.T) {
+	hs := newHarness(t, nil)
+	resume := make(chan struct{})
+	upDone := make(chan error, 1)
+	hs.addKey("k1", newMockUp(t, func(w http.ResponseWriter, r *http.Request) {
+		sseReply("data: {\"choices\":[{\"delta\":{\"content\":\"1 2 \"}}]}\n\n")(w, r)
+		<-resume
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"3 4\",\"reasoning_content\":\"r\"}}]}\n\n"+
+			"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":191,\"completion_tokens\":120,"+
+			"\"completion_tokens_details\":{\"reasoning_tokens\":97},\"cost_in_usd_ticks\":8894000}}\n\ndata: [DONE]\n\n")
+		w.(http.Flusher).Flush()
+		upDone <- r.Context().Err() // the gateway kept the upstream request open
+	}).srv.URL, nil)
+	startAndDrop(t, hs)
+	time.Sleep(50 * time.Millisecond)
+	close(resume)
+	if err := <-upDone; err != nil {
+		t.Fatalf("upstream request was cancelled: %v", err)
+	}
 	l := hs.lastLog(1)
-	if l.Status != 499 || l.Error != "client went away" {
+	if l.Status != 499 || l.Error != "client went away" || l.RespText != "1 2 3 4" {
 		t.Fatalf("log: %+v", l)
+	}
+	if l.PromptTokens != 191 || l.CompletionTokens != 120 || l.ReasoningTokens != 97 ||
+		l.CostTicks != 8894000 || l.CostSource != "upstream" {
+		t.Fatalf("usage not billed: %+v", l)
 	}
 	if len(l.Attempts) != 1 || l.Attempts[0].Action != pool.ActionSuccess {
 		t.Fatalf("attempts: %+v", l.Attempts)
+	}
+	tok, err := hs.h.DB.GetToken(context.Background(), l.TokenID)
+	if err != nil || tok.UsedTicks != 8894000 {
+		t.Fatalf("token used %+v %v", tok, err)
+	}
+}
+
+// When the upstream never finishes after the client left, the gateway gives
+// up after clientGoneDrain and bills an estimate, never zero.
+func TestStreamClientDisconnectEstimated(t *testing.T) {
+	old := clientGoneDrain
+	clientGoneDrain = 200 * time.Millisecond
+	defer func() { clientGoneDrain = old }()
+	hs := newHarness(t, nil)
+	upDone := make(chan struct{})
+	hs.addKey("k1", newMockUp(t, func(w http.ResponseWriter, r *http.Request) {
+		sseReply("data: {\"choices\":[{\"delta\":{\"content\":\""+strings.Repeat("word ", 40)+"\"}}]}\n\n")(w, r)
+		<-r.Context().Done()
+		close(upDone)
+	}).srv.URL, nil)
+	startAndDrop(t, hs)
+	<-upDone // abandoned after the drain limit
+	l := hs.lastLog(1)
+	if l.Status != 499 || !strings.Contains(l.Error, "abandoned") {
+		t.Fatalf("log: %+v", l)
+	}
+	if l.CompletionTokens != 50 || l.PromptTokens == 0 || l.CostTicks <= 0 || l.CostSource != "estimated" {
+		t.Fatalf("estimate: %+v", l)
+	}
+}
+
+// A non-streaming response that arrives after the client left is billed.
+func TestNonStreamClientDisconnectBilled(t *testing.T) {
+	hs := newHarness(t, nil)
+	upDone := make(chan error, 1)
+	hs.addKey("k1", newMockUp(t, func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		jsonReply(200, chatOK)(w, r)
+		upDone <- r.Context().Err()
+	}).srv.URL, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, hs.srv.URL+"/v1/chat/completions",
+		strings.NewReader(`{"model":"grok-4.5"}`))
+	req.Header.Set("Authorization", "Bearer "+hs.token)
+	if _, err := http.DefaultClient.Do(req); err == nil {
+		t.Fatal("request should time out")
+	}
+	if err := <-upDone; err != nil {
+		t.Fatalf("upstream cancelled: %v", err)
+	}
+	l := hs.lastLog(1)
+	if l.Status != 499 || l.PromptTokens == 0 || l.CostTicks == 0 {
+		t.Fatalf("log: %+v", l)
 	}
 }
 

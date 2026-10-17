@@ -164,8 +164,9 @@ func TestEveryOutcomeIsLogged(t *testing.T) {
 		if _, err := http.DefaultClient.Do(req); err == nil {
 			t.Fatal("request should have been cancelled")
 		}
+		// The upstream response is still read after the client left, and billed.
 		l := e.findByUA(marker)
-		if l.Status != 499 || l.Error == "" || l.CostUSD != 0 {
+		if l.Status != 499 || l.Error == "" || usageOf(l) != mockUsage || l.CostSource != "upstream" {
 			t.Fatalf("log %+v", l)
 		}
 	})
@@ -188,7 +189,9 @@ func TestEveryOutcomeIsLogged(t *testing.T) {
 		cancel()
 		resp.Body.Close()
 		l := e.findByUA(marker)
-		if l.Status != 499 || !strings.Contains(l.Error, "client") || !strings.HasPrefix(l.ResponseText, "Hel") {
+		// The rest of the stream is read without the client, so its usage is billed.
+		if l.Status != 499 || !strings.Contains(l.Error, "client") || l.ResponseText != "Hello world" ||
+			usageOf(l) != mockUsage || l.CostSource != "upstream" {
 			t.Fatalf("log %+v", l)
 		}
 	})
@@ -198,7 +201,7 @@ func TestEveryOutcomeIsLogged(t *testing.T) {
 			map[string]string{"X-Grok-Mock-Break": "1"})
 		l := e.logFor(resp.Header.Get("X-Request-Id"))
 		if l.Status != 200 || !strings.Contains(l.Error, "upstream stream error") || l.ResponseText != "Hel" ||
-			!bytes.Contains(body, []byte("Hel")) || l.CostUSD != 0 {
+			!bytes.Contains(body, []byte("Hel")) || l.CostUSD <= 0 || l.CostSource != "estimated" {
 			t.Fatalf("log %+v", l)
 		}
 	})
