@@ -255,8 +255,10 @@ func (f LogFilter) where() (string, []any) {
 	}
 	if f.Q != "" {
 		if f.qIsID {
-			// Both columns are indexed, so this is an index lookup.
-			w, a = append(w, `(request_id = ? OR upstream_id = ?)`), append(a, f.Q, f.Q)
+			// Two index lookups. Written as a subquery so that another
+			// filter's index (model, key…) is not walked instead.
+			w, a = append(w, `id IN (SELECT id FROM request_logs WHERE request_id = ?
+UNION SELECT id FROM request_logs WHERE upstream_id = ?)`), append(a, f.Q, f.Q)
 		} else {
 			// "error <> ''" lets idx_logs_errored restrict the scan to
 			// failed requests.
@@ -368,6 +370,13 @@ func looksLikeID(s string) bool {
 
 func (db *DB) listLogsPage(ctx context.Context, f LogFilter) (*LogPage, error) {
 	w, args := f.where()
+	from := " FROM request_logs"
+	if f.Q != "" && !f.qIsID {
+		// Error-text search: scan the covering index of failed requests. With
+		// another filter the planner would rather walk that filter's index
+		// and read every (wide) row to test the error text.
+		from = " FROM request_logs INDEXED BY idx_logs_errored"
+	}
 	// Count first, then fetch the page: logs written in between can only
 	// add rows, so the total never exceeds what the page shows.
 	p := &LogPage{}
@@ -379,7 +388,7 @@ func (db *DB) listLogsPage(ctx context.Context, f LogFilter) (*LogPage, error) {
 	} else {
 		cctx, cancel := context.WithTimeout(ctx, CountBudget)
 		var total int64
-		err := db.R.QueryRowContext(cctx, `SELECT COUNT(*) FROM request_logs`+w, args...).Scan(&total)
+		err := db.R.QueryRowContext(cctx, `SELECT COUNT(*)`+from+w, args...).Scan(&total)
 		cancel()
 		switch {
 		case err == nil:
@@ -390,7 +399,7 @@ func (db *DB) listLogsPage(ctx context.Context, f LogFilter) (*LogPage, error) {
 			p.Total, p.TotalKind, counted = est, "approx", true
 		}
 	}
-	q := `SELECT ` + logCols + ` FROM request_logs WHERE id IN (SELECT id FROM request_logs` + w +
+	q := `SELECT ` + logCols + ` FROM request_logs WHERE id IN (SELECT id` + from + w +
 		` ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?) ORDER BY created_at DESC, id DESC`
 	rows, err := db.R.QueryContext(ctx, q, append(append([]any(nil), args...), f.Limit, f.Offset)...)
 	if err != nil {
