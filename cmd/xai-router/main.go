@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -97,7 +98,7 @@ func run() error {
 		AdminPassword: env.AdminPassword,
 		Log:           log,
 		Build:         admin.BuildInfo{Version: version, Commit: commit, Date: date},
-		StaticFS:      web.FS(),
+		StaticFS:      staticFS(log),
 	})
 	if err != nil {
 		return err
@@ -198,4 +199,14 @@ func healthcheck() int {
 		return 1
 	}
 	return 0
+}
+
+// staticFS returns the embedded console, or the files under XR_STATIC_DIR
+// when set (console development: edits show on reload without a rebuild).
+func staticFS(log *slog.Logger) fs.FS {
+	if dir := os.Getenv("XR_STATIC_DIR"); dir != "" {
+		log.Warn("serving the console from disk (XR_STATIC_DIR)", "dir", dir)
+		return os.DirFS(dir)
+	}
+	return web.FS()
 }
