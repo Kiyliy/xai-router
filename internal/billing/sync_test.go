@@ -349,7 +349,7 @@ func TestCostPaths(t *testing.T) {
 		{Request{}, 400_000_000},
 		{Request{Quality: "auto", Edit: true}, 600_000_000},
 		{Request{Quality: "MEDIUM", Resolution: "2K"}, 800_000_000},
-		{Request{Quality: "ultra"}, USDToTicks(0.04)},
+		{Request{Quality: "ultra"}, 800_000_000}, // unknown tier: the highest one, as reserved
 	} {
 		if got, _ := tbl.Cost("grok-imagine-image-2.0", Usage{Found: true, Images: 1}, c.req); got != c.want {
 			t.Errorf("image %+v: %d want %d", c.req, got, c.want)

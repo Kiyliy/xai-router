@@ -288,28 +288,14 @@ func (st *state) attempt(w http.ResponseWriter, r *http.Request, lease *pool.Lea
 		st.attempts = append(st.attempts, at)
 	}
 
-	// The upstream request outlives the client by up to clientGoneDrain: xAI
-	// bills a request it has started, so after a disconnect the response is
-	// still read to the end (not forwarded) to learn its usage.
+	// The upstream request outlives the client: xAI bills a request it has
+	// started, so after a disconnect the response is still read (not
+	// forwarded) to learn its usage. A non-streaming response stays bounded
+	// by the request timeout; a stream by clientGoneDrain (see streamBody).
 	ctx, cancel := context.WithCancelCause(context.WithoutCancel(r.Context()))
 	defer cancel(nil)
 	timer := time.AfterFunc(s.RequestTimeout(), func() { cancel(errUpstreamTimeout) })
 	defer timer.Stop()
-	var drainMu sync.Mutex
-	var drain *time.Timer
-	stopWatch := context.AfterFunc(r.Context(), func() {
-		drainMu.Lock()
-		drain = time.AfterFunc(clientGoneDrain, func() { cancel(errClientGone) })
-		drainMu.Unlock()
-	})
-	defer func() {
-		stopWatch()
-		drainMu.Lock()
-		if drain != nil {
-			drain.Stop()
-		}
-		drainMu.Unlock()
-	}()
 
 	if err := s.UpstreamPolicy().CheckURL(k.BaseURL); err != nil {
 		// The key's URL is not allowed by the current upstream policy.
@@ -340,7 +326,13 @@ func (st *state) attempt(w http.ResponseWriter, r *http.Request, lease *pool.Lea
 	resp, err := st.h.Client.Do(ureq)
 	if err != nil {
 		if r.Context().Err() != nil {
-			record(0, "client closed request", pool.ActionReturn)
+			// The client left and the upstream never answered within the
+			// request timeout: it may still have processed the prompt.
+			record(0, "client closed request; "+err.Error(), pool.ActionReturn)
+			if errors.Is(context.Cause(ctx), errUpstreamTimeout) {
+				st.log.KeyID, st.log.KeyName = k.ID, k.Name
+				st.applyEstimatedUsage(&billing.StreamState{})
+			}
 			return false, nil
 		}
 		timeout := errors.Is(context.Cause(ctx), errUpstreamTimeout)
@@ -422,6 +414,7 @@ func (st *state) attempt(w http.ResponseWriter, r *http.Request, lease *pool.Lea
 		if r.Context().Err() != nil {
 			record(resp.StatusCode, "client closed request", pool.ActionSuccess)
 			st.log.Status, st.log.Error = 499, "client closed request"
+			st.applyEstimatedUsage(&billing.StreamState{})
 			return true, nil
 		}
 		// Headers are not sent yet, so another key can still be tried.
@@ -479,6 +472,27 @@ func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.Cance
 	watchdog := time.AfterFunc(idle, func() { cancel(errStreamIdle) })
 	defer watchdog.Stop()
 
+	// After a disconnect the stream is read for at most clientGoneDrain.
+	var drainMu sync.Mutex
+	var drain *time.Timer
+	done := false
+	stopWatch := context.AfterFunc(clientCtx, func() {
+		drainMu.Lock()
+		if !done {
+			drain = time.AfterFunc(clientGoneDrain, func() { cancel(errClientGone) })
+		}
+		drainMu.Unlock()
+	})
+	defer func() {
+		stopWatch()
+		drainMu.Lock()
+		done = true
+		if drain != nil {
+			drain.Stop()
+		}
+		drainMu.Unlock()
+	}()
+
 	var fixer *messagesFixer
 	if s.AnthropicStreamFix && st.log.Path == "/v1/messages" {
 		fixer = &messagesFixer{}
@@ -535,7 +549,9 @@ func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.Cance
 		}
 	}
 	parser.Close()
-	if gone || clientCtx.Err() != nil {
+	// Only a disconnect seen while data was still arriving counts: clients
+	// often close right after the last event, before the handler returns.
+	if gone || errors.Is(context.Cause(ctx), errClientGone) {
 		st.log.Status = 499
 		if errMsg == "" {
 			errMsg = "client went away"
@@ -554,9 +570,9 @@ func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.Cance
 		st.log.RespBody = string(capt.Bytes())
 		st.log.Truncated = st.log.Truncated || capt.truncated || ss.Truncated
 	}
-	if errMsg != "" && !ss.Usage.Found {
-		// Cut short before the usage event: never bill such a stream as
-		// free; estimate from the request and the text received.
+	if errMsg != "" && !ss.Final {
+		// Cut short before the closing usage event: never bill such a
+		// stream as free (or prompt-only); estimate what was received.
 		st.applyEstimatedUsage(ss)
 	} else {
 		st.applyUsage(ss.Usage)
@@ -682,15 +698,22 @@ func (st *state) pricingRequest() billing.Request {
 		InputImages: st.info.InputImages}
 }
 
-// applyEstimatedUsage bills a stream that ended without usage: prompt tokens
-// from the request size, output tokens from the text received, at roughly
-// four bytes per token. The cost source is "estimated".
+// applyEstimatedUsage bills a response that ended without its final usage:
+// what the upstream already reported (e.g. the prompt in message_start, the
+// service tier, tool calls), completed with estimates at roughly four bytes
+// per token: the prompt from the request without embedded media, the output
+// from the text received. The cost source is "estimated".
 func (st *state) applyEstimatedUsage(ss *billing.StreamState) {
-	u := billing.Usage{Found: true,
-		PromptTokens:     max(int64(len(st.reqBody))/4, 1),
-		CompletionTokens: (ss.TextBytes + 3) / 4,
-		ReasoningTokens:  (ss.ReasoningBytes + 3) / 4,
+	u := ss.Usage
+	u.Found = true
+	if u.PromptTokens == 0 {
+		body, _ := reqlog.SanitizeBody(st.reqBody, len(st.reqBody)+1) // base64 media stripped
+		u.PromptTokens = max(int64(len(body))/4, 1)
 	}
+	u.CompletionTokens = max(u.CompletionTokens, (ss.TextBytes+3)/4)
+	u.ReasoningTokens = max(u.ReasoningTokens, (ss.ReasoningBytes+3)/4)
+	u.ServiceTier = firstNonEmpty(u.ServiceTier, st.info.ServiceTier)
+	u.TotalTokens = 0
 	st.applyUsage(u)
 	if st.log.CostTicks > 0 {
 		st.log.CostSource = "estimated"
@@ -764,7 +787,9 @@ func (st *state) finish(r *http.Request) {
 	if l.CostSource == "" {
 		l.CostSource = "none"
 	}
-	if st.jobID != "" && l.Success() {
+	// A job the upstream accepted is held even if the client left before
+	// reading its id: the finishing poll bills it against this hold.
+	if st.jobID != "" && (l.Success() || l.Status == 499) {
 		ttl := time.Duration(s.TaskBindingTTLHours) * time.Hour
 		st.res.Hold(st.jobID, l.CostTicks, ttl)
 	} else {

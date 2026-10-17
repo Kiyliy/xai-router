@@ -351,9 +351,9 @@ ALTER TABLE bindings ADD COLUMN price_meta TEXT NOT NULL DEFAULT '';
 	// v6: error-text search reads the index only (the rows are wide), also
 	// when combined with the other list filters.
 	`
-DROP INDEX idx_logs_errored;
-CREATE INDEX idx_logs_errored ON request_logs(created_at, id, error, model, key_id, token_id, status, path)
+CREATE INDEX idx_logs_errsearch ON request_logs(created_at, id, error, model, key_id, token_id, status, path)
   WHERE error <> '';
+DROP INDEX idx_logs_errored;
 `,
 }
 

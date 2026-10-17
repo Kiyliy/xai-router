@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Kiyliy/xai-router/internal/billing"
 	"github.com/Kiyliy/xai-router/internal/config"
 	"github.com/Kiyliy/xai-router/internal/pool"
 )
@@ -273,5 +274,57 @@ func TestNonStreamBodyReadErrorFailsOver(t *testing.T) {
 	l := hs.lastLog(1)
 	if len(l.Attempts) != 2 || !strings.Contains(l.Attempts[0].Error, "reading upstream body") || l.KeyID != keys[1].ID {
 		t.Fatalf("attempts: %+v", l.Attempts)
+	}
+}
+
+// A Messages stream cut after message_start (which carries only the prompt)
+// is billed the prompt plus an estimate of the output received, and a
+// priority stream keeps its multiplier (review H1/H2).
+func TestCutMessagesStreamEstimatesOutput(t *testing.T) {
+	hs := newHarness(t, nil)
+	hs.addKey("k1", newMockUp(t, func(w http.ResponseWriter, r *http.Request) {
+		sseReply("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m1\",\"model\":\"grok-4.5\",\"usage\":{\"input_tokens\":100,\"output_tokens\":1}}}\n\n",
+			"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\""+strings.Repeat("abcd", 50)+"\"}}\n\n")(w, r)
+		panic(http.ErrAbortHandler)
+	}).srv.URL, nil)
+	if resp, _ := hs.do(http.MethodPost, "/v1/messages", `{"model":"grok-4.5","stream":true,"max_tokens":10}`); resp.StatusCode != 200 {
+		t.Fatal(resp.Status)
+	}
+	l := hs.lastLog(1)
+	if l.PromptTokens != 100 || l.CompletionTokens != 50 || l.CostSource != "estimated" || l.CostTicks <= 0 {
+		t.Fatalf("log: %+v", l)
+	}
+	want, _ := hs.h.Prices.Cost("grok-4.5", billing.Usage{Found: true, PromptTokens: 100, CompletionTokens: 50}, billing.Request{})
+	if l.CostTicks != want {
+		t.Fatalf("cost %d want %d", l.CostTicks, want)
+	}
+}
+
+// A client that closes the connection right after the last event got the
+// whole stream: it is a success, not a 499 (review H3).
+func TestCloseAfterLastEventIsSuccess(t *testing.T) {
+	hs := newHarness(t, nil)
+	parts := strings.SplitAfter(chatStream, "\n\n")
+	hs.addKey("k1", newMockUp(t, sseReply(parts...)).srv.URL, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, hs.srv.URL+"/v1/chat/completions",
+		strings.NewReader(`{"model":"grok-4.5","stream":true}`))
+	req.Header.Set("Authorization", "Bearer "+hs.token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	br := bufio.NewReader(resp.Body)
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil || strings.Contains(line, "[DONE]") {
+			break
+		}
+	}
+	cancel()
+	resp.Body.Close()
+	l := hs.lastLog(1)
+	if l.Status != 200 || l.Error != "" || l.CostSource != "computed" || l.PromptTokens != 7 {
+		t.Fatalf("log: %+v", l)
 	}
 }

@@ -164,7 +164,7 @@ func normRes(res string, video bool) string {
 }
 
 // VideoPrice is the per-second price for the requested resolution: the
-// matching tier, else the base price.
+// matching tier, else the highest tier.
 func VideoPrice(m *store.Model, resolution string) int64 {
 	res := normRes(resolution, true)
 	if res == "" {
@@ -175,25 +175,9 @@ func VideoPrice(m *store.Model, resolution string) int64 {
 			return tr.Ticks
 		}
 	}
-	return m.VideoTicksPerSec
-}
-
-// HasVideoTier reports whether resolution (default 480p) has its own price,
-// or the model has no tiers at all.
-func HasVideoTier(m *store.Model, resolution string) bool {
-	if len(m.VideoTiers) == 0 {
-		return true
-	}
-	res := normRes(resolution, true)
-	if res == "" {
-		res = DefaultVideoResolution
-	}
-	for _, tr := range m.VideoTiers {
-		if normRes(tr.Resolution, true) == res {
-			return true
-		}
-	}
-	return false
+	// A resolution without its own price is billed at the highest one, the
+	// same bound the quota reservation uses.
+	return MaxVideoPrice(m)
 }
 
 // MaxVideoPrice is the highest per-second price of a model (reservations).
@@ -228,7 +212,12 @@ func imagePrice(m *store.Model, req Request) int64 {
 			return tr.Ticks
 		}
 	}
-	return m.ImageTicks
+	// No matching tier: the highest tier (what the reservation assumed).
+	best := m.ImageTicks
+	for _, tr := range m.ImageTiers {
+		best = max(best, tr.Ticks)
+	}
+	return best
 }
 
 func tokenCost(m *store.Model, u Usage) int64 {

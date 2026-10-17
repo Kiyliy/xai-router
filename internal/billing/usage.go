@@ -238,6 +238,10 @@ type StreamState struct {
 	// TextBytes and ReasoningBytes count all text received, including what
 	// MaxText cut off (used to estimate usage when the upstream sends none).
 	TextBytes, ReasoningBytes int64
+	// Final is set once the usage that closes the stream arrived (the chat
+	// usage chunk, a final response.* event, message_delta). message_start
+	// alone carries only the prompt.
+	Final bool
 }
 
 // streamEvent covers chat chunks, Responses events and Messages events.
@@ -298,6 +302,7 @@ func (s *StreamState) AddEvent(eventName string, data []byte) {
 		}
 		if u := parseUsage(ev.Usage); u.Found {
 			s.Usage.Merge(u)
+			s.Final = true
 		}
 		if ev.ServiceTier != "" {
 			s.Usage.ServiceTier = ev.ServiceTier
@@ -312,6 +317,7 @@ func (s *StreamState) AddEvent(eventName string, data []byte) {
 			}
 			if u := parseUsage(ev.Response.Usage); u.Found {
 				s.Usage.Merge(u)
+				s.Final = true
 			}
 			if ev.Response.ServiceTier != "" {
 				s.Usage.ServiceTier = ev.Response.ServiceTier
@@ -351,6 +357,7 @@ func (s *StreamState) AddEvent(eventName string, data []byte) {
 		if json.Unmarshal(ev.Usage, &r) == nil {
 			if r.OutputTokens != nil {
 				s.Usage.Found = true
+				s.Final = true
 				s.Usage.CompletionTokens = *r.OutputTokens
 			}
 			if r.CostTicks != nil {

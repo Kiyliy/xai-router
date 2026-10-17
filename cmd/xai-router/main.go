@@ -140,7 +140,9 @@ func run() error {
 	}
 	// Stop accepting connections and let in-flight requests (including long
 	// streams) finish, then flush logs and close the database.
-	shutCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// Longer than the proxy's drain of abandoned streams (60 s), so their
+	// usage is still logged and billed.
+	shutCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutCtx); err != nil {
 		log.Warn("graceful shutdown timed out", "err", err)

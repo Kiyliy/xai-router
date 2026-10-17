@@ -4,6 +4,7 @@ services:
   xai-router:
     image: ghcr.io/kiyliy/xai-router:latest
     restart: unless-stopped
+    stop_grace_period: 90s # let in-flight streams finish on shutdown
     environment:
       # Optional. If unset, a random admin password is generated on first
       # start and printed in the logs: docker compose logs xai-router

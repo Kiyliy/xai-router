@@ -4,6 +4,7 @@ services:
     # To build from source instead: comment out "image" and uncomment "build".
     # build: .
     restart: unless-stopped
+    stop_grace_period: 90s # let in-flight streams finish on shutdown
     ports:
       - "${XR_PORT:-8080}:8080"
     environment:

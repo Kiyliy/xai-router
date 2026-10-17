@@ -56,11 +56,8 @@ func (st *state) estimate(method, path string) int64 {
 		}
 		secs = min(secs, maxVideoSeconds)
 		// Reserve at the requested resolution's price (the highest when the
-		// resolution is not one of the model's tiers).
+		// resolution is not one of the model's tiers, as billing does).
 		price := billing.VideoPrice(m, st.info.Resolution)
-		if !billing.HasVideoTier(m, st.info.Resolution) {
-			price = billing.MaxVideoPrice(m)
-		}
 		cost := secs*price + st.info.InputImages*m.InputImageTicks
 		if path == "/v1/videos/edits" {
 			cost += secs * m.InputVideoTicksPerSec

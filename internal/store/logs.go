@@ -260,7 +260,7 @@ func (f LogFilter) where() (string, []any) {
 			w, a = append(w, `id IN (SELECT id FROM request_logs WHERE request_id = ?
 UNION SELECT id FROM request_logs WHERE upstream_id = ?)`), append(a, f.Q, f.Q)
 		} else {
-			// "error <> ''" lets idx_logs_errored restrict the scan to
+			// "error <> ''" lets idx_logs_errsearch restrict the scan to
 			// failed requests.
 			w, a = append(w, `error <> '' AND error LIKE ? ESCAPE '\'`), append(a, "%"+escapeLike(f.Q)+"%")
 		}
@@ -375,7 +375,7 @@ func (db *DB) listLogsPage(ctx context.Context, f LogFilter) (*LogPage, error) {
 		// Error-text search: scan the covering index of failed requests. With
 		// another filter the planner would rather walk that filter's index
 		// and read every (wide) row to test the error text.
-		from = " FROM request_logs INDEXED BY idx_logs_errored"
+		from = " FROM request_logs INDEXED BY idx_logs_errsearch"
 	}
 	// Count first, then fetch the page: logs written in between can only
 	// add rows, so the total never exceeds what the page shows.
