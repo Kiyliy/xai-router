@@ -1,7 +1,7 @@
 // Background jobs (GET /api/v1/jobs, /api/v1/jobs/{id}): a progress panel that polls a
 // job, survives navigation (it finds the running job again via GET /api/v1/jobs) and shows
 // the result or error at the end.
-import { h, fmtInt, fmtDuration } from './util.js';
+import { h, fmtInt, fmtDuration, fmtBytes } from './util.js';
 import { icon } from './icons.js';
 import { t } from './i18n.js';
 import { get } from './api.js';
@@ -43,12 +43,14 @@ export function jobPanel({ kind, signal, describe, actions, onFinish, onState } 
         h('div', { class: 'job-head' },
           spinner(15),
           h('span', { class: 'job-title' }, title),
-          h('span', { class: 'job-count mono' }, total ? `${fmtInt(prog)} / ${fmtInt(total)} · ${pct.toFixed(0)}%` : prog ? fmtInt(prog) : ''),
+          h('span', { class: 'job-count mono' }, job.phase === 'reclaim'
+            ? (total ? `${fmtBytes(prog)} / ${fmtBytes(total)} · ${pct.toFixed(0)}%` : '')
+            : total ? `${fmtInt(prog)} / ${fmtInt(total)} · ${pct.toFixed(0)}%` : prog ? fmtInt(prog) : ''),
           h('span', { class: 'toolbar-spacer' }),
           h('span', { class: 'job-elapsed muted' }, t('jobs.elapsed', { d: fmtDuration(secsBetween(job.started_at)) }))),
         h('div', { class: `job-bar ${total ? '' : 'job-bar-indet'}`, role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': total ? String(total) : null, 'aria-valuenow': total ? String(prog) : null },
           h('div', { class: 'job-bar-fill', style: total ? { width: `${pct.toFixed(1)}%` } : null })),
-        h('div', { class: 'job-msg muted' }, job.message || t('jobs.background')));
+        h('div', { class: 'job-msg muted' }, job.phase === 'reclaim' ? t('jobs.reclaiming') : job.message || t('jobs.background')));
       return;
     }
     const ok = job.state === 'done';

@@ -260,7 +260,7 @@ const en = {
   // background jobs
   'jobs.kind.purge_logs': 'Deleting old logs', 'jobs.kind.test_keys': 'Checking upstream keys', 'jobs.kind.compact': 'Compacting database',
   'jobs.done': 'done', 'jobs.failed': 'failed', 'jobs.elapsed': 'running for {d}', 'jobs.tookIn': 'took {d}', 'jobs.dismiss': 'Dismiss',
-  'jobs.viewResults': 'View results', 'jobs.background': 'Runs in the background — you can leave this page and come back.',
+  'jobs.reclaiming': 'Old logs deleted. Returning the freed space to the disk in small steps; requests are not held up.', 'jobs.viewResults': 'View results', 'jobs.background': 'Runs in the background — you can leave this page and come back.',
   'keys.testRunning': 'An upstream key check is already running.',
   // storage
   'settings.storage': 'Storage', 'settings.storageSub': 'Database file and stored request logs.',
@@ -600,7 +600,7 @@ const zh = {
   // background jobs
   'jobs.kind.purge_logs': '正在删除旧日志', 'jobs.kind.test_keys': '正在检测上游密钥', 'jobs.kind.compact': '正在压缩数据库',
   'jobs.done': '已完成', 'jobs.failed': '失败', 'jobs.elapsed': '已运行 {d}', 'jobs.tookIn': '耗时 {d}', 'jobs.dismiss': '关闭',
-  'jobs.viewResults': '查看结果', 'jobs.background': '在后台运行——可以离开此页面，稍后回来查看。',
+  'jobs.reclaiming': '旧日志已删除，正在分小步把空出的磁盘空间归还给系统，不影响请求转发。', 'jobs.viewResults': '查看结果', 'jobs.background': '在后台运行——可以离开此页面，稍后回来查看。',
   'keys.testRunning': '已有上游密钥检测正在运行。',
   // storage
   'settings.storage': '存储', 'settings.storageSub': '数据库文件与已存储的请求日志。',

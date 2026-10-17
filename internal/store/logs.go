@@ -660,6 +660,15 @@ func (db *DB) DeleteLogsBeforeProgress(ctx context.Context, t int64, progress fu
 	}
 }
 
+// PageSize returns the database page size in bytes.
+func (db *DB) PageSize(ctx context.Context) int64 {
+	var n int64
+	if db.R.QueryRowContext(ctx, `PRAGMA page_size`).Scan(&n) != nil || n <= 0 {
+		return 4096
+	}
+	return n
+}
+
 // IncrementalVacuumIfEnabled reclaims free pages when the database supports
 // it without a full rebuild (auto_vacuum = INCREMENTAL); otherwise it only
 // checkpoints the WAL.
