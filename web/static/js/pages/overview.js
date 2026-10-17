@@ -46,6 +46,8 @@ export function render(el, ctx) {
   );
 
   const interval = () => (range === '30d' || range === '90d' ? 'day' : range === '1h' ? '5m' : 'hour');
+  // Minutes east of UTC, so day buckets start at the viewer's local midnight.
+  const tzOffset = () => -new Date().getTimezoneOffset();
   const xFormat = (iso) => {
     const d = new Date(iso);
     if (interval() === 'day') return `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -226,8 +228,8 @@ ${t('status.disabled')}: ${fmtInt(k.disabled)}` },
     destroyCharts();
     const opts = { signal: ctx.signal };
     const pOverview = get('/api/v1/stats/overview', q, opts).then(renderKpis);
-    const pMain = get('/api/v1/stats/timeseries', { range, interval: interval(), group: 'none' }, opts).then(drawMain);
-    const pModel = get('/api/v1/stats/timeseries', { range, interval: interval(), group: 'model', limit: 6 }, opts).then((r) => { modelSeries = r; drawModelChart(); });
+    const pMain = get('/api/v1/stats/timeseries', { range, interval: interval(), group: 'none', tz_offset_minutes: tzOffset() }, opts).then(drawMain);
+    const pModel = get('/api/v1/stats/timeseries', { range, interval: interval(), group: 'model', limit: 6, tz_offset_minutes: tzOffset() }, opts).then((r) => { modelSeries = r; drawModelChart(); });
     loadBreakdown();
     const results = await Promise.allSettled([pOverview, pMain, pModel]);
     const failed = results.find((r) => r.status === 'rejected' && r.reason && r.reason.name !== 'AbortError');
