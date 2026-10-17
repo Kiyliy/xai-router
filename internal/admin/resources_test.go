@@ -304,6 +304,23 @@ func TestModelsAPI(t *testing.T) {
 	if lm := h.s.Prices.Lookup("m1-alias"); lm == nil || lm.InputTicks != billing.USDPerMillionToTicks(1.5) {
 		t.Fatal("price table not reloaded")
 	}
+	// Video tiers and media input prices round-trip and reach the price table.
+	v := h.must(h.call(http.MethodPatch, "/api/v1/models/grok-imagine-video-1.5", `{"video_tiers":[{"resolution":"480p",
+"price_per_second":0.08},{"resolution":"720p","price_per_second":0.15}],"input_image_price":0.02,"input_video_price_per_second":0.03}`), 200)
+	vt, _ := v["video_tiers"].([]any)
+	if len(vt) != 2 || vt[1].(map[string]any)["price_per_second"] != 0.15 || v["input_image_price"] != 0.02 ||
+		v["input_video_price_per_second"] != 0.03 {
+		t.Fatalf("video patch: %v", v)
+	}
+	if lm := h.s.Prices.Lookup("grok-imagine-video-1.5"); billing.VideoPrice(lm, "720p") != 1_500_000_000 || lm.InputImageTicks != 200_000_000 {
+		t.Fatalf("price table: %+v", lm)
+	}
+	for _, body := range []string{`{"video_tiers":[{"resolution":"","price_per_second":1}]}`,
+		`{"video_tiers":[{"resolution":"720p","price_per_second":-1}]}`, `{"input_image_price":-1}`} {
+		if r := h.call(http.MethodPatch, "/api/v1/models/grok-imagine-video-1.5", body); r.status != 400 {
+			t.Fatalf("%s: %d", body, r.status)
+		}
+	}
 	m = h.must(h.call(http.MethodPatch, "/api/v1/models/grok-4.5", `{"enabled":false,"kind":"language"}`), 200)
 	if m["enabled"] != false || m["source"] != "manual" {
 		t.Fatalf("patched: %v", m)
