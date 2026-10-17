@@ -1023,3 +1023,4 @@ input[type="datetime-local"].input { min-width: 0; }
   .kpi-value { font-size: 22px; }
   .kpi-spark { height: 28px; }
 }
+.table-keys .mono.muted.small, .table-keys .mono.muted { font-family: var(--font-sans); font-variant-numeric: tabular-nums; }
