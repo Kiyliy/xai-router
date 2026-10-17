@@ -368,13 +368,34 @@ func looksLikeID(s string) bool {
 
 func (db *DB) listLogsPage(ctx context.Context, f LogFilter) (*LogPage, error) {
 	w, args := f.where()
+	// Count first, then fetch the page: logs written in between can only
+	// add rows, so the total never exceeds what the page shows.
+	p := &LogPage{}
+	counted := false
+	if est, ok := db.estimateCount(ctx, f); ok && est > largeResult {
+		// A large result is reported from the rollups straight away;
+		// counting it exactly would take longer than the page itself.
+		p.Total, p.TotalKind, counted = est, "approx", true
+	} else {
+		cctx, cancel := context.WithTimeout(ctx, CountBudget)
+		var total int64
+		err := db.R.QueryRowContext(cctx, `SELECT COUNT(*) FROM request_logs`+w, args...).Scan(&total)
+		cancel()
+		switch {
+		case err == nil:
+			p.Total, p.TotalKind, counted = total, "exact", true
+		case ctx.Err() != nil:
+			return nil, ctx.Err()
+		case ok:
+			p.Total, p.TotalKind, counted = est, "approx", true
+		}
+	}
 	q := `SELECT ` + logCols + ` FROM request_logs WHERE id IN (SELECT id FROM request_logs` + w +
 		` ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?) ORDER BY created_at DESC, id DESC`
 	rows, err := db.R.QueryContext(ctx, q, append(append([]any(nil), args...), f.Limit, f.Offset)...)
 	if err != nil {
 		return nil, err
 	}
-	p := &LogPage{}
 	for rows.Next() {
 		l, err := scanLog(rows)
 		if err != nil {
@@ -387,27 +408,7 @@ func (db *DB) listLogsPage(ctx context.Context, f LogFilter) (*LogPage, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	// A large result is reported from the rollups straight away; counting
-	// it exactly would take longer than the page itself.
-	if est, ok := db.estimateCount(ctx, f); ok && est > largeResult {
-		p.Total, p.TotalKind = est, "approx"
-		return p, nil
-	}
-	// Exact count, if it is quick enough.
-	cctx, cancel := context.WithTimeout(ctx, CountBudget)
-	var total int64
-	err = db.R.QueryRowContext(cctx, `SELECT COUNT(*) FROM request_logs`+w, args...).Scan(&total)
-	cancel()
-	if err == nil {
-		p.Total, p.TotalKind = total, "exact"
-		return p, nil
-	}
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	if est, ok := db.estimateCount(ctx, f); ok {
-		p.Total, p.TotalKind = est, "approx"
-	} else {
+	if !counted {
 		p.Total, p.TotalKind = int64(f.Offset+len(p.Logs)), "at_least"
 		if len(p.Logs) == f.Limit {
 			p.Total++ // there is at least one more
