@@ -380,6 +380,7 @@ ALTER TABLE tokens ADD COLUMN deleted_at INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE tokens ADD COLUMN reset_ticks INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE tokens ADD COLUMN used_reset_at INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE models RENAME COLUMN image_input_ticks TO image_token_ticks;
+ALTER TABLE request_logs ADD COLUMN token_prefix TEXT NOT NULL DEFAULT '';
 DROP TABLE stats_hourly;
 `,
 }

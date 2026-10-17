@@ -410,7 +410,7 @@ func TestTokenStatusFilterAndHints(t *testing.T) {
 		t.Fatalf("breakdown %v (prefix %q)", rows, prefix)
 	}
 	logs := list(h.must(h.call(http.MethodGet, "/api/v1/logs", ""), 200))
-	if len(logs) != 1 || logs[0]["token_prefix"] != prefix {
+	if len(logs) != 1 || logs[0]["token_prefix"] != prefix { // resolved from the token (the row stores none)
 		t.Fatalf("logs %v", logs)
 	}
 	d := h.must(h.call(http.MethodGet, "/api/v1/logs/"+itoa(num(logs[0]["id"])), ""), 200)

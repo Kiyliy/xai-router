@@ -710,3 +710,16 @@ func TestMediaTierPricing(t *testing.T) {
 		t.Fatalf("after billing %d want %d", got, want)
 	}
 }
+
+// Logs keep the token prefix the request was made with, so regenerating
+// the token value later does not relabel old requests.
+func TestLogStoresTokenPrefix(t *testing.T) {
+	hs := newHarness(t, nil)
+	hs.addKey("k1", newMockUp(t, jsonReply(200, chatOK)).srv.URL, nil)
+	if resp, _ := hs.do(http.MethodPost, "/v1/chat/completions", `{"model":"grok-4.5"}`); resp.StatusCode != 200 {
+		t.Fatal(resp.Status)
+	}
+	if l := hs.lastLog(1); l.TokenPrefix == "" || l.TokenPrefix != hs.tok.Prefix {
+		t.Fatalf("token prefix %q, want %q", l.TokenPrefix, hs.tok.Prefix)
+	}
+}

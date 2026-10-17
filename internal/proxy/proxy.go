@@ -140,7 +140,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st.token = tok
-	st.log.TokenID, st.log.TokenName = tok.ID, tok.Name
+	st.log.TokenID, st.log.TokenName, st.log.TokenPrefix = tok.ID, tok.Name, tok.Prefix
 
 	if isWebSocket(r) {
 		st.serveWebSocket(w, r)

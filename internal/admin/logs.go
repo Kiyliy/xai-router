@@ -66,7 +66,7 @@ func (s *Server) listLogs(w http.ResponseWriter, r *http.Request) {
 	prefixes := s.hints(r.Context(), "token")
 	for _, l := range pg.Logs {
 		row := logSummaryJSON(l)
-		row["token_prefix"] = prefixes[strconv.FormatInt(l.TokenID, 10)]
+		row["token_prefix"] = firstNonEmpty(l.TokenPrefix, prefixes[strconv.FormatInt(l.TokenID, 10)])
 		out = append(out, row)
 	}
 	resp := pageJSON(out, int(pg.Total), p)
@@ -86,7 +86,7 @@ func (s *Server) getLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := logSummaryJSON(l)
-	out["token_prefix"] = s.hints(r.Context(), "token")[strconv.FormatInt(l.TokenID, 10)]
+	out["token_prefix"] = firstNonEmpty(l.TokenPrefix, s.hints(r.Context(), "token")[strconv.FormatInt(l.TokenID, 10)])
 	attempts := make([]map[string]any, 0, len(l.Attempts))
 	for _, a := range l.Attempts {
 		var kid any
@@ -212,4 +212,11 @@ func (s *Server) logCurl(w http.ResponseWriter, r *http.Request) {
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
