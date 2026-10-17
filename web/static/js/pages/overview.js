@@ -3,7 +3,7 @@ import { icon } from '../icons.js';
 import { t } from '../i18n.js';
 import { get } from '../api.js';
 import { segmented, card, toastError, tabs, tableWrap, skeletonRows, tableEmptyRow, button } from '../ui.js';
-import { timeChart, shareBar, colorFor, isSparse } from '../charts.js';
+import { timeChart, shareBar, colorFor, isSparse, sparkline } from '../charts.js';
 
 const RANGES = ['1h', '24h', '7d', '30d', '90d'];
 const pad = (n) => String(n).padStart(2, '0');
@@ -14,6 +14,7 @@ export function render(el, ctx) {
   let metric = 'requests';
   let breakdownBy = 'model';
   let modelSeries = null;
+  let mainSeries = null;
   const charts = [];
 
   const rangeSel = segmented({
@@ -58,12 +59,36 @@ export function render(el, ctx) {
   };
   const destroyCharts = () => { charts.splice(0).forEach((c) => c.destroy && c.destroy()); };
 
-  function kpi({ ic, label, value, sub, sub2, tone, tip }) {
+  function kpi({ ic, label, value, sub, sub2, tone, tip, spark }) {
     return h('div', { class: `kpi ${tone ? 'kpi-' + tone : ''}` },
-      h('div', { class: 'kpi-head' }, h('span', { class: 'kpi-icon' }, icon(ic, 16)), h('span', { class: 'kpi-label' }, label)),
+      h('div', { class: 'kpi-head' }, h('span', { class: 'kpi-icon' }, icon(ic, 15)), h('span', { class: 'kpi-label' }, label)),
       h('div', { class: 'kpi-value' }, value),
       h('div', { class: 'kpi-sub', title: tip || null }, sub),
-      sub2 ? h('div', { class: 'kpi-sub' }, sub2) : null);
+      sub2 ? h('div', { class: 'kpi-sub' }, sub2) : null,
+      spark ? h('div', { class: 'kpi-spark', 'data-spark': spark, 'data-tone': tone || '' }) : null);
+  }
+
+  // Trend lines under the KPIs, drawn from the same series as the requests chart.
+  function drawSparks() {
+    const ts = mainSeries;
+    if (!ts) return;
+    const buckets = ts.buckets || [];
+    const pts = (ts.series && ts.series[0] && ts.series[0].points) || [];
+    const req = alignedValues(buckets, pts, (p) => p.requests);
+    const ok = alignedValues(buckets, pts, (p) => p.success ?? (p.requests - (p.errors || 0)));
+    const lat = alignedValues(buckets, pts, (p) => p.avg_latency_ms);
+    let last = 1;
+    const values = {
+      requests: req,
+      success: req.map((r, i) => (r ? (last = ok[i] / r) : last)),
+      tokens: alignedValues(buckets, pts, (p) => p.total_tokens),
+      cost: alignedValues(buckets, pts, (p) => p.cost_usd),
+      latency: lat,
+    };
+    const toneColor = { success: 'var(--success)', warning: 'var(--warning)', danger: 'var(--danger)' };
+    kpis.querySelectorAll('[data-spark]').forEach((slot) => {
+      slot.replaceChildren(sparkline(values[slot.dataset.spark] || [], toneColor[slot.dataset.tone] || 'var(--accent)'));
+    });
   }
 
   function renderKpis(o) {
@@ -75,11 +100,11 @@ ${t('tok.cached')}: ${fmtInt(o.cached_tokens)}
 ${t('tok.reasoning')}: ${fmtInt(o.reasoning_tokens)}`;
     const dotItem = (variant, n, label) => h('span', { class: 'kpi-dot-item', title: label }, h('span', { class: `dot dot-${variant}` }), h('span', null, fmtInt(n || 0)), h('span', { class: 'kpi-dot-label' }, label));
     kpis.replaceChildren(
-      kpi({ ic: 'activity', label: t('ov.requests'), value: fmtInt(o.requests), sub: [h('span', { class: 'text-success' }, `${fmtInt(o.success)} ${t('ov.ok')}`), ' · ', h('span', { class: o.errors ? 'text-danger' : '' }, `${fmtInt(o.errors)} ${t('ov.errors')}`)] }),
-      kpi({ ic: 'checkCircle', label: t('ov.successRate'), value: o.requests ? fmtPct(sr) : '—', tone: !o.requests ? '' : sr >= 0.98 ? 'success' : sr >= 0.9 ? 'warning' : 'danger', sub: t('ov.inRange', { r: t(`range.${range}`) }) }),
-      kpi({ ic: 'hash', label: t('ov.tokens'), value: fmtCompact(o.total_tokens), tip: tokTip, sub: `${t('ov.in')} ${fmtCompact(o.prompt_tokens)} · ${t('ov.out')} ${fmtCompact(o.completion_tokens)}`, sub2: o.cached_tokens ? `${t('ov.cachedShort')} ${fmtCompact(o.cached_tokens)}` : null }),
-      kpi({ ic: 'dollar', label: t('ov.cost'), value: fmtUSD(o.cost_usd), sub: o.requests ? t('ov.perRequest', { v: fmtUSD(o.cost_usd / o.requests) }) : '—' }),
-      kpi({ ic: 'timer', label: t('ov.avgLatency'), value: o.requests ? fmtMs(o.avg_latency_ms) : '—', sub: t('ov.endToEnd') }),
+      kpi({ ic: 'activity', label: t('ov.requests'), spark: 'requests', value: fmtInt(o.requests), sub: [h('span', { class: 'text-success' }, `${fmtInt(o.success)} ${t('ov.ok')}`), ' · ', h('span', { class: o.errors ? 'text-danger' : '' }, `${fmtInt(o.errors)} ${t('ov.errors')}`)] }),
+      kpi({ ic: 'checkCircle', label: t('ov.successRate'), spark: 'success', value: o.requests ? fmtPct(sr) : '—', tone: !o.requests ? '' : sr >= 0.98 ? 'success' : sr >= 0.9 ? 'warning' : 'danger', sub: t('ov.inRange', { r: t(`range.${range}`) }) }),
+      kpi({ ic: 'hash', label: t('ov.tokens'), spark: 'tokens', value: fmtCompact(o.total_tokens), tip: tokTip, sub: `${t('ov.in')} ${fmtCompact(o.prompt_tokens)} · ${t('ov.out')} ${fmtCompact(o.completion_tokens)}`, sub2: o.cached_tokens ? `${t('ov.cachedShort')} ${fmtCompact(o.cached_tokens)}` : null }),
+      kpi({ ic: 'dollar', label: t('ov.cost'), spark: 'cost', value: fmtUSD(o.cost_usd), sub: o.requests ? t('ov.perRequest', { v: fmtUSD(o.cost_usd / o.requests) }) : '—' }),
+      kpi({ ic: 'timer', label: t('ov.avgLatency'), spark: 'latency', value: o.requests ? fmtMs(o.avg_latency_ms) : '—', sub: t('ov.endToEnd') }),
       kpi({
         ic: 'server', label: t('ov.resources'), tone: k.active === 0 && k.total ? 'danger' : '',
         value: [`${fmtInt(k.active)}`, h('span', { class: 'kpi-of' }, ` / ${fmtInt(k.total)} ${t('ov.keysUnit')}`)],
@@ -90,6 +115,7 @@ ${t('status.disabled')}: ${fmtInt(k.disabled)}` },
         sub2: h('a', { href: '#/tokens', class: 'kpi-link' }, t('ov.tokensLine', { n: fmtInt(tk.enabled), total: fmtInt(tk.total) })),
       }),
     );
+    drawSparks();
   }
 
   function alignedValues(buckets, points, pick) {
@@ -114,6 +140,8 @@ ${t('status.disabled')}: ${fmtInt(k.disabled)}` },
   function emptyChart(slot) { slot.replaceChildren(h('div', { class: 'chart-empty' }, icon('activity', 18), h('span', null, t('ov.noTraffic')))); }
 
   function drawMain(ts) {
+    mainSeries = ts;
+    drawSparks();
     const buckets = ts.buckets || [];
     const pts = (ts.series && ts.series[0] && ts.series[0].points) || [];
     const total = pts.reduce((a, p) => a + (p.requests || 0), 0);

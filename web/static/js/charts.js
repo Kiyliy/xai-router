@@ -37,6 +37,28 @@ export function isSparse(seriesValues) {
   return nz / n < 0.5;
 }
 
+// Monotone cubic (Fritsch–Carlson) path through the points: smooth, never overshoots the data.
+function smoothPath(pts) {
+  const n = pts.length;
+  const f = (v) => v.toFixed(1);
+  if (n < 3) return pts.map((p, i) => `${i ? 'L' : 'M'}${f(p[0])},${f(p[1])}`).join('');
+  const m = [], tg = new Array(n);
+  for (let i = 0; i < n - 1; i++) m.push((pts[i + 1][1] - pts[i][1]) / ((pts[i + 1][0] - pts[i][0]) || 1));
+  tg[0] = m[0]; tg[n - 1] = m[n - 2];
+  for (let i = 1; i < n - 1; i++) tg[i] = m[i - 1] * m[i] <= 0 ? 0 : (m[i - 1] + m[i]) / 2;
+  for (let i = 0; i < n - 1; i++) {
+    if (m[i] === 0) { tg[i] = 0; tg[i + 1] = 0; continue; }
+    const a = tg[i] / m[i], b = tg[i + 1] / m[i], hh = a * a + b * b;
+    if (hh > 9) { const k = 3 / Math.sqrt(hh); tg[i] = k * a * m[i]; tg[i + 1] = k * b * m[i]; }
+  }
+  let d = `M${f(pts[0][0])},${f(pts[0][1])}`;
+  for (let i = 0; i < n - 1; i++) {
+    const [x0, y0] = pts[i], [x1, y1] = pts[i + 1], dx = (x1 - x0) / 3;
+    d += `C${f(x0 + dx)},${f(y0 + tg[i] * dx)} ${f(x1 - dx)},${f(y1 - tg[i + 1] * dx)} ${f(x1)},${f(y1)}`;
+  }
+  return d;
+}
+
 function niceStep(max, ticks) {
   const raw = max / ticks;
   const mag = Math.pow(10, Math.floor(Math.log10(raw)));
@@ -116,7 +138,7 @@ export function timeChart(opts) {
 
     const marks = s('g');
     if (kind === 'bar') {
-      const bw = Math.max(1, Math.min(28, band * 0.68));
+      const bw = Math.max(1, Math.min(24, band * 0.62));
       for (let i = 0; i < n; i++) {
         let acc = 0;
         vis.forEach((se, si) => {
@@ -146,12 +168,12 @@ export function timeChart(opts) {
           return [cx(i), y(val), stacked ? y(base[i]) : y(0)];
         });
         if (stacked) se.values.forEach((v, i) => { base[i] += v || 0; });
-        const line = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('');
+        const line = stacked ? pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('') : smoothPath(pts);
         if (kind === 'area') {
           const gid = `g${Math.random().toString(36).slice(2, 8)}`;
           const grad = s('linearGradient', { id: gid, x1: 0, y1: 0, x2: 0, y2: 1 },
-            s('stop', { offset: '0%', style: { stopColor: se.color, stopOpacity: 0.28 } }),
-            s('stop', { offset: '100%', style: { stopColor: se.color, stopOpacity: 0.02 } }));
+            s('stop', { offset: '0%', style: { stopColor: se.color, stopOpacity: 0.22 } }),
+            s('stop', { offset: '100%', style: { stopColor: se.color, stopOpacity: 0 } }));
           defs.appendChild(grad);
           const back = pts.slice().reverse().map((p) => `L${p[0].toFixed(1)},${p[2].toFixed(1)}`).join('');
           marks.appendChild(s('path', { d: `${line}${back}Z`, fill: `url(#${gid})`, stroke: 'none' }));
@@ -221,6 +243,25 @@ export function timeChart(opts) {
   requestAnimationFrame(draw);
   root.destroy = () => ro.disconnect();
   return root;
+}
+
+/** Compact trend line for KPI cards: stretches to its box, no axes, soft area fill. */
+export function sparkline(values, color = 'var(--accent)') {
+  const W = 200, H = 34, n = values.length;
+  const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', 'aria-hidden': 'true' });
+  if (n < 2 || !values.some((v) => v > 0)) return svg;
+  const max = Math.max(...values), lo = Math.min(...values);
+  const min = lo > 0 && (max - lo) / max < 0.5 ? lo - (max - lo) * 0.5 : 0; // zoom in on narrow ranges (e.g. success rate)
+  const span = max - min || 1;
+  const pts = values.map((v, i) => [(i / (n - 1)) * W, H - 2 - (((v || 0) - min) / span) * (H - 8)]);
+  const line = smoothPath(pts);
+  const gid = `sp${Math.random().toString(36).slice(2, 8)}`;
+  svg.appendChild(s('defs', null, s('linearGradient', { id: gid, x1: 0, y1: 0, x2: 0, y2: 1 },
+    s('stop', { offset: '0%', style: { stopColor: color, stopOpacity: 0.18 } }),
+    s('stop', { offset: '100%', style: { stopColor: color, stopOpacity: 0 } }))));
+  svg.appendChild(s('path', { d: `${line}L${W},${H}L0,${H}Z`, fill: `url(#${gid})`, stroke: 'none' }));
+  svg.appendChild(s('path', { d: line, fill: 'none', style: { stroke: color }, 'stroke-width': 1.5, 'vector-effect': 'non-scaling-stroke', 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
+  return svg;
 }
 
 /** Tiny horizontal share bar. */
