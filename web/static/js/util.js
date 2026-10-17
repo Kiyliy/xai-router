@@ -303,3 +303,13 @@ export function latestSignal(parent) {
   next.abort = () => { if (ctl) ctl.abort(); ctl = null; };
   return next;
 }
+
+/**
+ * Credential label "name · prefix" (.cred in style.css), e.g. e2e · sk-xr-nZja, so same-named
+ * upstream keys / client tokens / admin API tokens can be told apart. `cls` is added to the name.
+ */
+export function cred(name, prefix, cls = '') {
+  return h('span', { class: 'cred', title: prefix ? `${name} · ${prefix}` : name },
+    h('span', { class: `cred-name ${cls}`.trim() }, name),
+    prefix ? h('span', { class: 'cred-prefix' }, prefix) : null);
+}

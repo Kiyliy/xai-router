@@ -50,12 +50,22 @@ function snippets() {
   };
 }
 
+export const TABS = ['client', 'admin'];
+export const docsTab = (params) => (TABS.includes(params && params.tab) ? params.tab : 'client');
+
 export function render(el, ctx) {
   const sn = snippets();
-  ctx.setActions(
-    h('a', { class: 'btn', href: './openapi.yaml', target: '_blank', rel: 'noopener' }, icon('download', 15), h('span', null, 'openapi.yaml')),
-  );
+  const tab = docsTab(ctx.params);
+  el.append(h('div', { class: 'tabs-head tabs-page', role: 'tablist' }, TABS.map((id) => h('a', {
+    class: `tab ${id === tab ? 'active' : ''}`, role: 'tab', href: `#/docs?tab=${id}`, 'aria-selected': id === tab ? 'true' : 'false',
+  }, t(id === 'client' ? 'nav.docsClient' : 'nav.docsAdmin')))));
+  return tab === 'admin' ? renderAdmin(el, ctx, sn) : renderClient(el, ctx, sn);
+}
 
+function renderClient(el, ctx, sn) {
+  ctx.setActions(h('a', { class: 'btn', href: '#/tokens?new=1' }, icon('plus', 15), h('span', null, t('docs.createToken'))));
+  const getToken = h('div', { class: 'callout callout-info' }, icon('ticket', 16),
+    h('span', null, h('strong', null, t('docs.getToken')), ' ', t('docs.getTokenDesc'), ' ', h('a', { class: 'link', href: '#/tokens' }, t('docs.goTokens'))));
   const usage = card({
     title: t('docs.usingProxy'), subtitle: t('docs.usingProxySub'),
     body: h('div', { class: 'stack' },
@@ -63,8 +73,7 @@ export function render(el, ctx) {
         h('span', { class: 'muted small' }, t('docs.baseUrl')),
         h('code', { class: 'mono inline-code' }, `${location.origin}/v1`),
         h('span', { class: 'muted small' }, t('docs.authWith')),
-        h('code', { class: 'mono inline-code nowrap-code' }, 'Authorization: Bearer sk-xr-YOUR_TOKEN'),
-        h('a', { class: 'link small', href: '#/tokens' }, t('docs.createToken'))),
+        h('code', { class: 'mono inline-code nowrap-code' }, 'Authorization: Bearer sk-xr-YOUR_TOKEN')),
       tabs([
         { id: 'chat-py', label: t('docs.chatPy'), render: () => codeBlock(sn.chat.python) },
         { id: 'chat-node', label: t('docs.chatNode'), render: () => codeBlock(sn.chat.node) },
@@ -74,14 +83,25 @@ export function render(el, ctx) {
         { id: 'anth-curl', label: t('docs.anthCurl'), render: () => codeBlock(sn.anthropic.curl) },
         { id: 'resp-py', label: t('docs.respPy'), render: () => codeBlock(sn.responses.python) },
         { id: 'resp-curl', label: t('docs.respCurl'), render: () => codeBlock(sn.responses.curl) },
-        { id: 'admin', label: t('docs.adminApi'), render: () => h('div', { class: 'stack-sm' }, h('p', { class: 'muted small' }, t('docs.adminApiDesc')), codeBlock(sn.admin)) },
       ], { cls: 'tabs-sm' })),
+  });
+  el.append(getToken, usage);
+}
+
+function renderAdmin(el, ctx, sn) {
+  ctx.setActions(
+    h('a', { class: 'btn', href: './openapi.yaml', target: '_blank', rel: 'noopener' }, icon('download', 15), h('span', null, 'openapi.yaml')),
+  );
+  const authCard = card({
+    title: h('span', { class: 'card-title-ic' }, icon('shield', 16), t('docs.adminAuth')),
+    subtitle: [t('docs.adminAuthDesc'), ' ', h('a', { class: 'link', href: '#/access' }, t('docs.goAccess'))],
+    body: codeBlock(sn.admin),
   });
 
   const host = h('div', { class: 'swagger-host' });
   const status = h('div', { class: 'swagger-status' }, spinner(18), h('span', { class: 'muted' }, t('docs.loadingRef')));
   const refCard = card({ title: t('docs.reference'), subtitle: t('docs.referenceSub', { v: SWAGGER_VERSION }), body: [status, host], cls: 'card-swagger' });
-  el.append(usage, refCard);
+  el.append(authCard, refCard);
 
   const applyTheme = () => host.classList.toggle('swagger-dark', effectiveTheme() === 'dark');
   applyTheme();
@@ -105,7 +125,7 @@ export function render(el, ctx) {
       },
     });
   }).catch((e) => {
-    status.replaceChildren(icon('alert', 18), h('span', null, `${t('docs.loadFailed')} — ${e.message}`), button(t('common.retry'), { size: 'sm', onClick: () => ctx.navigate('#/docs?r=' + Date.now()) }));
+    status.replaceChildren(icon('alert', 18), h('span', null, `${t('docs.loadFailed')} — ${e.message}`), button(t('common.retry'), { size: 'sm', onClick: () => ctx.navigate('#/docs?tab=admin&r=' + Date.now()) }));
   });
 
   return () => document.removeEventListener('xr:themechange', applyTheme);

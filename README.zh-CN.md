@@ -191,7 +191,7 @@ ws.send(json.dumps({"type": "response.create"}))
 ## 管理 API
 
 所有接口都在 `/api/v1` 下，使用 `Authorization: Bearer <token>`：token 可以是 `POST /api/v1/auth/login`
-返回的会话，也可以是在 **设置 → 管理 API 令牌** 中创建的长期令牌（`xra-…`）。错误统一为
+返回的会话，也可以是在 **管理访问 → 管理 API 令牌** 中创建的长期令牌（`xra-…`）。错误统一为
 `{"error": {"code": "not_found", "message": "key not found"}}`。完整规范见
 [`web/static/openapi.yaml`](web/static/openapi.yaml)，后台 **API 文档** 页也可浏览。
 
@@ -251,7 +251,7 @@ curl -s "${auth[@]}" -X POST $BASE/api/v1/models/sync
 | 在上述负载下删除 100 万条日志 | 后台执行，约 3,500 条/秒，不影响以上指标 |
 
 统计数据来自按小时汇总的表，所以不受日志量影响，日志过期删除后也还在。新数据库默认启用增量 auto-vacuum；
-**设置 → 存储** 显示数据库大小和可回收空间，旧数据库可用 **压缩** 转换（一次性完整 VACUUM）。
+**数据与存储** 页显示数据库大小和可回收空间，旧数据库可用 **压缩** 转换（一次性完整 VACUUM）。
 测试脚本在 `tools/seed`、`tools/bench/api` 和 `tools/bench/load`。
 
 ## 计费说明

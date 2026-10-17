@@ -7,6 +7,7 @@ import {
   card, toast, toastError, openModal, confirmDialog, menuButton, badge, switchEl, searchInput, select, pager as pagerEl, setTableLoading,
   skeletonRows, tableEmptyRow, tableWrap, field, input, checkbox, button, busy, kv, spinner, passwordInput, tapToMenu, errorMessage,
 } from '../ui.js';
+import { drawerState, section, usageBlock, failuresBlock, allLogsLink, goneBody } from '../detail-drawer.js';
 
 const TEST_VARIANT = { ok: 'success', rate_limited: 'warning', invalid: 'danger', blocked: 'danger', no_credits: 'danger', error: 'danger' };
 
@@ -17,7 +18,7 @@ export function testMessage(r) {
 }
 
 export function testBadge(r) {
-  if (!r) return h('span', { class: 'muted' }, t('keys.neverTested'));
+  if (!r) return badge(t('kt.untested'), 'neutral');
   return badge(t(`test.${r.status}`) || r.status, TEST_VARIANT[r.status] || 'neutral');
 }
 
@@ -49,14 +50,14 @@ export function testResultView(r) {
           ak.acls && ak.acls.length ? h('div', { class: 'chips' }, ak.acls.map((a) => h('span', { class: 'chip mono' }, a))) : null,
         ] : h('div', { class: 'muted' }, t('keys.noApiKeyInfo'))),
       h('div', { class: 'test-section' },
-        h('h4', null, t('keys.probe')),
+        h('h4', null, t('kt.fullCheck')),
         r.probe ? kv([
           [t('common.model'), h('span', { class: 'mono' }, r.probe.model)],
           [t('common.status'), r.probe.status ? badge(String(r.probe.status), r.probe.status < 300 ? 'success' : 'danger') : null],
           [t('common.latency'), fmtMs(r.probe.latency_ms)],
           [t('common.cost'), fmtUSD(r.probe.cost_usd)],
           r.probe.error ? [t('common.error'), h('span', { class: 'text-danger break' }, r.probe.error)] : null,
-        ]) : h('div', { class: 'muted' }, t('keys.noProbe'))),
+        ]) : h('div', { class: 'muted' }, t('kt.noFullCheck'))),
     ),
     h('div', { class: 'test-section' },
       h('h4', null, t('keys.modelsAvailable'), r.models ? h('span', { class: 'count-pill' }, String(r.models.length)) : null),
@@ -72,9 +73,14 @@ function showTestResult(r) {
   openModal({ title: t('keys.testResult'), size: 'lg', body: testResultView(r) });
 }
 
+/** Menu label with a second explanatory line (quick check / full check). */
+function descLabel(label, desc, costs = false) {
+  return h('span', { class: 'menu-label-desc' }, h('span', null, label), h('span', { class: `menu-item-desc ${costs ? 'costs' : ''}` }, desc));
+}
+
 function testResultsTable(results, onOpen) {
   return tableWrap(h('table', { class: 'table' },
-    h('thead', null, h('tr', null, h('th', null, t('common.key')), h('th', null, t('common.status')), h('th', null, t('common.message')), h('th', { class: 'num' }, t('common.latency')), h('th', { class: 'num' }, t('keys.probe')), h('th', { class: 'num' }, t('common.cost')))),
+    h('thead', null, h('tr', null, h('th', null, t('common.key')), h('th', null, t('common.status')), h('th', null, t('common.message')), h('th', { class: 'num' }, t('common.latency')), h('th', { class: 'num' }, t('kt.fullCheck')), h('th', { class: 'num' }, t('common.cost')))),
     h('tbody', null, results.length ? results.map((r) => h('tr', { class: 'clickable', onclick: () => onOpen(r) },
       h('td', null, h('span', { class: 'strong' }, r.key_name || `#${r.key_id}`)),
       h('td', null, testBadge(r)),
@@ -101,9 +107,12 @@ export function render(el, ctx) {
   const st = { ...stateFromParams(ctx.params), total: 0, totalKind: 'exact', rows: [], loaded: false };
   const sel = new Set();
   let bulkRunning = false;
-  const syncParams = (push = false) => ctx.setParams({ q: st.q, status: st.status, page: st.page > 1 ? st.page : '', page_size: st.pageSize !== DEF_PS ? st.pageSize : '' }, { push });
+  const listParams = () => ({ q: st.q, status: st.status, page: st.page > 1 ? st.page : '', page_size: st.pageSize !== DEF_PS ? st.pageSize : '' });
+  const syncParams = (push = false) => ctx.setParams({ ...listParams(), open: drawer.id || '' }, { push });
+  // Key detail drawer, URL #/keys?open={id}.
+  const drawer = drawerState({ ctx, getParams: listParams, build: buildDrawer });
 
-  const testAllBtn = button(t('keys.testAll'), { icon: 'zap', onClick: (e) => testAll(e.currentTarget) });
+  const testAllBtn = button(t('kt.testAll'), { icon: 'zap', attrs: { title: t('kt.testAllHint') }, onClick: (e) => testAll(e.currentTarget) });
   // "Test all" / bulk test run as a background job; the panel survives navigation.
   const testJob = jobPanel({
     kind: 'test_keys', signal: ctx.signal,
@@ -121,7 +130,7 @@ export function render(el, ctx) {
         toast(t('keys.testSummary', { ok: results.filter((r) => r.ok).length, total: results.length }), 'success');
         if (results.length && ctx.alive()) showResults(results);
       } else toast(j.error || t('jobs.failed'), 'error', 6000);
-      if (ctx.alive()) load({ silent: true });
+      if (ctx.alive()) { load({ silent: true }); drawer.refresh(); }
     },
     onState: (running) => { testAllBtn.disabled = running; syncSelection(); },
   });
@@ -148,7 +157,7 @@ export function render(el, ctx) {
       h('th', { class: 'col-check' }, allBox),
       h('th', { class: 'col-switch' }, t('common.enabled')), h('th', null, t('common.name')), h('th', null, t('common.status')),
       h('th', { title: `${t('keys.priorityHint')}\n${t('keys.maxConcurrency')} / ${t('keys.rpmLimit')}` }, t('keys.routing')),
-      h('th', { class: 'num' }, t('keys.usage')),
+      h('th', { class: 'num', title: t('kt.attemptsHint') }, t('kt.attemptsCol')),
       h('th', null, t('keys.lastTest')), h('th', { class: 'col-actions' }, h('span', { class: 'sr-only' }, t('common.actions'))))),
     tbody);
   const pager = pagerEl({
@@ -165,7 +174,7 @@ export function render(el, ctx) {
   const bulkBtns = [
     button(t('common.enable'), { icon: 'checkCircle', size: 'sm', onClick: () => bulkToggle(true) }),
     button(t('common.disable'), { icon: 'xCircle', size: 'sm', onClick: () => bulkToggle(false) }),
-    button(t('keys.bulkTest'), { icon: 'zap', size: 'sm', onClick: () => bulkTest() }),
+    button(t('kt.quickCheck'), { icon: 'zap', size: 'sm', onClick: () => bulkTest() }),
     button(t('common.delete'), { icon: 'trash', size: 'sm', variant: 'danger-soft', onClick: () => bulkDelete() }),
   ];
   const bulkClear = button(t('common.clearSelection'), { icon: 'x', size: 'sm', variant: 'ghost', onClick: () => { sel.clear(); syncSelection(); } });
@@ -214,46 +223,64 @@ export function render(el, ctx) {
     return h('td', { class: `cell-status m-full ${empty ? 'm-hide' : ''}` }, h('div', { class: 'status-line' }, parts), reason, lastErr);
   }
 
+  /** Row / drawer menu: view logs, edit | quick check, full check | restore, enable/disable, delete. */
+  function keyMenu(k) {
+    return [
+      { label: t('kd.viewLogs'), icon: 'logs', onClick: () => ctx.navigate(`#/logs?key_id=${k.id}`) },
+      { label: t('common.edit'), icon: 'edit', onClick: () => openForm(k) },
+      '-',
+      { label: descLabel(t('kt.quickCheck'), t('kt.quickDesc')), icon: 'zap', onClick: () => testOne(k, null, false) },
+      { label: descLabel(t('kt.fullCheck'), t('kt.fullDesc'), true), icon: 'activity', onClick: () => testOne(k, null, true) },
+      '-',
+      k.auto_disabled || k.status !== 'active' ? { label: k.auto_disabled ? t('keys.restore') : t('keys.reset'), icon: 'reset', onClick: () => reset(k) } : null,
+      { label: k.enabled ? t('keys.disable') : t('keys.enable'), icon: k.enabled ? 'xCircle' : 'checkCircle', onClick: () => setEnabled(k, !k.enabled) },
+      { label: t('common.delete'), icon: 'trash', danger: true, onClick: () => remove(k) },
+    ];
+  }
+
+  async function setEnabled(k, v) {
+    try { await patch(`/api/v1/keys/${k.id}`, { enabled: v }); toast(v ? t('keys.enabled') : t('keys.disabled'), 'success', 2000); load(); drawer.refresh(); return true; }
+    catch (e) { toastError(e); return false; }
+  }
+
   function row(k) {
-    const errRate = k.requests ? k.errors / k.requests : 0;
+    // Upstream attempts made with this key (one client request can try several keys).
+    const att = k.attempts ?? k.requests, attErr = k.attempt_errors ?? k.errors;
+    const errRate = att ? attErr / att : 0;
     const lim = (v) => (v ? fmtInt(v) : '∞');
     const conflict = k.enabled && k.auto_disabled;
     const sw = switchEl({
       checked: k.enabled,
       title: conflict ? t('keys.autoDisabledSwitch', { reason: readableReason(k.status_reason).short || '—' }) : k.enabled ? t('keys.disable') : t('keys.enable'),
-      onChange: async (v) => { try { await patch(`/api/v1/keys/${k.id}`, { enabled: v }); toast(v ? t('keys.enabled') : t('keys.disabled'), 'success', 2000); load(); } catch (e) { toastError(e); return false; } },
+      onChange: (v) => setEnabled(k, v),
     });
     if (conflict) sw.classList.add('switch-warn');
-    const menu = menuButton(() => [
-      { label: t('common.edit'), icon: 'edit', onClick: () => openForm(k) },
-      { label: t('keys.test'), icon: 'zap', onClick: () => testOne(k, null, true) },
-      { label: t('keys.testNoProbe'), icon: 'zap', onClick: () => testOne(k, null, false) },
-      { label: k.auto_disabled ? t('keys.restore') : t('keys.reset'), icon: 'reset', onClick: () => reset(k), disabled: k.status === 'active' && !k.auto_disabled },
-      { label: k.enabled ? t('keys.disable') : t('keys.enable'), icon: k.enabled ? 'xCircle' : 'checkCircle', onClick: () => patch(`/api/v1/keys/${k.id}`, { enabled: !k.enabled }).then(() => { toast(!k.enabled ? t('keys.enabled') : t('keys.disabled'), 'success', 2000); load(); }, toastError) },
-      '-',
-      { label: t('common.delete'), icon: 'trash', danger: true, onClick: () => remove(k) },
-    ]);
+    const menu = menuButton(() => keyMenu(k));
     const check = h('input', { type: 'checkbox', class: 'row-check', checked: sel.has(k.id), 'aria-label': t('common.select'), onclick: (e) => e.stopPropagation(), onchange: (e) => { if (e.target.checked) sel.add(k.id); else sel.delete(k.id); syncSelection(); } });
     const subline = k.notes ? h('div', { class: 'cell-sub truncate', title: k.notes }, k.notes) : (k.base_url && k.base_url !== 'https://api.x.ai' ? h('div', { class: 'cell-sub mono truncate', title: k.base_url }, k.base_url) : null);
     const tr = h('tr', { 'data-id': k.id, class: `${k.auto_disabled ? 'row-warn' : !k.enabled ? 'row-muted' : ''} ${sel.has(k.id) ? 'row-selected' : ''}` },
       h('td', { class: 'col-check m-check' }, check),
       h('td', { class: 'col-switch m-meta m-switch' }, sw),
       h('td', { class: 'cell-keyname m-title' },
-        h('div', { class: 'title-line' }, h('span', { class: 'strong name-text', title: k.name || '' }, k.name || `#${k.id}`), h('span', { class: 'm-only' }, statusBadgeFor(k))),
+        h('div', { class: 'title-line' },
+          h('button', { type: 'button', class: 'name-link strong name-text', title: `${k.name || ''}
+${t('kd.openHint')}`, onclick: (e) => { e.stopPropagation(); drawer.open(k.id, { push: true }); } }, k.name || `#${k.id}`),
+          h('span', { class: 'm-only' }, statusBadgeFor(k))),
         h('div', { class: 'cell-sub mono key-mask' }, k.key_masked || '—'),
         subline),
       statusCell(k),
       h('td', { class: 'mono m-meta', title: `${t('keys.priority')}: ${k.priority ?? 0} · ${t('keys.weight')}: ${k.weight ?? 1}\n${t('keys.maxConcurrency')}: ${lim(k.max_concurrency)}\n${t('keys.rpmLimit')}: ${lim(k.rpm_limit)}\n${t('keys.inflight')}: ${k.inflight || 0}` },
         h('div', { class: 'nowrap' }, `P${k.priority ?? 0}`, h('span', { class: 'muted' }, ` · W${k.weight ?? 1}`)),
         h('div', { class: `cell-sub nowrap ${k.inflight ? 'text-accent' : ''}` }, `${lim(k.max_concurrency)} / ${lim(k.rpm_limit)}`, k.inflight ? ` · ${t('keys.inflightN', { n: k.inflight })}` : '')),
-      h('td', { class: 'num mono m-meta', title: `${t('ov.requests')}: ${fmtInt(k.requests)}\n${t('ov.errorsCap')}: ${fmtInt(k.errors)}\n${t('common.cost')}: ${fmtUSD(k.cost_usd)}\n${t('common.lastUsed')}: ${k.last_used_at ? fmtDateTime(k.last_used_at) : '—'}` },
-        h('div', { class: 'nowrap' }, fmtCompact(k.requests), h('span', { class: 'muted' }, ` ${t('keys.reqShort')}`), k.errors ? h('span', { class: errRate > 0.1 ? 'text-danger' : 'muted' }, ` · ${fmtCompact(k.errors)} ${t('keys.errShort')}`) : null),
+      h('td', { class: 'num mono m-meta', title: `${t('kt.attempts')}: ${fmtInt(att)}\n${t('kt.attemptErrors')}: ${fmtInt(attErr)}\n${t('kt.attemptsHint')}\n${t('common.cost')}: ${fmtUSD(k.cost_usd)}\n${t('common.lastUsed')}: ${k.last_used_at ? fmtDateTime(k.last_used_at) : '—'}` },
+        h('div', { class: 'nowrap' }, fmtCompact(att), h('span', { class: 'muted' }, ` ${t('kt.attShort')}`), attErr ? h('span', { class: errRate > 0.1 ? 'text-danger' : 'muted' }, ` · ${fmtCompact(attErr)} ${t('kt.failShort')}`) : null),
         h('div', { class: 'cell-sub nowrap' }, fmtUSD(k.cost_usd), ' · ', timeEl(k.last_used_at))),
       h('td', { class: 'm-meta' }, k.last_test
         ? h('button', { class: 'link-cell', onclick: (e) => { e.stopPropagation(); showTestResult({ ...k.last_test, key_name: k.name }); }, title: testMessage(k.last_test) }, testBadge(k.last_test), k.last_test.latency_ms != null ? h('span', { class: 'mono muted small' }, fmtMs(k.last_test.latency_ms)) : null)
-        : h('span', { class: 'muted small nowrap' }, t('keys.neverTested'))),
+        : badge(t('kt.untested'), 'neutral', { title: t('keys.neverTested') })),
       h('td', { class: 'col-actions m-menu' }, h('div', { class: 'row-actions' },
-        h('button', { class: 'btn btn-ghost btn-icon btn-sm hide-m', title: t('keys.test'), 'aria-label': t('keys.test'), onclick: (e) => testOne(k, e.currentTarget) }, icon('zap', 15)),
+        h('button', { class: 'btn btn-ghost btn-icon btn-sm hide-m', title: t('kd.viewLogs'), 'aria-label': t('kd.viewLogs'), onclick: (e) => { e.stopPropagation(); ctx.navigate(`#/logs?key_id=${k.id}`); } }, icon('logs', 15)),
+        h('button', { class: 'btn btn-ghost btn-icon btn-sm hide-m', title: t('kt.zapTip'), 'aria-label': t('kt.quickCheck'), onclick: (e) => { e.stopPropagation(); testOne(k, e.currentTarget, false); } }, icon('zap', 15)),
         menu)));
     return tapToMenu(tr, menu);
   }
@@ -284,10 +311,13 @@ export function render(el, ctx) {
   }
 
   ctx.onParams((p) => {
-    Object.assign(st, stateFromParams(p));
+    const next = stateFromParams(p);
+    const listChanged = ['q', 'status', 'page', 'pageSize'].some((f) => next[f] !== st[f]);
+    Object.assign(st, next);
     search.input.value = st.q; statusSel.value = st.status;
-    sel.clear();
-    load();
+    if (listChanged) { sel.clear(); load(); }
+    drawer.sync(p.open);
+    if (p.new) { openForm(); ctx.setParams({ ...listParams(), open: drawer.id || '' }); }
   });
 
   // ---- bulk actions: one API call per key, three at a time, with live progress ----
@@ -321,13 +351,13 @@ export function render(el, ctx) {
     await runBulk(enabled ? t('common.enable') : t('common.disable'), (k) => patch(`/api/v1/keys/${k.id}`, { enabled }));
   }
   async function bulkDelete() {
-    const ok = await confirmDialog({ title: t('keys.bulkDeleteTitle', { n: sel.size }), message: t('keys.bulkDeleteMsg'), confirmText: t('common.delete'), danger: true });
+    const ok = await confirmDialog({ title: t('keys.bulkDeleteTitle', { n: sel.size }), message: t('kd.bulkDeleteMsg'), confirmText: t('common.delete'), danger: true });
     if (ok) await runBulk(t('common.delete'), (k) => del(`/api/v1/keys/${k.id}`));
   }
   async function bulkTest() {
-    const probeBox = checkbox({ checked: false, label: t('keys.probeLabel'), hint: t('keys.probeHint') });
+    const probeBox = checkbox({ checked: false, label: t('kt.fullCheckOpt'), hint: t('kt.fullCheckOptHint') });
     const ids = st.rows.filter((k) => sel.has(k.id)).map((k) => k.id);
-    const ok = await confirmDialog({ title: t('keys.bulkTestTitle', { n: ids.length }), message: t('keys.testAllMsg'), confirmText: t('keys.bulkTest'), extra: probeBox });
+    const ok = await confirmDialog({ title: t('kt.bulkTitle', { n: ids.length }), message: t('kt.testAllMsg'), confirmText: t('kt.quickCheck'), extra: probeBox });
     if (!ok || !ids.length) return;
     await startTest({ ids, probe: probeBox.input.checked });
     sel.clear(); syncSelection();
@@ -341,35 +371,37 @@ export function render(el, ctx) {
     } catch (e) { toastError(e); }
   }
 
-  async function testOne(k, btn, probe = true) {
+  // probe=false is the quick check (GET /v1/api-key only, no cost); probe=true also sends one minimal request.
+  async function testOne(k, btn, probe = false) {
     const run = async () => {
       try {
         const r = await post(`/api/v1/keys/${k.id}/test`, { probe });
-        toast(`${k.name}: ${t(`test.${r.status}`) || r.status}`, r.ok ? 'success' : 'warning');
+        const status = t(`test.${r.status}`) || r.status;
+        const why = r.ok ? '' : (testMessage(r) || readableReason(r.message).short);
+        toast(why ? `${k.name}: ${status} — ${why}` : `${k.name}: ${status}`, r.ok ? 'success' : 'warning', r.ok ? 4200 : 7000);
         // Always title the dialog with the key's current name (the stored result may carry an old one).
         showTestResult({ ...r, key_name: k.name });
-        load();
+        load(); drawer.refresh();
       } catch (e) { toastError(e); }
     };
     if (btn) await busy(btn, run); else await run();
   }
 
   async function testAll(btn) {
-    const probeBox = checkbox({ checked: true, label: t('keys.probeLabel'), hint: t('keys.probeHint') });
-    const ok = await confirmDialog({ title: t('keys.testAllTitle'), message: t('keys.testAllMsg'), confirmText: t('keys.testAll'), extra: probeBox });
+    const ok = await confirmDialog({ title: t('kt.testAllTitle'), message: t('kt.testAllMsg'), confirmText: t('kt.testAll') });
     if (!ok) return;
-    await busy(btn, () => startTest({ probe: probeBox.input.checked }));
+    await busy(btn, () => startTest({ probe: false }));
     if (testJob.running()) btn.disabled = true;
   }
 
   async function reset(k) {
-    try { await post(`/api/v1/keys/${k.id}/reset`, {}); toast(t('keys.resetDone', { name: k.name }), 'success'); await load(); } catch (e) { toastError(e); }
+    try { await post(`/api/v1/keys/${k.id}/reset`, {}); toast(t('keys.resetDone', { name: k.name }), 'success'); drawer.refresh(); await load(); } catch (e) { toastError(e); }
   }
 
   async function remove(k) {
-    const ok = await confirmDialog({ title: t('keys.deleteTitle'), message: t('keys.deleteMsg', { name: k.name || k.key_masked }), confirmText: t('common.delete'), danger: true });
+    const ok = await confirmDialog({ title: t('keys.deleteTitle'), message: t('kd.deleteMsg', { name: k.name || k.key_masked }), confirmText: t('common.delete'), danger: true });
     if (!ok) return;
-    try { await del(`/api/v1/keys/${k.id}`); toast(t('common.deleted'), 'success'); load(); } catch (e) { toastError(e); }
+    try { await del(`/api/v1/keys/${k.id}`); toast(t('common.deleted'), 'success'); if (drawer.id === k.id) drawer.close(); load(); } catch (e) { toastError(e); }
   }
 
   function openForm(k) {
@@ -407,7 +439,14 @@ export function render(el, ctx) {
       h('div', { class: 'field field-full' }, enabled),
       h('button', { type: 'submit', hidden: true }));
     const saveBtn = h('button', { class: 'btn btn-primary', onclick: () => save() }, h('span', null, edit ? t('common.save') : t('keys.add')));
-    const m = openModal({ title: edit ? t('keys.editTitle', { name: k.name }) : t('keys.addTitle'), size: 'md', body, footer: [h('button', { class: 'btn', onclick: () => m.close() }, t('common.cancel')), saveBtn] });
+    // P0-4: test right after adding a key or replacing its secret (quick check, no cost).
+    const autoTest = checkbox({ checked: true, label: t('kt.autoTest') });
+    autoTest.classList.add('footer-check');
+    if (edit) {
+      autoTest.hidden = true;
+      f.key.input.addEventListener('input', () => { autoTest.hidden = !f.key.input.value.trim(); });
+    }
+    const m = openModal({ title: edit ? t('keys.editTitle', { name: k.name }) : t('keys.addTitle'), size: 'md', body, footer: [autoTest, h('button', { class: 'btn', onclick: () => m.close() }, t('common.cancel')), saveBtn] });
     async function save() {
       const num = (x) => (x.value === '' ? undefined : Number(x.value));
       const payload = {
@@ -424,12 +463,16 @@ export function render(el, ctx) {
         for (const [kk, v] of Object.entries(payload)) if (v !== undefined && v !== k[kk]) body[kk] = v;
         if (!Object.keys(body).length) { m.close(); return; }
       }
+      const runTest = autoTest.input.checked && (!edit || body.key !== undefined);
       await busy(saveBtn, async () => {
+        let saved;
         try {
-          if (edit) await patch(`/api/v1/keys/${k.id}`, body); else await post('/api/v1/keys', body);
-          toast(edit ? t('common.saved') : t('keys.added'), 'success');
-          m.close(); load();
-        } catch (e) { if (e.status === 400) showErr(e); else toastError(e); }
+          saved = edit ? await patch(`/api/v1/keys/${k.id}`, body) : await post('/api/v1/keys', body);
+        } catch (e) { if (e.status === 400) showErr(e); else toastError(e); return; }
+        toast(edit ? t('common.saved') : t('keys.added'), 'success', runTest ? 2000 : 4200);
+        m.close(); load(); drawer.refresh();
+        const target = saved && saved.id ? saved : (edit ? { ...k, ...body } : null);
+        if (runTest && target) testOne(target, null, false);
       });
     }
   }
@@ -443,7 +486,7 @@ export function render(el, ctx) {
     const weight = input({ type: 'number', value: 1, min: 1, step: 1 });
     const prefix = input({ value: 'key', placeholder: 'key' });
     const testBox = checkbox({ checked: true, label: t('keys.importTest') });
-    const probeBox = checkbox({ checked: false, label: t('keys.probeLabel'), hint: t('keys.probeHint') });
+    const probeBox = checkbox({ checked: false, label: t('kt.fullCheckOpt'), hint: t('kt.fullCheckOptHint') });
     const impErr = h('div', { class: 'callout callout-danger field-full', role: 'alert', hidden: true }, icon('xCircle', 16), h('span', { class: 'break' }));
     baseUrl.addEventListener('input', () => { baseUrl.classList.remove('invalid'); impErr.hidden = true; });
     const form = h('div', { class: 'form-grid' },
@@ -488,8 +531,88 @@ export function render(el, ctx) {
     }));
   }
 
+  // ---- detail drawer (P0-3) ----
+  function buildDrawer(id, d, signal) {
+    const actionsEl = h('div', { class: 'detail-actions' });
+    const reasonEl = h('div');
+    const testEl = h('div');
+    const configEl = h('div');
+    let k = st.rows.find((x) => x.id === id) || null;
+    const paint = () => {
+      if (!k) return;
+      const rr = readableReason(k.status !== 'active' ? k.status_reason : '');
+      d.setHead({
+        title: k.name || `#${k.id}`,
+        badges: [
+          h('span', { title: rr.full || null }, statusBadgeFor(k)),
+          k.status === 'cooldown' && k.cooldown_until ? h('span', { class: 'countdown mono muted small', 'data-countdown': k.cooldown_until, title: fmtDateTime(k.cooldown_until) }, countdownText(k.cooldown_until)) : null,
+          k.auto_disabled ? h('button', { class: 'btn btn-sm btn-warning-soft btn-restore', title: t('keys.restoreHint'), onclick: (e) => busy(e.currentTarget, () => reset(k)) }, icon('reset', 13), h('span', null, t('keys.restore'))) : null,
+        ],
+        sub: [
+          h('span', { class: 'mono' }, k.key_masked || '—'),
+          h('span', { title: `${t('keys.priority')} / ${t('keys.weight')}` }, `P${k.priority ?? 0} · W${k.weight ?? 1}`),
+          k.created_at ? h('span', { title: fmtDateTime(k.created_at) }, t('kd.added', { when: timeEl(k.created_at).textContent })) : null,
+        ],
+      });
+      actionsEl.replaceChildren(
+        button(t('common.edit'), { icon: 'edit', size: 'sm', onClick: () => openForm(k) }),
+        button(t('kt.quickCheck'), { icon: 'zap', size: 'sm', attrs: { title: t('kt.zapTip') }, onClick: (e) => testOne(k, e.currentTarget, false) }),
+        button(t('kd.viewLogs'), { icon: 'logs', size: 'sm', onClick: () => ctx.navigate(`#/logs?key_id=${k.id}`) }),
+        k.enabled
+          ? button(t('keys.disable'), { icon: 'xCircle', size: 'sm', variant: 'danger-soft', onClick: (e) => busy(e.currentTarget, () => setEnabled(k, false)) })
+          : button(t('keys.enable'), { icon: 'checkCircle', size: 'sm', onClick: (e) => busy(e.currentTarget, () => setEnabled(k, true)) }));
+      reasonEl.replaceChildren(rr.short
+        ? h('div', { class: `callout ${k.auto_disabled ? 'callout-danger' : 'callout-warning'}` }, icon(k.auto_disabled ? 'xCircle' : 'alert', 16),
+          h('div', { class: 'break', title: rr.full }, k.auto_disabled ? t('kd.autoDisabledWhy', { reason: rr.short }) : rr.short))
+        : '');
+      reasonEl.hidden = !rr.short;
+      const lt = k.last_test;
+      if (lt) {
+        const hero = testResultView({ ...lt, key_name: '' }).querySelector('.test-hero');
+        testEl.replaceChildren(hero, h('div', { class: 'dd-test-actions' },
+          button(t('kd.testDetails'), { size: 'sm', variant: 'ghost', icon: 'info', onClick: () => showTestResult({ ...lt, key_name: k.name }) })));
+      } else {
+        testEl.replaceChildren(h('div', { class: 'test-hero test-neutral' }, icon('info', 22),
+          h('div', null, h('div', { class: 'test-hero-title' }, t('keys.neverTested')), h('div', { class: 'test-hero-msg' }, t('kd.neverTestedDesc'))),
+          button(t('kd.testNow'), { icon: 'zap', size: 'sm', variant: 'primary', onClick: (e) => testOne(k, e.currentTarget, false) })));
+      }
+      const lim = (v) => (v ? fmtInt(v) : '∞');
+      configEl.replaceChildren(kv([
+        [t('keys.baseUrl'), h('span', { class: 'mono small break' }, k.base_url || 'https://api.x.ai')],
+        [t('kd.prioWeight'), `${k.priority ?? 0} / ${k.weight ?? 1}`],
+        [t('kd.concRpm'), `${lim(k.max_concurrency)} / ${lim(k.rpm_limit)}`],
+        [t('common.notes'), k.notes ? h('span', { class: 'break' }, k.notes) : null],
+        [t('kd.created'), k.created_at ? h('span', { title: fmtDateTime(k.created_at) }, fmtDateTime(k.created_at, { seconds: false })) : null],
+        [t('kd.updated'), k.updated_at ? h('span', { title: fmtDateTime(k.updated_at) }, fmtDateTime(k.updated_at, { seconds: false })) : null],
+      ]));
+    };
+    const fetchKey = async () => {
+      try {
+        k = await get(`/api/v1/keys/${id}`, null, { signal });
+        if (signal.aborted) return;
+        paint();
+        if (!d.body.querySelector('.entity-body')) mountBody();
+      } catch (e) {
+        if (e.name === 'AbortError' || signal.aborted) return;
+        if (e.status === 404) goneBody(d, { by: 'key', param: 'key_id', id, signal, navigate: ctx.navigate, message: t('kd.notFound') });
+        else if (!d.body.querySelector('.entity-body')) d.setBody(h('div', { class: 'drawer-loading' }, icon('alert', 22), h('span', null, errorMessage(e))));
+        else toastError(e);
+      }
+    };
+    const mountBody = () => d.setBody(h('div', { class: 'entity-body' },
+      actionsEl, reasonEl,
+      section(t('kd.usage'), usageBlock('key', id, signal)),
+      h('div', { class: 'entity-cols' }, section(t('kd.lastCheck'), testEl), section(t('kd.config'), configEl)),
+      section(t('kd.recentFailures'), failuresBlock({ param: 'key_id', id, signal, navigate: ctx.navigate }), allLogsLink(`#/logs?key_id=${id}`, ctx.navigate))));
+    if (k) { paint(); mountBody(); }
+    fetchKey();
+    return fetchKey;
+  }
+
+  if (ctx.params.new) openForm();
   syncParams();
   load();
+  if (ctx.params.open) drawer.open(ctx.params.open);
   testJob.resume();
   const timer = setInterval(() => { if (!document.hidden && !document.querySelector('.overlay')) load({ silent: true }); }, 15000);
   return () => clearInterval(timer);

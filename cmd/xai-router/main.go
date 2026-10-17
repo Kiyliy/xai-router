@@ -110,7 +110,7 @@ func run() error {
 			"  │                                                          │\n" +
 			fmt.Sprintf("  │     %-52s │\n", a.GeneratedPassword) +
 			"  │                                                          │\n" +
-			"  │ Log in to the console and change it under Settings.      │\n" +
+			"  │ Log in to the console and change it under Admin access.  │\n" +
 			"  └──────────────────────────────────────────────────────────┘\n"
 		fmt.Fprint(os.Stderr, banner)
 	}
@@ -173,7 +173,7 @@ func resetPassword() error {
 		return err
 	}
 	fmt.Println("New admin password:", pw)
-	fmt.Println("All sessions were signed out. Change the password in the console under Settings.")
+	fmt.Println("All sessions were signed out. Change the password in the console under Admin access.")
 	return nil
 }
 

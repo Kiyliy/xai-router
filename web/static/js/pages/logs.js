@@ -9,6 +9,7 @@ import {
   card, toast, toastError, openModal, badge, select, input, pager as pagerEl, setTableLoading, skeletonRows, tableEmptyRow, tableWrap,
   segmented, switchEl, button, copyButton, busy, tabs, kv, spinner, errorMessage,
 } from '../ui.js';
+import { cred, credText } from '../detail-drawer.js';
 
 const PRESETS = ['15m', '1h', '24h', '7d', 'all', 'custom'];
 const PRESET_MS = { '15m': 15 * 60e3, '1h': 3600e3, '24h': 86400e3, '7d': 7 * 86400e3 };
@@ -278,6 +279,12 @@ function wsSessionView(s) {
   ]));
 }
 
+/** 503 "no upstream API keys are available" (proxy error code no_upstream_keys). */
+function isNoUpstreamKeys(d) {
+  return /no_upstream_keys|no upstream API keys are available/i.test(d.error || '') ||
+    (d.status === 503 && /no_upstream_keys/.test(d.response_body || ''));
+}
+
 function detailView(d, ctx) {
   // The gateway adds stream_options.include_usage to streaming chat completions (setting
   // inject_stream_usage); the logged body is the client's original, so say so.
@@ -316,6 +323,8 @@ function detailView(d, ctx) {
       curlBtn,
       copyButton(d.request_id || '', { label: t('logs.copyReqId') })),
     d.error ? h('div', { class: 'callout callout-danger' }, icon('xCircle', 16), h('div', { class: 'break' }, d.error)) : null,
+    isNoUpstreamKeys(d) ? h('div', { class: 'callout callout-danger ll-nokeys' }, icon('key', 16),
+      h('div', null, t('ll.noKeys'), ' ', link(t('ll.noKeysLink'), '#/keys'))) : null,
     d.truncated ? h('div', { class: 'callout callout-warning' }, icon('alert', 16), h('span', null, t('logs.truncatedNotice'))) : null,
     h('div', { class: 'dstats' },
       stat(t('common.status'), statusBadge(d.status), d.status === 499 ? t('logs.clientGone') : null),
@@ -327,7 +336,7 @@ function detailView(d, ctx) {
       h('div', { class: 'detail-block' }, h('h4', null, t('logs.request')), kv([
         [t('common.model'), d.model ? h('span', { class: 'mono' }, d.model) : null],
         [t('logs.stream'), d.stream ? badge(t('logs.streamYes'), 'accent') : t('logs.streamNo')],
-        [t('common.token'), d.token_name ? (d.token_id != null ? link(d.token_name, `#/logs?token_id=${d.token_id}`) : d.token_name) : null],
+        [t('common.token'), d.token_name ? (d.token_id != null ? link(cred(d.token_name, d.token_prefix ? `${d.token_prefix}…` : ''), `#/logs?token_id=${d.token_id}`) : cred(d.token_name, d.token_prefix ? `${d.token_prefix}…` : '')) : null],
         [t('common.key'), d.key_name ? (d.key_id != null ? link(d.key_name, `#/logs?key_id=${d.key_id}`) : d.key_name) : null],
         [t('logs.clientIp'), d.client_ip ? h('span', { class: 'mono' }, d.client_ip) : null],
         [t('logs.userAgent'), d.user_agent ? h('span', { class: 'mono small break' }, d.user_agent) : null],
@@ -497,7 +506,7 @@ export function render(el, ctx) {
       h('td', { class: 'cell-model m-meta' }, h('div', { class: 'model-line' }, r.model ? h('span', { class: 'mono model-name', title: r.model }, r.model) : h('span', { class: 'muted' }, '—'), r.stream ? h('span', { class: 'stream-tag', title: t('logs.streamYes') }, icon('stream', 12), 'SSE') : null, r.websocket ? h('span', { class: 'stream-tag', title: 'WebSocket' }, icon('stream', 12), 'WS') : null)),
       h('td', { class: 'nowrap m-badge' }, statusBadge(r.status), retried ? badge(`×${r.attempts}`, 'warning', { class: 'badge-tries', title: t('logs.retriedN', { n: r.attempts }) }) : null),
       h('td', { class: 'truncate-cell m-meta m-who' },
-        h('div', { class: 'truncate', title: `${t('common.token')}: ${r.token_name || '—'}` }, r.token_name || h('span', { class: 'muted' }, '—')),
+        h('div', { class: 'truncate', title: `${t('common.token')}: ${credText(r.token_name, r.token_prefix ? `${r.token_prefix}…` : '')}` }, r.token_name ? cred(r.token_name, r.token_prefix ? `${r.token_prefix}…` : '') : h('span', { class: 'muted' }, '—')),
         h('div', { class: 'cell-sub truncate', title: `${t('common.key')}: ${r.key_name || '—'}` }, icon('key', 10), ' ', r.key_name || '—')),
       h('td', { class: `num mono m-meta ${r.latency_ms > 30000 ? 'text-warning' : ''}` }, h('div', null, fmtMs(r.latency_ms)), r.ttfb_ms ? h('div', { class: 'cell-sub', title: t('logs.ttfbClientHint') }, `${t('logs.ttfbShort')} ${fmtMs(r.ttfb_ms)}`) : null),
       h('td', { class: 'num mono m-meta', title: tokTip }, tokCell),
@@ -563,13 +572,14 @@ export function render(el, ctx) {
       get('/api/v1/tokens', { page_size: 200 }, { signal: ctx.signal }),
       get('/api/v1/models', null, { signal: ctx.signal }),
     ]);
-    const fill = (sel, items, anyLabel, cur) => {
-      const opts = [h('option', { value: '' }, anyLabel), ...items.map((x) => h('option', { value: String(x.id), selected: String(x.id) === String(cur) }, x.name || `#${x.id}`))];
+    // Options read "name · prefix" so same-named tokens / keys can be told apart.
+    const fill = (sel, items, anyLabel, cur, hint) => {
+      const opts = [h('option', { value: '' }, anyLabel), ...items.map((x) => h('option', { value: String(x.id), selected: String(x.id) === String(cur) }, credText(x.name || `#${x.id}`, hint(x))))];
       if (cur && !items.some((x) => String(x.id) === String(cur))) opts.push(h('option', { value: cur, selected: true }, `#${cur}`));
       sel.replaceChildren(...opts);
     };
-    if (ks.status === 'fulfilled') fill(keySel, ks.value.data || [], t('logs.anyKey'), st.key_id);
-    if (ts.status === 'fulfilled') fill(tokenSel, ts.value.data || [], t('logs.anyToken'), st.token_id);
+    if (ks.status === 'fulfilled') fill(keySel, ks.value.data || [], t('logs.anyKey'), st.key_id, (x) => x.key_masked || '');
+    if (ts.status === 'fulfilled') fill(tokenSel, ts.value.data || [], t('logs.anyToken'), st.token_id, (x) => (x.prefix ? `${x.prefix}…` : ''));
     if (ms.status === 'fulfilled') dlModels.replaceChildren(...(ms.value.data || []).map((m) => h('option', { value: m.id })));
   }
 

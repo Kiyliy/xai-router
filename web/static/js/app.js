@@ -3,7 +3,7 @@ import { h, mount, relTime, fmtDuration, qsParse, qsBuild } from './util.js';
 import { icon, logo } from './icons.js';
 import { t, getLang, setLang } from './i18n.js';
 import { auth, onUnauthorized, get, post } from './api.js';
-import { toastError, segmented, closeAllModals, closeMenus, busy, confirmDialog, passwordInput, errorMessage } from './ui.js';
+import { toastError, segmented, closeAllModals, closeMenus, busy, confirmDialog, passwordInput, errorMessage, openMenu } from './ui.js';
 import { applyTheme, cycleTheme, getThemePref } from './theme.js';
 import * as overview from './pages/overview.js';
 import * as keys from './pages/keys.js';
@@ -11,18 +11,52 @@ import * as tokens from './pages/tokens.js';
 import * as models from './pages/models.js';
 import * as logs from './pages/logs.js';
 import * as settings from './pages/settings.js';
-import { openPasswordDialog } from './pages/settings.js';
+import * as data from './pages/data.js';
+import * as access from './pages/access.js';
+import { openPasswordDialog } from './pages/access.js';
 import * as docs from './pages/docs.js';
+import { docsTab } from './pages/docs.js';
 
-const ROUTES = {
-  overview: { page: overview, icon: 'overview' },
-  keys: { page: keys, icon: 'key' },
-  tokens: { page: tokens, icon: 'ticket' },
-  models: { page: models, icon: 'cpu' },
-  logs: { page: logs, icon: 'logs' },
-  settings: { page: settings, icon: 'settings' },
-  docs: { page: docs, icon: 'book' },
-};
+const ROUTES = { overview, keys, tokens, models, logs, settings, data, access, docs };
+
+// Sidebar: "overview" on its own, then the gateway / system / docs groups (pm-spec 2.1).
+// The two docs entries are tabs of one page; `tab` picks which one is active.
+const NAV = [
+  { route: 'overview', icon: 'overview' },
+  { group: 'gateway' },
+  { route: 'keys', icon: 'key' },
+  { route: 'tokens', icon: 'ticket' },
+  { route: 'models', icon: 'cpu' },
+  { route: 'logs', icon: 'logs' },
+  { group: 'system' },
+  { route: 'settings', icon: 'settings' },
+  { route: 'data', icon: 'database' },
+  { route: 'access', icon: 'shield' },
+  { group: 'docs' },
+  { route: 'docs', tab: 'client', icon: 'book', label: 'nav.docsClient' },
+  { route: 'docs', tab: 'admin', icon: 'braces', label: 'nav.docsAdmin' },
+];
+
+/** Page title key for a route (docs depends on its tab); the nav label uses the same key. */
+function titleKey(name, params) {
+  if (name === 'docs') return docsTab(params) === 'admin' ? 'nav.docsAdmin' : 'nav.docsClient';
+  return `nav.${name}`;
+}
+function subtitleKey(name, params) {
+  if (name === 'docs') return docsTab(params) === 'admin' ? 'page.docsAdmin.subtitle' : 'page.docsClient.subtitle';
+  return `page.${name}.subtitle`;
+}
+
+// Old links (v0.3.x) -> new pages.
+function redirectFor(name, params) {
+  if (name === 'settings') {
+    const sec = params.section;
+    if (sec === 'account' || sec === 'password') return '#/access';
+    if (sec === 'maintenance' || sec === 'storage' || sec === 'system') return '#/data';
+  }
+  if (name === 'docs' && params.tab !== 'client' && params.tab !== 'admin') return `#/docs?${qsBuild({ ...params, tab: 'client' })}`;
+  return null;
+}
 
 const app = document.getElementById('app');
 const state = { me: null, info: null, cleanup: null, controller: null, routeSeq: 0, shell: null, view: 'none', guard: null, lastHash: '', onParams: null, curName: '' };
@@ -48,9 +82,15 @@ function teardownPage() {
 
 function route() {
   if (state.view !== 'shell') return;
-  state.lastHash = location.hash;
-  const { name, params } = parseHash();
+  let { name, params } = parseHash();
   if (!ROUTES[name]) { location.replace('#/overview'); return; }
+  const redirect = redirectFor(name, params);
+  if (redirect) {
+    history.replaceState(null, '', redirect);
+    ({ name, params } = parseHash());
+  }
+  state.lastHash = location.hash;
+  checkKeyHealth();
   // Same page, new query (back/forward, or a link to other filters): let the page apply the
   // params in place so the current rows stay visible instead of re-rendering from scratch.
   if (state.onParams && state.curName === name) {
@@ -61,10 +101,10 @@ function route() {
   teardownPage();
   closeAllModals();
   const sh = state.shell;
-  sh.nav.querySelectorAll('.nav-item').forEach((a) => a.classList.toggle('active', a.dataset.route === name));
-  sh.title.textContent = t(`nav.${name}`);
-  sh.subtitle.textContent = t(`page.${name}.subtitle`);
-  document.title = `${t(`nav.${name}`)} · xai-router`;
+  markNav(name, params);
+  sh.title.textContent = t(titleKey(name, params));
+  sh.subtitle.textContent = t(subtitleKey(name, params));
+  document.title = `${t(titleKey(name, params))} · xai-router`;
   sh.actions.replaceChildren();
   sh.shell.classList.remove('sidebar-open');
   const pageEl = h('div', { class: `page page-${name}` });
@@ -94,10 +134,12 @@ function route() {
     setGuard: (fn) => { if (seq === state.routeSeq) state.guard = fn; },
     info: () => state.info,
     refreshInfo: loadInfo,
+    // Pages that already fetched /stats/overview pass its `keys` block to update the banner.
+    reportKeys: (k) => setKeyHealth(k),
   };
   state.curName = name;
   let r;
-  try { r = ROUTES[name].page.render(pageEl, ctx); } catch (e) { console.error(e); toastError(e); }
+  try { r = ROUTES[name].render(pageEl, ctx); } catch (e) { console.error(e); toastError(e); }
   if (r && typeof r.then === 'function') {
     r.then((c) => { if (seq === state.routeSeq) state.cleanup = c; else if (typeof c === 'function') c(); })
       .catch((e) => { if (e.name !== 'AbortError') { console.error(e); toastError(e); } });
@@ -122,18 +164,16 @@ function prefsButtons(compact = false) {
 function renderShell() {
   state.view = 'shell';
   const nav = h('nav', { class: 'nav' },
-    Object.entries(ROUTES).map(([name, r]) => [
-      name === 'settings' ? h('div', { class: 'nav-sep' }) : null,
-      h('a', { class: 'nav-item', href: `#/${name}`, 'data-route': name }, icon(r.icon, 17), h('span', null, t(`nav.${name}`))),
-    ]));
-  const meLabel = state.me ? (state.me.type === 'admin_token' ? `${t('auth.adminToken')} · ${state.me.name || ''}` : t('auth.session')) : '';
-  const logoutBtn = h('button', { class: 'btn btn-ghost btn-icon', title: t('auth.logout'), 'aria-label': t('auth.logout'), onclick: logout }, icon('logout', 17));
+    NAV.map((it) => (it.group
+      ? h('div', { class: 'nav-group-label', role: 'presentation' }, t(`nav.group.${it.group}`))
+      : h('a', { class: 'nav-item', href: it.tab ? `#/${it.route}?tab=${it.tab}` : `#/${it.route}`, 'data-route': it.route, 'data-tab': it.tab || '' },
+        icon(it.icon, 17), h('span', null, t(it.label || `nav.${it.route}`))))));
   const sidebar = h('aside', { class: 'sidebar' },
     h('div', { class: 'brand' }, logo(28), h('div', { class: 'brand-text' }, h('div', { class: 'brand-name' }, 'xai-router'), h('div', { class: 'brand-sub' }, t('app.tagline')))),
     nav,
     h('div', { class: 'sidebar-foot' },
-      h('div', { class: 'me' }, h('span', { class: 'me-dot' }), h('span', { class: 'me-label', title: meLabel }, meLabel)),
-      h('div', { class: 'sidebar-tools' }, prefsButtons(), logoutBtn)));
+      accountButton(),
+      h('div', { class: 'sidebar-tools' }, prefsButtons())));
   const title = h('h1', { class: 'topbar-title' });
   const subtitle = h('p', { class: 'topbar-subtitle' });
   const actions = h('div', { class: 'topbar-actions' });
@@ -159,16 +199,99 @@ function renderShell() {
   renderBanner();
 }
 
+function markNav(name, params) {
+  const tab = name === 'docs' ? docsTab(params) : '';
+  state.shell.nav.querySelectorAll('.nav-item').forEach((a) => a.classList.toggle('active', a.dataset.route === name && (a.dataset.tab || '') === tab));
+}
+
+// ---------- account menu (sidebar foot) ----------
+function identity() {
+  const me = state.me || {};
+  const isToken = me.type === 'admin_token';
+  return {
+    isToken,
+    name: isToken ? (me.name || t('auth.adminToken')) : t('account.admin'),
+    sub: isToken ? t('auth.adminToken') : t('auth.session'),
+    label: isToken ? `${t('auth.adminToken')} · ${me.name || ''}` : t('auth.session'),
+  };
+}
+function accountButton() {
+  const id = identity();
+  const btn = h('button', {
+    class: 'me-btn', type: 'button', 'aria-haspopup': 'menu', 'aria-expanded': 'false', title: id.label,
+    // mousedown outside the menu already closes it; remember that so this click does not reopen it.
+    onmousedown: () => { btn._wasOpen = btn.getAttribute('aria-expanded') === 'true'; },
+    onclick: (e) => {
+      e.stopPropagation();
+      if (btn._wasOpen) { btn._wasOpen = false; closeMenus(); return; }
+      openAccountMenu(btn);
+    },
+  },
+  h('span', { class: 'me-avatar' }, icon(id.isToken ? 'key' : 'lock', 13)),
+  h('span', { class: 'me-text' }, h('span', { class: 'me-name' }, id.isToken ? id.label : id.name), h('span', { class: 'me-sub' }, id.isToken ? t('account.viaToken') : id.sub)),
+  icon('chevronDown', 15));
+  return btn;
+}
+function openAccountMenu(btn) {
+  const id = identity();
+  openMenu(btn, [
+    !id.isToken ? { icon: 'lock', label: t('account.changePassword'), onClick: () => openPasswordDialog({ onDone: () => loadInfo() }) } : null,
+    { icon: 'shield', label: t('nav.access'), onClick: () => { location.hash = '#/access'; } },
+    '-',
+    { icon: 'logout', label: t('auth.logout'), danger: true, onClick: logout },
+  ]);
+  const pop = document.querySelector('.menu-pop');
+  if (!pop) return;
+  pop.classList.add('menu-account');
+  pop.prepend(h('div', { class: 'menu-head' }, h('strong', null, id.isToken ? id.label : id.name), id.isToken ? t('account.viaToken') : id.sub), h('div', { class: 'menu-sep' }));
+  // Open upward, aligned with the sidebar's inner edge.
+  const r = btn.getBoundingClientRect();
+  pop.style.left = `${Math.max(8, r.left)}px`;
+  pop.style.top = `${Math.max(8, r.top - pop.offsetHeight - 6)}px`;
+  btn.setAttribute('aria-expanded', 'true');
+  const obs = new MutationObserver(() => { if (!pop.isConnected) { btn.setAttribute('aria-expanded', 'false'); obs.disconnect(); } });
+  obs.observe(document.body, { childList: true });
+}
+
+// ---------- banners ----------
 function renderBanner() {
   const slot = state.shell && state.shell.banner;
   if (!slot) return;
+  const nodes = [];
+  // Red "no usable upstream key" banner first: every request fails while it shows (pm-spec P1-2).
+  const k = state.keyHealth;
+  if (k && k.total > 0 && !k.active) {
+    nodes.push(h('div', { class: 'banner banner-danger', role: 'alert' },
+      icon('xCircle', 16),
+      h('span', { class: 'banner-text' }, h('strong', null, t('banner.noKeys')), ' ', t('banner.noKeysDesc')),
+      h('a', { class: 'btn btn-sm', href: '#/keys' }, t('banner.noKeysBtn'))));
+  }
   if (state.info && state.info.needs_password_change) {
-    mount(slot, h('div', { class: 'banner banner-warning', role: 'alert' },
+    nodes.push(h('div', { class: 'banner banner-warning', role: 'alert' },
       icon('alert', 16),
       h('span', { class: 'banner-text' }, t('banner.changePassword')),
       h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openPasswordDialog({ onDone: () => loadInfo() }) }, t('banner.changePasswordBtn'))));
-  } else slot.replaceChildren();
+  }
+  slot.replaceChildren(...nodes);
 }
+
+function setKeyHealth(k) {
+  if (!k || typeof k !== 'object') return;
+  const prev = state.keyHealth;
+  state.keyHealth = { total: k.total || 0, active: k.active || 0 };
+  if (!prev || prev.total !== state.keyHealth.total || prev.active !== state.keyHealth.active) renderBanner();
+}
+let healthBusy = false;
+// keys.total / keys.active do not depend on the range; 1h is the cheapest query.
+async function checkKeyHealth() {
+  if (healthBusy || state.view !== 'shell' || !auth.token) return;
+  healthBusy = true;
+  try { const o = await get('/api/v1/stats/overview', { range: '1h' }); setKeyHealth(o && o.keys); }
+  catch (e) { if (e.status !== 401) console.warn('stats/overview', e); }
+  finally { healthBusy = false; }
+}
+setInterval(() => { if (!document.hidden) checkKeyHealth(); }, 60000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkKeyHealth(); });
 
 async function loadInfo() {
   try { state.info = await get('/api/v1/system/info'); renderBanner(); } catch (e) { if (e.status !== 401) console.warn('system/info', e); }

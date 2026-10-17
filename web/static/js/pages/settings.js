@@ -1,13 +1,12 @@
-import { h, fmtBytes, fmtDuration, fmtDateTime, timeEl, fmtInt, fmtTotal, relTime, toLocalInput } from '../util.js';
-import { jobPanel, asJob } from '../jobs.js';
+import { h } from '../util.js';
 import { icon } from '../icons.js';
 import { t } from '../i18n.js';
-import { get, put, post, del } from '../api.js';
-import {
-  card, toast, toastError, openModal, confirmDialog, switchEl, field, input, select, button, busy, tagInput,
-  kv, tableWrap, tableEmptyRow, skeletonRows, spinner, passwordInput, checkbox, errorMessage,
-} from '../ui.js';
-import { showSecret } from './tokens.js';
+import { get, put } from '../api.js';
+import { card, toast, toastError, switchEl, field, input, select, busy, tagInput, spinner, errorMessage } from '../ui.js';
+
+// Password and admin API tokens moved to #/access, storage / purge / compact / system to #/data (v0.4.0).
+// Re-exported so older imports keep working.
+export { passwordForm, openPasswordDialog } from './access.js';
 
 // Field schema mirrors components.schemas.Settings in openapi.yaml; min/max mirror
 // internal/config/settings.go Validate() so the browser flags out-of-range values before saving.
@@ -35,7 +34,6 @@ const SECTIONS = [
     { k: 'log_bodies', type: 'bool' },
     { k: 'log_body_max_kb', type: 'int', unit: 'KB', min: 1, max: 65536 },
     { k: 'ws_log_messages', type: 'int', min: 0, max: 10000 },
-    { k: 'log_retention_days', type: 'int', unit: 'd', min: 0, max: 3650 },
   ] },
   { id: 'models', icon: 'cpu', fields: [
     { k: 'model_sync_interval_hours', type: 'int', unit: 'h', min: 0, max: 8760 },
@@ -52,47 +50,7 @@ const SECTIONS = [
     { k: 'expose_debug', type: 'bool', full: true },
   ] },
 ];
-const NAV = ['routing', 'timeouts', 'logging', 'models', 'security', 'account'];
-
-/** Change-password form, shared by the Settings page and the "initial password" banner dialog. */
-export function passwordForm({ onDone, autofocus = false } = {}) {
-  const oldPw = passwordInput({ autocomplete: 'current-password', autofocus });
-  const newPw = passwordInput({ autocomplete: 'new-password', minlength: 8 });
-  const newPw2 = passwordInput({ autocomplete: 'new-password' });
-  const revoke = checkbox({ checked: false, label: t('settings.revokeAdminTokens'), hint: t('settings.revokeAdminTokensHint') });
-  const btn = h('button', { class: 'btn btn-primary', type: 'submit' }, h('span', null, t('settings.changePassword')));
-  const form = h('form', { class: 'stack', onsubmit: (e) => { e.preventDefault(); submit(); } },
-    field(t('settings.oldPassword'), oldPw),
-    field(t('settings.newPassword'), newPw, { hint: t('settings.minChars') }),
-    field(t('settings.confirmPassword'), newPw2),
-    revoke,
-    h('div', null, btn));
-  async function submit() {
-    if (!oldPw.input.value) { oldPw.input.focus(); return; }
-    if (newPw.input.value.length < 8) { toast(t('settings.minChars'), 'warning'); newPw.input.focus(); return; }
-    if (newPw.input.value !== newPw2.input.value) { toast(t('settings.mismatch'), 'warning'); newPw2.input.focus(); return; }
-    await busy(btn, async () => {
-      try {
-        const body = { old_password: oldPw.input.value, new_password: newPw.input.value };
-        if (revoke.input.checked) body.revoke_admin_tokens = true;
-        await put('/api/v1/auth/password', body, { noAuthRedirect: true });
-        oldPw.input.value = newPw.input.value = newPw2.input.value = '';
-        revoke.input.checked = false;
-        toast(body.revoke_admin_tokens ? t('settings.passwordChangedRevoked') : t('settings.passwordChanged'), 'success');
-        if (onDone) onDone(body);
-      } catch (e) { toastError(e.status === 401 ? { message: t('settings.wrongPassword') } : e); }
-    });
-  }
-  return form;
-}
-
-export function openPasswordDialog({ onDone } = {}) {
-  const m = openModal({
-    title: t('settings.password'), subtitle: t('settings.passwordSub'), size: 'sm',
-    body: passwordForm({ autofocus: true, onDone: (b) => { m.close(); if (onDone) onDone(b); } }),
-  });
-  return m;
-}
+const NAV = ['routing', 'timeouts', 'logging', 'models', 'security'];
 
 const eq = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
@@ -100,13 +58,13 @@ export function render(el, ctx) {
   let orig = null;
   const controls = {};
   const formCol = h('div', { class: 'settings-main' });
-  const sideCol = h('div', { class: 'settings-side' });
   const navLinks = NAV.map((id) => h('a', {
     class: 'snav-item', href: `#/settings?section=${id}`, 'data-sec': id,
     onclick: (e) => { e.preventDefault(); jump(id); },
-  }, t(id === 'account' ? 'settings.s.account' : `settings.s.${id}`)));
+  }, t(`settings.s.${id}`)));
   const snav = h('nav', { class: 'settings-nav', 'aria-label': t('settings.sections') }, navLinks);
-  el.append(snav, h('div', { class: 'settings-layout' }, formCol, sideCol));
+  el.classList.add('page-narrow');
+  el.append(snav, formCol);
   let spyLock = 0;
   function markNav(id) { navLinks.forEach((a) => a.classList.toggle('active', a.dataset.sec === id)); const cur = navLinks.find((a) => a.dataset.sec === id); if (cur && cur.scrollIntoView && snav.scrollWidth > snav.clientWidth) snav.scrollLeft = cur.offsetLeft - 16; }
   function jump(id) {
@@ -121,15 +79,12 @@ export function render(el, ctx) {
     if (Date.now() < spyLock) return;
     const line = (parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--topbar-real')) || 64) + snav.offsetHeight + 40;
     let best = null, bestTop = -Infinity;
-    // With the two-column layout the account card sits beside the form; it never "owns" the scroll position.
-    const sideBySide = sideCol.getBoundingClientRect().left > formCol.getBoundingClientRect().left + 10;
     for (const id of NAV) {
-      if (id === 'account' && sideBySide) continue;
       const n = el.querySelector(`#sec-${id}`); if (!n) continue;
       const top = n.getBoundingClientRect().top;
       if (top <= line && top > bestTop) { best = id; bestTop = top; }
     }
-    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4 && best !== 'account') best = 'security';
+    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4) best = 'security';
     markNav(best || 'routing');
   };
   window.addEventListener('scroll', onScroll, { passive: true });
@@ -258,160 +213,6 @@ export function render(el, ctx) {
     });
   }
 
-  // ---- side: system info ----
-  const infoBody = h('div', null, h('div', { class: 'skeleton', style: { width: '80%' } }));
-  const storageBody = h('div', null, h('div', { class: 'skeleton', style: { width: '70%' } }));
-  sideCol.append(card({ title: h('span', { class: 'card-title-ic' }, icon('server', 16), t('settings.system')), body: infoBody, actions: button('', { icon: 'refresh', variant: 'ghost', size: 'icon', attrs: { title: t('common.refresh'), 'aria-label': t('common.refresh') }, onClick: loadInfo }) }));
-  const mono = (v) => h('span', { class: 'mono' }, v);
-  const when = (iso) => (iso ? h('span', { title: fmtDateTime(iso) }, fmtDateTime(iso, { seconds: false }), h('span', { class: 'muted' }, ` · ${relTime(iso)}`)) : null);
-  let lastInfo = null;
-  async function loadInfo() {
-    try {
-      const i = await ctx.refreshInfo();
-      if (!i) return;
-      lastInfo = i;
-      infoBody.replaceChildren(kv([
-        [t('settings.version'), mono(i.version || '—')],
-        [t('settings.commit'), i.commit ? mono(i.commit.slice(0, 12)) : null],
-        [t('settings.buildDate'), i.build_date ? mono(i.build_date) : null],
-        [t('settings.goVersion'), mono(i.go_version || '—')],
-        [t('settings.startedAt'), i.started_at ? h('span', { title: fmtDateTime(i.started_at) }, fmtDateTime(i.started_at, { seconds: false })) : null],
-        [t('settings.uptime'), fmtDuration(i.uptime_seconds)],
-        [t('settings.goHeap'), i.go_heap_bytes != null ? mono(fmtBytes(i.go_heap_bytes)) : null],
-        [t('settings.goSys'), i.go_sys_bytes != null ? h('span', { class: 'mono', title: t('settings.goSysHint') }, fmtBytes(i.go_sys_bytes)) : null],
-        [t('settings.goroutines'), i.goroutines != null ? mono(fmtInt(i.goroutines)) : null],
-        [t('settings.logQueue'), fmtInt(i.log_queue_length)],
-        [t('settings.logDropped'), h('span', { class: i.log_dropped ? 'text-warning' : '' }, fmtInt(i.log_dropped))],
-      ]));
-      paintStorage(i);
-    } catch (e) { toastError(e); }
-  }
-
-  // ---- side: storage ----
-  const compactBtn = h('button', { class: 'btn', type: 'button', onclick: () => compact() }, icon('database', 15), h('span', null, t('settings.compact')));
-  const compactJob = jobPanel({
-    kind: 'compact', signal: ctx.signal,
-    describe: (j) => {
-      const r = j.result || {};
-      return t('settings.compacted', { freed: fmtBytes(r.freed_bytes || 0), before: fmtBytes(r.size_before || 0), after: fmtBytes(r.size_after || 0) });
-    },
-    onFinish: (j) => {
-      if (j.state === 'done') toast(t('settings.compacted', { freed: fmtBytes((j.result || {}).freed_bytes || 0), before: fmtBytes((j.result || {}).size_before || 0), after: fmtBytes((j.result || {}).size_after || 0) }), 'success');
-      else toast(j.error || t('jobs.failed'), 'error', 6000);
-      if (ctx.alive()) loadInfo();
-    },
-    onState: (running) => { compactBtn.disabled = running; },
-  });
-  const vacuumWarn = h('div', { class: 'callout callout-warning', hidden: true }, icon('alert', 16), h('span', null, t('settings.compactVacuumWarn')));
-  sideCol.append(card({
-    title: h('span', { class: 'card-title-ic' }, icon('database', 16), t('settings.storage')), subtitle: t('settings.storageSub'),
-    body: h('div', { class: 'stack' }, storageBody, vacuumWarn, h('div', { class: 'row-sm' }, compactBtn, h('span', { class: 'muted small' }, t('settings.compactHint'))), compactJob),
-  }));
-  function paintStorage(i) {
-    const size = i.db_size_bytes || 0, free = i.db_free_bytes || 0;
-    const av = i.db_auto_vacuum || '';
-    storageBody.replaceChildren(kv([
-      [t('settings.dbSize'), mono(fmtBytes(size))],
-      [t('settings.dbFree'), i.db_free_bytes != null ? h('span', null, mono(fmtBytes(free)), size ? h('span', { class: 'muted' }, ` · ${((free / size) * 100).toFixed(free / size < 0.1 ? 1 : 0)}%`) : null) : null],
-      [t('settings.autoVacuum'), av ? h('span', null, mono(av), av !== 'incremental' ? h('span', { class: 'muted' }, ` · ${t('settings.avLegacy')}`) : null) : null],
-      [t('settings.logCount'), i.log_count != null ? h('span', { title: fmtInt(i.log_count) }, fmtTotal(i.log_count, 'approx')) : null],
-      [t('settings.oldestLog'), when(i.oldest_log_at)],
-      [t('settings.newestLog'), when(i.newest_log_at)],
-    ]));
-    vacuumWarn.hidden = !av || av === 'incremental';
-  }
-  async function compact() {
-    const legacy = lastInfo && lastInfo.db_auto_vacuum && lastInfo.db_auto_vacuum !== 'incremental';
-    const ok = await confirmDialog({
-      title: t('settings.compactTitle'), message: t('settings.compactMsg'), confirmText: t('settings.compact'), danger: !!legacy,
-      extra: legacy ? h('div', { class: 'callout callout-warning' }, icon('alert', 16), h('span', null, t('settings.compactVacuumWarn'))) : null,
-    });
-    if (!ok) return;
-    await busy(compactBtn, async () => {
-      try { const r = await post('/api/v1/system/compact', {}); compactJob.track(asJob(r, 'compact')); } catch (e) { toastError(e); }
-    });
-    if (compactJob.running()) compactBtn.disabled = true;
-  }
-
-  // ---- side: account (password) ----
-  const pwCard = card({
-    title: h('span', { class: 'card-title-ic' }, icon('lock', 16), t('settings.password')), subtitle: t('settings.passwordSub'),
-    body: passwordForm({ onDone: (b) => { ctx.refreshInfo(); if (b.revoke_admin_tokens) loadAdminTokens(); } }), cls: 'settings-anchor',
-  });
-  pwCard.id = 'sec-account';
-  sideCol.append(pwCard);
-
-  // ---- side: admin tokens ----
-  const atBody = h('tbody', null, skeletonRows(4, 2));
-  sideCol.append(card({
-    title: h('span', { class: 'card-title-ic' }, icon('key', 16), t('settings.adminTokens')), subtitle: t('settings.adminTokensSub'), flush: true,
-    actions: button(t('common.create'), { icon: 'plus', size: 'sm', onClick: createAdminToken }),
-    body: tableWrap(h('table', { class: 'table table-compact' },
-      h('thead', null, h('tr', null, h('th', null, t('common.name')), h('th', null, t('common.lastUsed')), h('th', null, t('common.created')), h('th', { class: 'col-actions' }, ''))),
-      atBody)),
-  }));
-  async function loadAdminTokens() {
-    try {
-      const res = await get('/api/v1/admin-tokens', null, { signal: ctx.signal });
-      const rows = res.data || [];
-      atBody.replaceChildren(...(rows.length ? rows.map((a) => h('tr', null,
-        h('td', null, h('div', { class: 'strong' }, a.name), h('div', { class: 'cell-sub mono' }, `${a.prefix || ''}…`)),
-        h('td', null, timeEl(a.last_used_at)),
-        h('td', null, timeEl(a.created_at)),
-        h('td', { class: 'col-actions' }, h('button', { class: 'btn btn-ghost btn-sm btn-danger-ghost', onclick: () => revoke(a) }, t('settings.revoke'))))) : [tableEmptyRow(4, { icon: 'key', title: t('settings.noAdminTokens'), desc: t('settings.noAdminTokensDesc') })]));
-    } catch (e) { if (e.name !== 'AbortError') { toastError(e); atBody.replaceChildren(tableEmptyRow(4, { icon: 'alert', title: t('common.loadFailed'), desc: errorMessage(e) })); } }
-  }
-  function createAdminToken() {
-    const name = input({ placeholder: 'ci-script', autofocus: true });
-    const go = h('button', { class: 'btn btn-primary', type: 'submit' }, h('span', null, t('common.create')));
-    const m = openModal({
-      title: t('settings.newAdminToken'), size: 'sm',
-      body: h('form', { class: 'stack', onsubmit: async (e) => {
-        e.preventDefault();
-        if (!name.value.trim()) { name.focus(); return; }
-        await busy(go, async () => {
-          try { const r = await post('/api/v1/admin-tokens', { name: name.value.trim() }); m.close(); showSecret({ title: t('settings.adminTokenCreated', { name: r.name }), secret: r.token, kind: 'admin' }); loadAdminTokens(); }
-          catch (err) { toastError(err); }
-        });
-      } }, field(t('common.name'), name), h('div', { class: 'modal-inline-actions' }, h('button', { type: 'button', class: 'btn', onclick: () => m.close() }, t('common.cancel')), go)),
-    });
-  }
-  async function revoke(a) {
-    const ok = await confirmDialog({ title: t('settings.revokeTitle'), message: t('settings.revokeMsg', { name: a.name }), confirmText: t('settings.revoke'), danger: true });
-    if (!ok) return;
-    try { await del(`/api/v1/admin-tokens/${a.id}`); toast(t('settings.revoked'), 'success'); loadAdminTokens(); } catch (e) { toastError(e); }
-  }
-
-  // ---- side: maintenance ----
-  const before = input({ type: 'datetime-local', value: toLocalInput(new Date(Date.now() - 30 * 86400e3).toISOString()) });
-  const purgeBtn = h('button', { class: 'btn btn-danger-soft', onclick: () => purge() }, icon('trash', 15), h('span', null, t('settings.purge')));
-  const purgeText = (r) => (r && r.freed_bytes ? t('settings.purgedFreed', { n: fmtInt(r.deleted ?? 0), freed: fmtBytes(r.freed_bytes) }) : t('settings.purged', { n: fmtInt((r && r.deleted) ?? 0) }));
-  const purgeJob = jobPanel({
-    kind: 'purge_logs', signal: ctx.signal,
-    describe: (j) => purgeText(j.result),
-    onFinish: (j) => {
-      if (j.state === 'done') toast(purgeText(j.result), 'success'); else toast(j.error || t('jobs.failed'), 'error', 6000);
-      if (ctx.alive()) loadInfo();
-    },
-    onState: (running) => { purgeBtn.disabled = running; },
-  });
-  sideCol.append(card({
-    title: h('span', { class: 'card-title-ic' }, icon('trash', 16), t('settings.maintenance')), subtitle: t('settings.maintenanceSub'),
-    body: h('div', { class: 'stack' }, field(t('settings.deleteBefore'), before), h('div', { class: 'row-sm' }, purgeBtn, h('span', { class: 'muted small' }, t('settings.purgeBg'))), purgeJob),
-  }));
-  async function purge() {
-    if (!before.value) return;
-    const iso = new Date(before.value).toISOString();
-    const ok = await confirmDialog({ title: t('settings.purgeTitle'), message: t('settings.purgeMsg', { d: fmtDateTime(iso, { seconds: false }) }), confirmText: t('settings.purge'), danger: true });
-    if (!ok) return;
-    await busy(purgeBtn, async () => {
-      try { const r = await del('/api/v1/logs', { before: iso }); purgeJob.track(asJob(r, 'purge_logs')); } catch (e) { toastError(e); }
-    });
-    if (purgeJob.running()) purgeBtn.disabled = true;
-  }
-  purgeJob.resume();
-  compactJob.resume();
-
   // ---- load ----
   (async () => {
     try {
@@ -426,9 +227,7 @@ export function render(el, ctx) {
       loadingEl.replaceChildren(icon('alert', 18), h('span', null, errorMessage(e)));
     }
   })();
-  loadInfo();
-  loadAdminTokens();
-  const wanted = ctx.params.section === 'password' ? 'account' : ctx.params.section;
+  const wanted = ctx.params.section;
   if (wanted && NAV.includes(wanted)) {
     // Sections render once settings load; wait for the target to exist.
     const tryJump = (n) => { if (el.querySelector(`#sec-${wanted}`)) jump(wanted); else if (n > 0) setTimeout(() => tryJump(n - 1), 120); };

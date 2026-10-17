@@ -227,7 +227,7 @@ Errors the gateway itself returns use the OpenAI shape
 
 All endpoints live under `/api/v1` and take `Authorization: Bearer <token>`, where the token is a
 session from `POST /api/v1/auth/login` or a long-lived admin token (`xra-…`) created under
-**Settings → Admin API tokens**. Errors always look like
+**Admin access → Admin API tokens**. Errors always look like
 `{"error": {"code": "not_found", "message": "key not found"}}`. The full specification is in
 [`web/static/openapi.yaml`](web/static/openapi.yaml) and under **API Docs** in the console.
 
@@ -289,7 +289,7 @@ One container with SQLite handles a small production workload. Measured on a lap
 | Purging 1 million logs during that load | in the background, ~3,500 rows/s, no effect on the above |
 
 Statistics come from hourly rollups, so they stay fast regardless of log volume and survive log
-retention. New databases use incremental auto-vacuum; **Settings → Storage** shows the database
+retention. New databases use incremental auto-vacuum; **Data & storage** shows the database
 size and reclaimable space, and **Compact** converts an older database (a one-time full VACUUM).
 The scripts are in `tools/seed`, `tools/bench/api` and `tools/bench/load`.
 

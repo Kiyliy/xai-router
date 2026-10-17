@@ -1,11 +1,70 @@
-import { h, fmtInt, fmtCompact, fmtUSD, fmtMs, fmtPct, fmtDateTime } from '../util.js';
+import { h, fmtInt, fmtCompact, fmtUSD, fmtMs, fmtPct, fmtDateTime, cred } from '../util.js';
 import { icon } from '../icons.js';
 import { t } from '../i18n.js';
 import { get } from '../api.js';
-import { segmented, card, toastError, tabs, tableWrap, skeletonRows, tableEmptyRow, button } from '../ui.js';
+import { segmented, card, toastError, tabs, tableWrap, skeletonRows, tableEmptyRow, button, progress } from '../ui.js';
+import { openPasswordDialog } from './access.js';
 import { timeChart, shareBar, colorFor, isSparse, sparkline } from '../charts.js';
 
 const RANGES = ['1h', '24h', '7d', '30d', '90d'];
+const ONBOARD_KEY = 'xr.onboard.dismissed';
+const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } };
+
+/**
+ * First-use checklist (pm-spec P1-1). Shown while any step is open and the user has not dismissed it;
+ * disappears entirely once all four steps are done.
+ */
+function onboarding(ctx) {
+  const slot = h('div', { class: 'onboard-slot' });
+  let seq = 0;
+  async function refresh() {
+    if (lsGet(ONBOARD_KEY) === '1') { slot.replaceChildren(); return; }
+    const my = ++seq;
+    const opts = { signal: ctx.signal };
+    try {
+      const [info, ov, keyList] = await Promise.all([
+        ctx.refreshInfo(),
+        get('/api/v1/stats/overview', { range: '90d' }, opts),
+        get('/api/v1/keys', { page_size: 200 }, opts).catch(() => ({ data: [] })),
+      ]);
+      if (my !== seq || !ctx.alive()) return;
+      const keyRows = (keyList && keyList.data) || [];
+      const steps = [
+        { id: 'password', done: !!info && !info.needs_password_change, action: () => openPasswordDialog({ onDone: () => refresh() }) },
+        { id: 'key', done: keyRows.some((k) => k.last_test && k.last_test.status === 'ok') || (ov.success || 0) > 0, href: '#/keys?new=1' },
+        { id: 'token', done: ((ov.tokens && ov.tokens.total) || 0) > 0, href: '#/tokens?new=1' },
+        { id: 'request', done: (ov.requests || 0) > 0 || ((info && info.log_count) || 0) > 0, href: '#/docs?tab=client' },
+      ];
+      const doneN = steps.filter((x) => x.done).length;
+      if (doneN === steps.length) { slot.replaceChildren(); return; }
+      const current = steps.find((x) => !x.done);
+      const stepEl = (st, i) => {
+        const isCur = st === current;
+        const btnCls = `btn btn-sm ${isCur ? 'btn-primary' : ''} step-action`;
+        const label = t(`onboard.${st.id}.btn`);
+        return h('div', { class: `onboard-step ${st.done ? 'done' : ''} ${isCur ? 'current' : ''}` },
+          h('span', { class: 'step-mark' }, st.done ? icon('check', 13) : String(i + 1)),
+          h('div', { class: 'step-title' }, t(`onboard.${st.id}.title`)),
+          h('div', { class: 'step-desc' }, t(`onboard.${st.id}.desc`)),
+          st.done ? h('span', { class: 'step-done-text' }, icon('checkCircle', 13), t('onboard.done'))
+            : st.href ? h('a', { class: btnCls, href: st.href }, label)
+              : h('button', { class: btnCls, type: 'button', onclick: st.action }, label));
+      };
+      const c = card({
+        cls: 'onboard', title: t('onboard.title'), subtitle: t('onboard.sub'), flush: true,
+        actions: [
+          h('div', { class: 'onboard-progress' }, h('span', null, `${doneN} / ${steps.length}`), progress(doneN / steps.length, 'accent')),
+          button(t('onboard.dismiss'), { variant: 'ghost', size: 'sm', onClick: () => { lsSet(ONBOARD_KEY, '1'); slot.replaceChildren(); } }),
+        ],
+        body: h('div', { class: 'onboard-steps' }, steps.map(stepEl)),
+      });
+      slot.replaceChildren(c);
+    } catch (e) { if (e.name !== 'AbortError') console.warn('onboarding', e); }
+  }
+  return { el: slot, refresh };
+}
+
 const pad = (n) => String(n).padStart(2, '0');
 
 export function render(el, ctx) {
@@ -36,7 +95,9 @@ export function render(el, ctx) {
     value: metric, onChange: (v) => { metric = v; drawModelChart(); },
   });
 
+  const onboard = onboarding(ctx);
   el.append(
+    onboard.el,
     kpis,
     h('div', { class: 'grid-2' },
       card({ title: t('ov.requestsOverTime'), subtitle: t('ov.requestsOverTimeSub'), body: reqChartBody }),
@@ -95,6 +156,7 @@ export function render(el, ctx) {
 
   function renderKpis(o) {
     const k = o.keys || {}, tk = o.tokens || {};
+    if (ctx.reportKeys) ctx.reportKeys(o.keys);
     const sr = o.success_rate;
     const tokTip = `${t('tok.prompt')}: ${fmtInt(o.prompt_tokens)}
 ${t('tok.completion')}: ${fmtInt(o.completion_tokens)}
@@ -134,9 +196,14 @@ ${t('status.disabled')}: ${fmtInt(k.disabled)}` },
     const name = r.name || r.id || '';
     if (by === 'model' && (!r.id || name === '(unknown)')) return h('span', { class: 'muted' }, t('ov.noModel'));
     if (name === 'other') return h('span', { class: 'muted' }, t('ov.other'));
+    // Soft-deleted key / token (schema v8): `deleted: true`; older servers append " (deleted)" to the name.
     const del = / \(deleted\)$/.exec(name);
-    if (del) return h('span', { class: 'muted' }, `${name.slice(0, del.index)} ${t('ov.deleted')}`);
-    return h('span', { class: by === 'model' ? 'mono nowrap' : 'nowrap' }, name);
+    if (r.deleted || del) {
+      const base = del ? name.slice(0, del.index) : name;
+      return h('span', { class: 'cred-deleted muted' }, by !== 'model' ? cred(base, r.hint || '') : base, h('span', { class: 'cred-deleted-tag' }, t('ov.deleted')));
+    }
+    if (by !== 'model') return cred(name, r.hint || '');
+    return h('span', { class: 'mono nowrap' }, name);
   }
 
   function emptyChart(slot) { slot.replaceChildren(h('div', { class: 'chart-empty' }, icon('activity', 18), h('span', null, t('ov.noTraffic')))); }
@@ -231,6 +298,7 @@ ${t('status.disabled')}: ${fmtInt(k.disabled)}` },
     const pMain = get('/api/v1/stats/timeseries', { range, interval: interval(), group: 'none', tz_offset_minutes: tzOffset() }, opts).then(drawMain);
     const pModel = get('/api/v1/stats/timeseries', { range, interval: interval(), group: 'model', limit: 6, tz_offset_minutes: tzOffset() }, opts).then((r) => { modelSeries = r; drawModelChart(); });
     loadBreakdown();
+    onboard.refresh();
     const results = await Promise.allSettled([pOverview, pMain, pModel]);
     const failed = results.find((r) => r.status === 'rejected' && r.reason && r.reason.name !== 'AbortError');
     if (failed) toastError(failed.reason);
