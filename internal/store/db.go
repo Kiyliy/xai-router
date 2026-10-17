@@ -46,7 +46,9 @@ func Open(path string) (*DB, error) {
 			return nil, err
 		}
 		base := "file:" + (&url.URL{Path: filepath.ToSlash(path)}).EscapedPath()
-		pragmas := "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)"
+		// auto_vacuum must come first: it only takes effect on a new, empty
+		// file (no-op on existing databases).
+		pragmas := "?_pragma=auto_vacuum(INCREMENTAL)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)"
 		dsnW = base + pragmas + "&_txlock=immediate"
 		dsnR = base + pragmas
 	}
@@ -67,15 +69,6 @@ func Open(path string) (*DB, error) {
 		// Keep a single connection for reads too: shared cache across pools is
 		// flaky with table locks, and tests do not need read concurrency.
 		db.R = w
-	}
-	if path != ":memory:" {
-		// New databases reclaim space incrementally after log purges
-		// (no-op on existing ones: changing it needs a VACUUM).
-		var tables int
-		_ = w.QueryRow(`SELECT COUNT(*) FROM sqlite_master`).Scan(&tables)
-		if tables == 0 {
-			_, _ = w.Exec(`PRAGMA auto_vacuum = INCREMENTAL`)
-		}
 	}
 	if err := db.migrate(context.Background()); err != nil {
 		db.Close()

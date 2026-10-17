@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -486,5 +487,67 @@ func TestWebSocketSessionCountsAsSuccess(t *testing.T) {
 	}
 	if _, n, _ := db.ListLogs(ctx, LogFilter{Status: "error", Limit: 10}); n != 0 {
 		t.Fatalf("error filter: %d", n)
+	}
+}
+
+func TestTotalKindsAndStorageStats(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := NowMs()
+	var logs []*Log
+	for i := 0; i < 300; i++ {
+		st := 200
+		if i%3 == 0 {
+			st = 500
+		}
+		logs = append(logs, &Log{RequestID: "id-" + strconv.Itoa(i), UpstreamID: "up-" + strconv.Itoa(i), CreatedAt: now - int64(300-i)*1000,
+			Method: "POST", Path: "/v1/chat/completions", Model: "m" + strconv.Itoa(i%2), Status: st, Error: map[bool]string{true: "boom", false: ""}[st == 500]})
+	}
+	if err := db.InsertLogs(ctx, logs); err != nil {
+		t.Fatal(err)
+	}
+	p, err := db.ListLogsPage(ctx, LogFilter{Limit: 10})
+	if err != nil || p.Total != 300 || p.TotalKind != "exact" || p.Logs[0].RequestID != "id-299" {
+		t.Fatalf("page %+v %v", p, err)
+	}
+	if p, _ := db.ListLogsPage(ctx, LogFilter{Q: "up-7", Limit: 10}); p.Total != 1 || p.Logs[0].RequestID != "id-7" {
+		t.Fatalf("id search %+v", p)
+	}
+	if p, _ := db.ListLogsPage(ctx, LogFilter{Q: "boom", Limit: 10}); p.Total != 100 {
+		t.Fatalf("error text search %+v", p.Total)
+	}
+	// Force the count over budget: the estimate comes from the rollups.
+	old := CountBudget
+	CountBudget = 0
+	defer func() { CountBudget = old }()
+	if p, _ := db.ListLogsPage(ctx, LogFilter{Model: "m1", Limit: 10}); p.TotalKind != "approx" || p.Total != 150 {
+		t.Fatalf("approx %+v", p)
+	}
+	if p, _ := db.ListLogsPage(ctx, LogFilter{Status: "error", Limit: 10}); p.TotalKind != "approx" || p.Total != 100 {
+		t.Fatalf("approx errors %+v", p)
+	}
+	if p, _ := db.ListLogsPage(ctx, LogFilter{Path: "/v1/chat", Limit: 10}); p.TotalKind != "at_least" || p.Total != 11 {
+		t.Fatalf("at_least %+v", p)
+	}
+	ls, err := db.LogStorageStats(ctx)
+	if err != nil || ls.Count != 300 || ls.OldestAt != now-300_000 || ls.NewestAt != now-1000 || ls.AutoVacuum != "incremental" {
+		t.Fatalf("storage stats %+v %v", ls, err)
+	}
+	if n := db.CountLogsBefore(ctx, now-200_000); n != 100 {
+		t.Fatalf("count before %d", n)
+	}
+	n, err := db.DeleteLogsBeforeProgress(ctx, now-200_000, nil)
+	if err != nil || n != 100 {
+		t.Fatalf("deleted %d %v", n, err)
+	}
+	if _, err := db.IncrementalVacuum(ctx, func(done, total int64) {}); err != nil {
+		t.Fatal(err)
+	}
+	if freed, err := db.IncrementalVacuumIfEnabled(ctx); err != nil || freed < 0 {
+		t.Fatalf("vacuum %d %v", freed, err)
 	}
 }
