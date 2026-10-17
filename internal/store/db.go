@@ -355,6 +355,17 @@ CREATE INDEX idx_logs_errsearch ON request_logs(created_at, id, error, model, ke
   WHERE error <> '';
 DROP INDEX idx_logs_errored;
 `,
+	// v7: the model, key and token indexes also hold the other list filters,
+	// so a combination (key + token + model…) is answered from one index
+	// without reading the wide rows.
+	`
+CREATE INDEX idx_logs_model_f ON request_logs(model, created_at, key_id, token_id, status, path);
+CREATE INDEX idx_logs_key_f   ON request_logs(key_id, created_at, token_id, model, status, path);
+CREATE INDEX idx_logs_token_f ON request_logs(token_id, created_at, key_id, model, status, path);
+DROP INDEX idx_logs_model;
+DROP INDEX idx_logs_key;
+DROP INDEX idx_logs_token;
+`,
 }
 
 func (db *DB) migrate(ctx context.Context) error {
