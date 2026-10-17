@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 )
 
 // Token is a client (downstream) API token.
@@ -60,11 +61,40 @@ func (db *DB) GetToken(ctx context.Context, id int64) (*Token, error) {
 
 // ListTokens returns a page of tokens.
 func (db *DB) ListTokens(ctx context.Context, q string, limit, offset int) ([]*Token, int, error) {
-	w, args := "", []any{}
+	return db.ListTokensByStatus(ctx, q, "", limit, offset)
+}
+
+// Token list status filters (see ListTokensByStatus).
+var tokenStatusSQL = map[string]string{
+	// usable: enabled, not expired and not out of quota
+	"enabled":   `enabled = 1 AND (expires_at = 0 OR expires_at > ?) AND (quota_ticks = 0 OR used_ticks < quota_ticks)`,
+	"disabled":  `enabled = 0`,
+	"expired":   `expires_at > 0 AND expires_at <= ?`,
+	"exhausted": `quota_ticks > 0 AND used_ticks >= quota_ticks`,
+}
+
+// ValidTokenStatus reports whether s is a known token status filter.
+func ValidTokenStatus(s string) bool { _, ok := tokenStatusSQL[s]; return ok || s == "" }
+
+// ListTokensByStatus returns a page of tokens matching q and status
+// ("", enabled, disabled, expired or exhausted).
+func (db *DB) ListTokensByStatus(ctx context.Context, q, status string, limit, offset int) ([]*Token, int, error) {
+	var conds []string
+	args := []any{}
 	if q != "" {
-		w = ` WHERE name LIKE ? OR prefix LIKE ? OR notes LIKE ?`
+		conds = append(conds, `(name LIKE ? OR prefix LIKE ? OR notes LIKE ?)`)
 		like := "%" + q + "%"
 		args = append(args, like, like, like)
+	}
+	if c, ok := tokenStatusSQL[status]; ok {
+		conds = append(conds, "("+c+")")
+		if strings.Contains(c, "?") {
+			args = append(args, NowMs())
+		}
+	}
+	w := ""
+	if len(conds) > 0 {
+		w = " WHERE " + strings.Join(conds, " AND ")
 	}
 	var total int
 	if err := db.R.QueryRowContext(ctx, `SELECT COUNT(*) FROM tokens`+w, args...).Scan(&total); err != nil {

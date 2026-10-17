@@ -89,7 +89,12 @@ func (in *tokenInput) apply(t *store.Token) string {
 
 func (s *Server) listTokens(w http.ResponseWriter, r *http.Request) {
 	p := paging(r)
-	ts, total, err := s.DB.ListTokens(r.Context(), r.URL.Query().Get("q"), p.size, p.offset())
+	status := r.URL.Query().Get("status")
+	if !store.ValidTokenStatus(status) {
+		writeErr(w, http.StatusBadRequest, "invalid_status", "status must be enabled, disabled, expired or exhausted")
+		return
+	}
+	ts, total, err := s.DB.ListTokensByStatus(r.Context(), r.URL.Query().Get("q"), status, p.size, p.offset())
 	if err != nil {
 		s.internalErr(w, err)
 		return

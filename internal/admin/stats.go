@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Kiyliy/xai-router/internal/reqlog"
 	"github.com/Kiyliy/xai-router/internal/store"
 )
 
@@ -92,6 +93,27 @@ func (s *Server) names(ctx context.Context, by string) map[string]string {
 	return m
 }
 
+// hints maps key or token ids to a short identifier shown next to the name
+// (masked key, token prefix), so entries with the same name can be told apart.
+func (s *Server) hints(ctx context.Context, by string) map[string]string {
+	m := map[string]string{}
+	switch by {
+	case "key":
+		if keys, err := s.DB.ListAllKeys(ctx); err == nil {
+			for _, k := range keys {
+				m[strconv.FormatInt(k.ID, 10)] = reqlog.MaskSecret(k.Key)
+			}
+		}
+	case "token":
+		if ts, _, err := s.DB.ListTokens(ctx, "", 100000, 0); err == nil {
+			for _, t := range ts {
+				m[strconv.FormatInt(t.ID, 10)] = t.Prefix
+			}
+		}
+	}
+	return m
+}
+
 func (s *Server) displayName(names map[string]string, by, id string) string {
 	if by == "model" {
 		if id == "" {
@@ -117,12 +139,13 @@ func (s *Server) statsBreakdown(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid_group", "by must be model, key or token")
 		return
 	}
-	names := s.names(r.Context(), by)
+	names, hints := s.names(r.Context(), by), s.hints(r.Context(), by)
 	out := make([]map[string]any, 0, len(rows))
 	for _, g := range rows {
 		row := aggJSON(g.Agg)
 		row["id"] = g.Group
 		row["name"] = s.displayName(names, by, g.Group)
+		row["hint"] = hints[g.Group] // token prefix or masked key, to tell same names apart
 		out = append(out, row)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": out})

@@ -63,8 +63,11 @@ func (s *Server) listLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := make([]map[string]any, 0, len(pg.Logs))
+	prefixes := s.hints(r.Context(), "token")
 	for _, l := range pg.Logs {
-		out = append(out, logSummaryJSON(l))
+		row := logSummaryJSON(l)
+		row["token_prefix"] = prefixes[strconv.FormatInt(l.TokenID, 10)]
+		out = append(out, row)
 	}
 	resp := pageJSON(out, int(pg.Total), p)
 	resp["total_kind"] = pg.TotalKind // exact, approx or at_least
@@ -83,6 +86,7 @@ func (s *Server) getLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := logSummaryJSON(l)
+	out["token_prefix"] = s.hints(r.Context(), "token")[strconv.FormatInt(l.TokenID, 10)]
 	attempts := make([]map[string]any, 0, len(l.Attempts))
 	for _, a := range l.Attempts {
 		var kid any

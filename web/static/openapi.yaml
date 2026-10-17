@@ -267,6 +267,7 @@ paths:
       summary: List client tokens
       parameters:
         - { name: q, in: query, schema: { type: string } }
+        - { name: status, in: query, description: "enabled (usable: enabled, not expired, quota left), disabled, expired or exhausted (quota used up)", schema: { type: string, enum: [enabled, disabled, expired, exhausted] } }
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
       responses:
@@ -874,6 +875,7 @@ components:
         client_ip: { type: string }
         token_id: { type: integer, nullable: true }
         token_name: { type: string }
+        token_prefix: { type: string, description: "Prefix of the client token (sk-xr-…), empty if deleted" }
         key_id: { type: integer, nullable: true }
         key_name: { type: string }
         attempts: { type: integer }
@@ -979,6 +981,7 @@ components:
       properties:
         id: { type: string, description: Model id, key id or token id }
         name: { type: string }
+        hint: { type: string, description: "Token prefix (by=token) or masked key (by=key), to tell entries with the same name apart" }
         requests: { type: integer }
         success: { type: integer }
         errors: { type: integer }

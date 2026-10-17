@@ -10,6 +10,7 @@ import (
 	"github.com/Kiyliy/xai-router/internal/billing"
 	"github.com/Kiyliy/xai-router/internal/pool"
 	"github.com/Kiyliy/xai-router/internal/secret"
+	"github.com/Kiyliy/xai-router/internal/store"
 )
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
@@ -375,5 +376,45 @@ func TestModelSync(t *testing.T) {
 	h.s.Settings.Set(strict)
 	if _, err := h.s.RunSync(ctx, false); err == nil || !strings.Contains(err.Error(), "not in the allowed hosts") {
 		t.Fatalf("policy: %v", err)
+	}
+}
+
+func TestTokenStatusFilterAndHints(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	mk := func(body string) map[string]any { return h.must(h.call(http.MethodPost, "/api/v1/tokens", body), 201) }
+	ok := mk(`{"name":"same"}`)
+	mk(`{"name":"same","enabled":false}`)
+	mk(`{"name":"old","expires_at":"2020-01-01T00:00:00Z"}`)
+	spent := mk(`{"name":"spent","quota_usd":0.01}`)
+	if _, err := h.db.W.ExecContext(ctx, `UPDATE tokens SET used_ticks = quota_ticks WHERE id = ?`, num(spent["id"])); err != nil {
+		t.Fatal(err)
+	}
+	for status, want := range map[string]int{"": 4, "enabled": 1, "disabled": 1, "expired": 1, "exhausted": 1} {
+		got := h.must(h.call(http.MethodGet, "/api/v1/tokens?status="+status, ""), 200)
+		if int(num(got["total"])) != want || len(list(got)) != want {
+			t.Errorf("status=%q: total %v, want %d", status, got["total"], want)
+		}
+	}
+	if r := h.call(http.MethodGet, "/api/v1/tokens?status=bogus", ""); r.status != 400 {
+		t.Fatalf("bad status: %d", r.status)
+	}
+	// Breakdown and log rows carry the token prefix to tell same names apart.
+	if err := h.db.InsertLogs(ctx, []*store.Log{{RequestID: "r1", CreatedAt: store.NowMs(), Method: "POST",
+		Path: "/v1/chat/completions", Status: 200, TokenID: num(ok["id"]), TokenName: "same", CostTicks: 5}}); err != nil {
+		t.Fatal(err)
+	}
+	prefix := ok["prefix"].(string)
+	bd := h.must(h.call(http.MethodGet, "/api/v1/stats/breakdown?by=token&range=24h", ""), 200)
+	if rows := list(bd); len(rows) != 1 || rows[0]["hint"] != prefix || prefix == "" {
+		t.Fatalf("breakdown %v (prefix %q)", rows, prefix)
+	}
+	logs := list(h.must(h.call(http.MethodGet, "/api/v1/logs", ""), 200))
+	if len(logs) != 1 || logs[0]["token_prefix"] != prefix {
+		t.Fatalf("logs %v", logs)
+	}
+	d := h.must(h.call(http.MethodGet, "/api/v1/logs/"+itoa(num(logs[0]["id"])), ""), 200)
+	if d["token_prefix"] != prefix {
+		t.Fatalf("detail %v", d["token_prefix"])
 	}
 }
