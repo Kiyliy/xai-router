@@ -267,7 +267,31 @@ curl -s "${auth[@]}" -X POST $BASE/api/v1/models/sync
 | Models | `GET/POST /models`, `PATCH/DELETE /models/{id}`, `POST /models/sync` |
 | Logs | `GET/DELETE /logs`, `GET /logs/{id}`, `GET /logs/{id}/curl` |
 | Stats | `GET /stats/overview`, `GET /stats/timeseries`, `GET /stats/breakdown` |
-| Settings & system | `GET/PUT /settings`, `GET /system/info`, `GET /healthz` |
+| Background jobs | `GET /jobs`, `GET /jobs/{id}` (log purge, `POST /keys/test` with `"async": true`, `POST /system/compact`) |
+| Settings & system | `GET/PUT /settings`, `GET /system/info`, `POST /system/compact`, `GET /healthz` |
+
+Long operations run in the background: `DELETE /logs?before=…` and `POST /system/compact`
+answer `202` with a job whose `progress`/`total` can be polled (`?wait=true` keeps the old
+synchronous purge). Log lists report `total` with `total_kind`: `exact`, `approx` (a large
+result estimated from the hourly rollups instead of counted) or `at_least`.
+
+## Scale
+
+One container with SQLite handles a small production workload. Measured on a laptop with
+2–3 million logs (a 20 GB database, mock upstream):
+
+| | |
+|---|---|
+| Log list, any filter combination incl. text search, and page 150,000 | p95 under 300 ms (most under 20 ms) |
+| Log detail | p95 3 ms |
+| Statistics over 7 and 30 days (by model, key, token) | p95 under 40 ms |
+| 20 concurrent clients for 10 minutes, mixed streaming and non-streaming | 0 errors, gateway overhead p99 2–15 ms, memory flat at ~40 MB |
+| Purging 1 million logs during that load | in the background, ~3,500 rows/s, no effect on the above |
+
+Statistics come from hourly rollups, so they stay fast regardless of log volume and survive log
+retention. New databases use incremental auto-vacuum; **Settings → Storage** shows the database
+size and reclaimable space, and **Compact** converts an older database (a one-time full VACUUM).
+The scripts are in `tools/seed`, `tools/bench/api` and `tools/bench/load`.
 
 ## How billing works
 
@@ -283,16 +307,27 @@ output  = (completion + reasoning) × output
 long context: if prompt ≥ 200k tokens, the long-context prices apply to the whole request
 priority:     × 2 when the response says service_tier = "priority"
 tools:        web search $5/1k, X posts $5/1k, X profiles $10/1k, code execution $5/1k, collections $2.50/1k
-images:       per image (grok-imagine-image-2.0 by quality × resolution)
-videos:       seconds × per-second price, charged once when the job finishes
+images:       per image at the requested resolution (1k by default; 1.5k/2k tiers, and quality
+              for grok-imagine-image-2.0) + a fee per input image for edits
+videos:       seconds × the per-second price of the requested resolution (480p by default;
+              720p/1080p tiers) + input fees (per input image for image-to-video, reference
+              images and keyframes; per second of input video for edits), charged once when
+              the job finishes, from the parameters of the original submission
 voice:        no cost is reported by xAI, so the published rates are applied:
               realtime $0.08 per minute of session + $0.004 per text input,
               TTS $15 per 1M characters, STT $0.10/hour (REST) or $0.20/hour (streaming)
 ```
 
+**Client disconnects.** xAI bills a request it has started even if nobody reads the answer. When
+a client disconnects mid-stream, the gateway keeps reading the upstream response (without
+forwarding it) for up to 60 seconds so the usage at its end is billed; the log keeps status 499.
+If a stream ends without usage (the upstream breaks, goes idle or exceeds that limit), the cost
+is estimated from the request size and the text received (`cost_source = estimated`) instead of
+being recorded as free.
+
 **Quotas.** Before a request is forwarded, an upper bound of its cost is reserved against the
 token's quota (prompt size, `max_tokens` or 4096 output tokens plus 4096 reasoning tokens,
-image count × price, video seconds × price…). If the reservation does not fit in what is left,
+image count × price, video seconds × the requested resolution's price + input fees…). If the reservation does not fit in what is left,
 the request is refused with `insufficient_quota`; when it finishes, the reservation is replaced
 by the actual cost. Concurrent requests therefore cannot spend more than the quota. WebSocket
 sessions are charged every two seconds and closed when the quota is exhausted.

@@ -231,7 +231,28 @@ curl -s "${auth[@]}" -X POST $BASE/api/v1/models/sync
 | 模型 | `GET/POST /models`、`PATCH/DELETE /models/{id}`、`POST /models/sync` |
 | 日志 | `GET/DELETE /logs`、`GET /logs/{id}`、`GET /logs/{id}/curl` |
 | 统计 | `GET /stats/overview`、`GET /stats/timeseries`、`GET /stats/breakdown` |
-| 设置与系统 | `GET/PUT /settings`、`GET /system/info`、`GET /healthz` |
+| 后台任务 | `GET /jobs`、`GET /jobs/{id}`（删除日志、`POST /keys/test` 带 `"async": true`、`POST /system/compact`） |
+| 设置与系统 | `GET/PUT /settings`、`GET /system/info`、`POST /system/compact`、`GET /healthz` |
+
+耗时操作在后台执行：`DELETE /logs?before=…` 和 `POST /system/compact` 返回 `202` 和一个任务，可轮询它的
+`progress`/`total`（加 `?wait=true` 则仍按旧方式同步删除）。日志列表的 `total` 附带 `total_kind`：`exact`（精确）、
+`approx`（结果很大时按小时汇总估算，不逐条计数）或 `at_least`（至少）。
+
+## 规模
+
+单个容器加 SQLite 即可承载小规模生产负载。以下是在笔记本上、200–300 万条日志（数据库 20 GB）、模拟上游下的实测：
+
+| | |
+|---|---|
+| 日志列表：任意筛选组合（含文本搜索），以及第 150,000 页 | p95 低于 300 ms（大多低于 20 ms） |
+| 日志详情 | p95 3 ms |
+| 7 天、30 天统计（按模型、key、令牌） | p95 低于 40 ms |
+| 20 个并发客户端持续 10 分钟，流式与非流式混合 | 0 错误，网关额外耗时 p99 2–15 ms，内存稳定在约 40 MB |
+| 在上述负载下删除 100 万条日志 | 后台执行，约 3,500 条/秒，不影响以上指标 |
+
+统计数据来自按小时汇总的表，所以不受日志量影响，日志过期删除后也还在。新数据库默认启用增量 auto-vacuum；
+**设置 → 存储** 显示数据库大小和可回收空间，旧数据库可用 **压缩** 转换（一次性完整 VACUUM）。
+测试脚本在 `tools/seed`、`tools/bench/api` 和 `tools/bench/load`。
 
 ## 计费说明
 
@@ -245,8 +266,11 @@ xAI 会在 `usage.cost_in_usd_ticks` 中返回每次请求的实际扣费（1 �
 长上下文：prompt ≥ 200k token 时，整个请求按长上下文价格计
 Priority：响应中 service_tier = "priority" 时 × 2
 工具：web search $5/千次，X 帖子 $5/千条，X 用户 $10/千个，代码执行 $5/千次，集合检索 $2.5/千次
-图片：按张（grok-imagine-image-2.0 按画质 × 分辨率）
-视频：秒数 × 每秒价格，在任务完成时计费一次
+图片：按请求的分辨率逐张计价（默认 1k，另有 1.5k/2k 档；grok-imagine-image-2.0 还按画质），
+      图片编辑另加每张输入图的费用
+视频：秒数 × 所请求分辨率的每秒价格（默认 480p，另有 720p/1080p 档），加输入费
+      （图生视频、参考图、关键帧按输入图张数；视频编辑按输入视频秒数）；
+      在任务完成时按原始提交的参数计费一次
 语音：xAI 不返回费用，按官方价格计算：实时语音每分钟 $0.08 + 每次文本输入 $0.004；
       TTS 每百万字符 $15；STT 每小时 $0.10（REST）或 $0.20（流式）
 ```
@@ -255,8 +279,13 @@ Priority：响应中 service_tier = "priority" 时 × 2
 不同接口的 token 口径不同（Chat 的推理 token 单独列出；Responses 的 `output_tokens` 已含推理；
 Messages 的 `input_tokens` 不含缓存命中），网关会先统一口径再计价。
 
+**客户端中途断开。** 上游已经开始处理的请求，即使没人读结果，xAI 也会照常扣费。所以客户端在流式响应中途断开后，
+网关会继续读取上游响应（不再转发），最多 60 秒，拿到流末尾的用量后照常记账，日志状态仍记 499。如果流结束时
+仍然没有用量（上游断开、空闲超时或超过 60 秒上限），就按请求大小和已收到的内容估算费用
+（`cost_source = estimated`），不会记成 0。
+
 **额度。** 请求转发前，先按费用上限在令牌额度里预扣（按提示长度、`max_tokens`（未设置时按 4096）加 4096 个推理 token、
-图片张数 × 单价、视频秒数 × 单价等估算）。剩余额度不够预扣就返回 `insufficient_quota`；请求结束后用实际费用替换预扣额。
+图片张数 × 单价、视频秒数 × 所请求分辨率的单价加输入费等估算）。剩余额度不够预扣就返回 `insufficient_quota`；请求结束后用实际费用替换预扣额。
 所以并发请求加起来也不会超过额度。WebSocket 会话每 2 秒结算一次，额度用完即断开。
 
 ## 开发
