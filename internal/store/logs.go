@@ -322,6 +322,9 @@ type LogPage struct {
 	TotalKind string
 }
 
+// countCap bounds an exact count (see listLogsPage).
+const countCap = 100_000
+
 // largeResult is the size above which totals are estimated, not counted.
 const largeResult = 50_000
 
@@ -400,11 +403,20 @@ func (db *DB) listLogsPage(ctx context.Context, f LogFilter) (*LogPage, error) {
 		// counting it exactly would take longer than the page itself.
 		p.Total, p.TotalKind, counted = est, "approx", true
 	} else {
+		// Count at most up to a cap a little past the requested page: a
+		// broad filter (an exact status code has no rollup to estimate
+		// from) would otherwise scan millions of index entries for a
+		// total nobody needs exactly. Reaching the cap reports a lower
+		// bound that still lets the pager move on.
+		limit := int64(max(countCap, f.Offset+20*f.Limit)) + 1
 		cctx, cancel := context.WithTimeout(ctx, CountBudget)
 		var total int64
-		err := db.R.QueryRowContext(cctx, `SELECT COUNT(*)`+from+w, args...).Scan(&total)
+		err := db.R.QueryRowContext(cctx, `SELECT COUNT(*) FROM (SELECT 1`+from+w+` LIMIT ?)`,
+			append(append([]any(nil), args...), limit)...).Scan(&total)
 		cancel()
 		switch {
+		case err == nil && total == limit:
+			p.Total, p.TotalKind, counted = total-1, "at_least", true
 		case err == nil:
 			p.Total, p.TotalKind, counted = total, "exact", true
 		case ctx.Err() != nil:

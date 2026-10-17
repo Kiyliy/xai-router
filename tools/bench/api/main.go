@@ -103,6 +103,13 @@ func main() {
 		{"key+error", fmt.Sprintf("/api/v1/logs?key_id=%d&status=error", k1)},
 		{"token+5xx", fmt.Sprintf("/api/v1/logs?token_id=%d&status=5xx", t1)},
 		{"model+429", "/api/v1/logs?model=grok-4.5&status=429"},
+		// Acceptance round 2 (P1): sparse / missing model with status, and deep pages under filters.
+		{"missing model+4xx+token", fmt.Sprintf("/api/v1/logs?model=grok-nope&status=4xx&token_id=%d", t1)},
+		{"missing model+error", "/api/v1/logs?model=grok-nope&status=error"},
+		{"model+success+token, page 300", fmt.Sprintf("/api/v1/logs?model=grok-4.6&status=success&token_id=%d&page=300", t1)},
+		{"status=200+key, page 5000", fmt.Sprintf("/api/v1/logs?status=200&key_id=%d&page=5000", k1)},
+		{"model+200+key, page 500", fmt.Sprintf("/api/v1/logs?model=grok-4.6&status=200&key_id=%d&page=500", k1)},
+		{"status=200, page 20000", "/api/v1/logs?status=200&page=20000"},
 		{"path", "/api/v1/logs?path=/v1/messages"},
 		{"q=request id", "/api/v1/logs?q=" + first.Data[0].RequestID},
 		{"q=error text", "/api/v1/logs?q=internal"},

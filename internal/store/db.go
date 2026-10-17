@@ -52,7 +52,9 @@ func Open(path string) (*DB, error) {
 		// file (no-op on existing databases).
 		pragmas := "?_pragma=auto_vacuum(INCREMENTAL)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)"
 		dsnW = base + pragmas + "&_txlock=immediate"
-		dsnR = base + pragmas
+		// Readers: a larger page cache and memory-mapped I/O, so index scans
+		// (deep pages, counts) read pages from the OS cache without a copy.
+		dsnR = base + pragmas + "&_pragma=cache_size(-65536)&_pragma=mmap_size(4294967296)"
 	}
 	w, err := sql.Open("sqlite", dsnW)
 	if err != nil {
