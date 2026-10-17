@@ -58,15 +58,25 @@ export function render(el, ctx) {
     return h('td', { class: `num mono ${v > 0 ? 'm-meta' : 'm-hide'}`, 'data-label': label }, fmtPrice(v), sub ? h('div', { class: 'cell-sub' }, sub) : null);
   }
 
+  // Media input prices (per input image, per second of input video), as a cell sub-line.
+  function inputSub(m) {
+    const parts = [];
+    if (m.input_image_price > 0) parts.push(`${t('models.inImg')} ${fmtUSD(m.input_image_price)}${t('models.perImage')}`);
+    if (m.input_video_price_per_second > 0) parts.push(`${t('models.inVid')} ${fmtUSD(m.input_video_price_per_second)}${t('models.perSec')}`);
+    return parts.length ? h('div', { class: 'cell-sub nowrap' }, parts.join(' · ')) : null;
+  }
+
   function row(m) {
     const long = m.long_context_threshold > 0
       ? h('td', { class: 'num mono m-meta', 'data-label': t('models.longShort'), title: `${t('models.input')}: ${fmtPrice(m.long_input_price)}\n${t('models.cached')}: ${fmtPrice(m.long_cached_input_price)}\n${t('models.output')}: ${fmtPrice(m.long_output_price)}` },
         h('div', { class: 'nowrap' }, `${fmtPrice(m.long_input_price)} / ${fmtPrice(m.long_output_price)}`), h('div', { class: 'cell-sub nowrap' }, `> ${fmtCompact(m.long_context_threshold)} ${t('models.tok')}`))
       : h('td', { class: 'num muted m-hide' }, '—');
     const tiers = m.image_tiers || [];
+    const vtiers = m.video_tiers || [];
     const img = m.image_price > 0 || tiers.length
       ? h('td', { class: 'num mono m-meta', 'data-label': t('models.image') }, m.image_price > 0 ? `${fmtUSD(m.image_price)}${t('models.perImage')}` : '—',
-        tiers.length ? h('div', { class: 'cell-sub', 'data-tip': tiers.map((x) => `${x.quality || '*'} ${x.resolution || ''}: ${fmtUSD(x.price)}`).join(' · ') }, t('models.tiersN', { n: tiers.length })) : null)
+        tiers.length ? h('div', { class: 'cell-sub', 'data-tip': tiers.map((x) => `${x.quality || '*'} ${x.resolution || ''}: ${fmtUSD(x.price)}`).join(' · ') }, t('models.tiersN', { n: tiers.length })) : null,
+        m.kind === 'image' ? inputSub(m) : null)
       : h('td', { class: 'num muted m-hide' }, '—');
     // Only mention the image-input price when it differs from the text input price.
     const imgIn = m.image_input_price > 0 && m.image_input_price !== m.input_price ? `${t('models.imgIn')} ${fmtPrice(m.image_input_price)}` : null;
@@ -87,7 +97,9 @@ export function render(el, ctx) {
       priceCell(m.cached_input_price, null, t('models.cached')),
       priceCell(m.output_price, null, t('models.output')),
       long, img,
-      h('td', { class: `num mono ${m.video_price_per_second > 0 ? 'm-meta' : 'm-hide'}`, 'data-label': t('models.video') }, m.video_price_per_second > 0 ? `${fmtUSD(m.video_price_per_second)}${t('models.perSec')}` : h('span', { class: 'muted' }, '—')),
+      h('td', { class: `num mono ${m.video_price_per_second > 0 ? 'm-meta' : 'm-hide'}`, 'data-label': t('models.video') }, m.video_price_per_second > 0 ? `${fmtUSD(m.video_price_per_second)}${t('models.perSec')}` : h('span', { class: 'muted' }, '—'),
+        vtiers.length ? h('div', { class: 'cell-sub', 'data-tip': vtiers.map((x) => `${x.resolution}: ${fmtUSD(x.price_per_second)}${t('models.perSec')}`).join(' · ') }, t('models.tiersN', { n: vtiers.length })) : null,
+        m.kind === 'video' ? inputSub(m) : null),
       h('td', { class: 'm-badge' }, badge(t(`source.${m.source}`) || m.source || '—', SOURCE_VARIANT[m.source] || 'neutral'), m.synced_at ? h('div', { class: 'cell-sub nowrap hide-m' }, timeEl(m.synced_at)) : null),
       h('td', { class: 'col-actions m-menu' }, h('div', { class: 'row-actions' },
         h('button', { class: 'btn btn-ghost btn-icon btn-sm hide-m', title: t('common.edit'), 'aria-label': t('common.edit'), onclick: () => openForm(m) }, icon('edit', 15)),
@@ -177,21 +189,30 @@ export function render(el, ctx) {
       long_context_threshold: num(m?.long_context_threshold, { step: 1 }),
       long_input_price: num(m?.long_input_price), long_cached_input_price: num(m?.long_cached_input_price), long_output_price: num(m?.long_output_price),
       image_price: num(m?.image_price), video_price_per_second: num(m?.video_price_per_second),
+      input_image_price: num(m?.input_image_price), input_video_price_per_second: num(m?.input_video_price_per_second),
     };
     const aliases = tagInput({ values: m?.aliases || [], placeholder: t('models.aliasPh') });
     const enabled = switchEl({ checked: m ? m.enabled !== false : true, label: t('common.enabled') });
-    const tiersBox = h('div', { class: 'tiers' });
-    let tiers = (m?.image_tiers || []).map((x) => ({ ...x }));
-    const drawTiers = () => {
-      tiersBox.replaceChildren(
-        ...tiers.map((tier, i) => h('div', { class: 'tier-row' },
-          input({ value: tier.quality || '', placeholder: t('models.quality'), oninput: (e) => { tier.quality = e.target.value; } }),
-          input({ value: tier.resolution || '', placeholder: t('models.resolution'), oninput: (e) => { tier.resolution = e.target.value; } }),
-          h('div', { class: 'input-affix' }, h('span', { class: 'affix' }, '$'), input({ type: 'number', step: 'any', min: 0, value: tier.price ?? '', oninput: (e) => { tier.price = e.target.value === '' ? null : Number(e.target.value); } })),
-          h('button', { type: 'button', class: 'btn btn-ghost btn-icon btn-sm', 'aria-label': t('common.remove'), onclick: () => { tiers.splice(i, 1); drawTiers(); } }, icon('trash', 14)))),
-        h('button', { type: 'button', class: 'btn btn-sm', onclick: () => { tiers.push({ quality: '', resolution: '', price: null }); drawTiers(); } }, icon('plus', 14), h('span', null, t('models.addTier'))));
+    // Tier editors: image tiers (quality, resolution, $ per image) and video
+    // tiers (resolution, $ per second).
+    const tierEditor = (rows, withQuality, priceKey) => {
+      const box = h('div', { class: 'tiers' });
+      const draw = () => {
+        box.replaceChildren(
+          ...rows.map((tier, i) => h('div', { class: `tier-row${withQuality ? '' : ' tier-row-2'}` },
+            withQuality ? input({ value: tier.quality || '', placeholder: t('models.qualityOpt'), 'aria-label': t('models.quality'), oninput: (e) => { tier.quality = e.target.value; } }) : null,
+            input({ value: tier.resolution || '', placeholder: withQuality ? '1k / 1.5k / 2k' : '480p / 720p / 1080p', 'aria-label': t('models.resolution'), oninput: (e) => { tier.resolution = e.target.value; } }),
+            h('div', { class: 'input-affix' }, h('span', { class: 'affix' }, '$'), input({ type: 'number', step: 'any', min: 0, value: tier[priceKey] ?? '', 'aria-label': withQuality ? t('models.imagePrice') : t('models.videoPrice'), oninput: (e) => { tier[priceKey] = e.target.value === '' ? null : Number(e.target.value); } })),
+            h('button', { type: 'button', class: 'btn btn-ghost btn-icon btn-sm', 'aria-label': t('common.remove'), onclick: () => { rows.splice(i, 1); draw(); } }, icon('trash', 14)))),
+          h('button', { type: 'button', class: 'btn btn-sm', onclick: () => { rows.push(withQuality ? { quality: '', resolution: '', price: null } : { resolution: '', price_per_second: null }); draw(); } }, icon('plus', 14), h('span', null, t('models.addTier'))));
+      };
+      draw();
+      return box;
     };
-    drawTiers();
+    const tiers = (m?.image_tiers || []).map((x) => ({ ...x }));
+    const vtiers = (m?.video_tiers || []).map((x) => ({ ...x }));
+    const tiersBox = tierEditor(tiers, true, 'price');
+    const vtiersBox = tierEditor(vtiers, false, 'price_per_second');
     const usd = (x) => h('div', { class: 'input-affix' }, h('span', { class: 'affix' }, '$'), x);
     const sectionTitle = (txt) => h('div', { class: 'form-section field-full' }, txt);
     const body = h('form', { class: 'form-grid form-grid-4', onsubmit: (e) => { e.preventDefault(); save(); } },
@@ -214,7 +235,10 @@ export function render(el, ctx) {
       sectionTitle(t('models.mediaPrices')),
       field(t('models.imagePrice'), usd(f.image_price)),
       field(t('models.videoPrice'), usd(f.video_price_per_second)),
-      field(t('models.imageTiers'), tiersBox, { full: true }),
+      field(t('models.inputImagePrice'), usd(f.input_image_price), { hint: t('models.inputImageHint') }),
+      field(t('models.inputVideoPrice'), usd(f.input_video_price_per_second), { hint: t('models.inputVideoHint') }),
+      field(t('models.imageTiers'), tiersBox, { full: true, hint: t('models.imageTiersHint') }),
+      field(t('models.videoTiers'), vtiersBox, { full: true, hint: t('models.videoTiersHint') }),
       h('button', { type: 'submit', hidden: true }));
     const saveBtn = h('button', { class: 'btn btn-primary', onclick: () => save() }, h('span', null, edit ? t('common.save') : t('models.add')));
     const md = openModal({ title: edit ? t('models.editTitle', { id: m.id }) : t('models.addTitle'), subtitle: t('models.pricesPer1M'), size: 'lg', body, footer: [h('button', { class: 'btn', onclick: () => md.close() }, t('common.cancel')), saveBtn] });
@@ -222,8 +246,8 @@ export function render(el, ctx) {
       const id = f.id.value.trim();
       if (!id) { f.id.focus(); f.id.classList.add('invalid'); return; }
       const n = (x) => (x.value === '' ? 0 : Number(x.value));
-      const payload = { kind: f.kind.value, aliases: aliases.getValues(), enabled: enabled.input.checked, image_tiers: tiers.filter((x) => x.price != null && x.price !== '') };
-      for (const k of ['context_length', 'input_price', 'cached_input_price', 'image_input_price', 'output_price', 'long_context_threshold', 'long_input_price', 'long_cached_input_price', 'long_output_price', 'image_price', 'video_price_per_second']) payload[k] = n(f[k]);
+      const payload = { kind: f.kind.value, aliases: aliases.getValues(), enabled: enabled.input.checked, image_tiers: tiers.filter((x) => x.price != null && x.price !== ''), video_tiers: vtiers.filter((x) => x.price_per_second != null && x.price_per_second !== '') };
+      for (const k of ['context_length', 'input_price', 'cached_input_price', 'image_input_price', 'output_price', 'long_context_threshold', 'long_input_price', 'long_cached_input_price', 'long_output_price', 'image_price', 'video_price_per_second', 'input_image_price', 'input_video_price_per_second']) payload[k] = n(f[k]);
       let body = payload;
       if (edit) {
         body = {};

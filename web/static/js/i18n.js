@@ -106,6 +106,7 @@ const en = {
   'models.aliasPh': 'Add alias', 'models.quality': 'Quality', 'models.resolution': 'Resolution', 'models.addTier': 'Add tier',
   'models.id': 'Model ID', 'models.kind': 'Kind', 'models.aliases': 'Aliases', 'models.tokenPrices': 'Token prices (per 1M)', 'models.imageInput': 'Image input',
   'models.longCtxPrices': 'Long-context prices (per 1M)', 'models.threshold': 'Threshold (tokens)', 'models.thresholdHint': '0 = no long-context pricing',
+  'models.inImg': 'input', 'models.inVid': 'input video', 'models.qualityOpt': 'Quality (optional)', 'models.videoTiers': 'Video tiers', 'models.inputImagePrice': 'Per input image', 'models.inputVideoPrice': 'Per second of input video', 'models.inputImageHint': 'Image edits, image-to-video, reference images', 'models.inputVideoHint': 'Video edits', 'models.imageTiersHint': 'Price per image by resolution (and quality, if the model has it). Without a resolution the request is priced at 1k.', 'models.videoTiersHint': 'Price per second by resolution. Without a resolution the request is priced at 480p.',
   'models.mediaPrices': 'Media prices', 'models.imagePrice': 'Per image', 'models.videoPrice': 'Video per second', 'models.imageTiers': 'Image tiers',
   'models.editTitle': 'Edit {id}', 'models.addTitle': 'Add model', 'models.pricesPer1M': 'All prices in USD',
 
@@ -377,6 +378,7 @@ const zh = {
   'models.aliasPh': '添加别名', 'models.quality': '质量', 'models.resolution': '分辨率', 'models.addTier': '添加档位',
   'models.id': '模型 ID', 'models.kind': '类型', 'models.aliases': '别名', 'models.tokenPrices': 'Token 价格（每百万）', 'models.imageInput': '图像输入',
   'models.longCtxPrices': '长上下文价格（每百万）', 'models.threshold': '阈值（tokens）', 'models.thresholdHint': '0 = 不启用长上下文价格',
+  'models.inImg': '输入', 'models.inVid': '输入视频', 'models.qualityOpt': '质量（可选）', 'models.videoTiers': '视频档位', 'models.inputImagePrice': '每张输入图', 'models.inputVideoPrice': '输入视频每秒', 'models.inputImageHint': '图片编辑、图生视频、参考图', 'models.inputVideoHint': '视频编辑', 'models.imageTiersHint': '按分辨率（模型有质量档时再按质量）的每张价格。请求未指定分辨率时按 1k 计。', 'models.videoTiersHint': '按分辨率的每秒价格。请求未指定分辨率时按 480p 计。',
   'models.mediaPrices': '媒体价格', 'models.imagePrice': '每张图像', 'models.videoPrice': '视频每秒', 'models.imageTiers': '图像档位',
   'models.editTitle': '编辑 {id}', 'models.addTitle': '添加模型', 'models.pricesPer1M': '所有价格单位为美元',
 
