@@ -626,6 +626,9 @@ paths:
                   newest_log_at: { type: string, format: date-time, nullable: true }
                   db_free_bytes: { type: integer, description: Free space inside the database file (reclaimable with compact) }
                   db_auto_vacuum: { type: string, enum: [none, full, incremental] }
+                  go_heap_bytes: { type: integer }
+                  go_sys_bytes: { type: integer, description: Memory obtained from the OS by the Go runtime }
+                  goroutines: { type: integer }
   /healthz:
     get:
       tags: [System]

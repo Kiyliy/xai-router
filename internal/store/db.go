@@ -337,6 +337,10 @@ CREATE INDEX idx_logs_class ON request_logs((status / 100), created_at);
 CREATE INDEX idx_logs_path ON request_logs(path, created_at);
 CREATE INDEX idx_logs_upstream ON request_logs(upstream_id);
 `,
+	// v4: error-text search scans only failed requests.
+	`
+CREATE INDEX idx_logs_errored ON request_logs(created_at) WHERE error <> '';
+`,
 }
 
 func (db *DB) migrate(ctx context.Context) error {

@@ -228,6 +228,7 @@ type LogFilter struct {
 	Q        string
 	Limit    int
 	Offset   int
+	qIsID    bool // set by ListLogsPage: search Q as a request/upstream id
 }
 
 func (f LogFilter) where() (string, []any) {
@@ -253,8 +254,14 @@ func (f LogFilter) where() (string, []any) {
 		w, a = append(w, "path >= ? AND path < ?"), append(a, f.Path, f.Path+"\U0010FFFF")
 	}
 	if f.Q != "" {
-		like := "%" + escapeLike(f.Q) + "%"
-		w, a = append(w, `(request_id = ? OR upstream_id = ? OR error LIKE ? ESCAPE '\')`), append(a, f.Q, f.Q, like)
+		if f.qIsID {
+			// Both columns are indexed, so this is an index lookup.
+			w, a = append(w, `(request_id = ? OR upstream_id = ?)`), append(a, f.Q, f.Q)
+		} else {
+			// "error <> ''" lets idx_logs_errored restrict the scan to
+			// failed requests.
+			w, a = append(w, `error <> '' AND error LIKE ? ESCAPE '\'`), append(a, "%"+escapeLike(f.Q)+"%")
+		}
 	}
 	switch s := strings.ToLower(f.Status); {
 	case s == "":
@@ -312,6 +319,9 @@ type LogPage struct {
 	TotalKind string
 }
 
+// largeResult is the size above which totals are estimated, not counted.
+const largeResult = 50_000
+
 // CountBudget bounds how long an exact count may take before it is
 // replaced by an estimate.
 var CountBudget = 250 * time.Millisecond
@@ -330,6 +340,33 @@ func (db *DB) ListLogs(ctx context.Context, f LogFilter) ([]*Log, int, error) {
 // page is located with an id-only subquery so deep offsets walk an index
 // rather than the table.
 func (db *DB) ListLogsPage(ctx context.Context, f LogFilter) (*LogPage, error) {
+	if f.Q != "" && looksLikeID(f.Q) {
+		// Ids are searched exactly (indexed). If nothing has that id, fall
+		// back to searching error texts.
+		idf := f
+		idf.qIsID = true
+		p, err := db.listLogsPage(ctx, idf)
+		if err != nil || p.Total > 0 || f.Offset > 0 {
+			return p, err
+		}
+	}
+	return db.listLogsPage(ctx, f)
+}
+
+// looksLikeID reports whether s could be a request or upstream id.
+func looksLikeID(s string) bool {
+	if len(s) > 128 {
+		return false
+	}
+	for _, c := range s {
+		if !(c == '-' || c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z') {
+			return false
+		}
+	}
+	return true
+}
+
+func (db *DB) listLogsPage(ctx context.Context, f LogFilter) (*LogPage, error) {
 	w, args := f.where()
 	q := `SELECT ` + logCols + ` FROM request_logs WHERE id IN (SELECT id FROM request_logs` + w +
 		` ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?) ORDER BY created_at DESC, id DESC`
@@ -349,6 +386,12 @@ func (db *DB) ListLogsPage(ctx context.Context, f LogFilter) (*LogPage, error) {
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	// A large result is reported from the rollups straight away; counting
+	// it exactly would take longer than the page itself.
+	if est, ok := db.estimateCount(ctx, f); ok && est > largeResult {
+		p.Total, p.TotalKind = est, "approx"
+		return p, nil
 	}
 	// Exact count, if it is quick enough.
 	cctx, cancel := context.WithTimeout(ctx, CountBudget)
@@ -432,14 +475,18 @@ type LogStats struct {
 // LogStorageStats returns cheap facts about the log tables.
 func (db *DB) LogStorageStats(ctx context.Context) (LogStats, error) {
 	var s LogStats
+	// Separate statements: SQLite answers a lone MIN or MAX from an index
+	// in O(log n) but scans for MIN and MAX together.
 	var minID, maxID, oldest, newest sql.NullInt64
-	if err := db.R.QueryRowContext(ctx, `SELECT MIN(id), MAX(id) FROM request_logs`).Scan(&minID, &maxID); err != nil {
+	if err := db.R.QueryRowContext(ctx, `SELECT MIN(id) FROM request_logs`).Scan(&minID); err != nil {
 		return s, err
 	}
+	_ = db.R.QueryRowContext(ctx, `SELECT MAX(id) FROM request_logs`).Scan(&maxID)
 	if maxID.Valid {
 		s.Count = maxID.Int64 - minID.Int64 + 1
 	}
-	_ = db.R.QueryRowContext(ctx, `SELECT MIN(created_at), MAX(created_at) FROM request_logs`).Scan(&oldest, &newest)
+	_ = db.R.QueryRowContext(ctx, `SELECT MIN(created_at) FROM request_logs`).Scan(&oldest)
+	_ = db.R.QueryRowContext(ctx, `SELECT MAX(created_at) FROM request_logs`).Scan(&newest)
 	s.OldestAt, s.NewestAt = oldest.Int64, newest.Int64
 	var free, pageSize, av int64
 	_ = db.R.QueryRowContext(ctx, `PRAGMA freelist_count`).Scan(&free)
@@ -490,7 +537,8 @@ func (db *DB) DeleteLogsBefore(ctx context.Context, t int64) (int64, error) {
 // CountLogsBefore estimates how many logs are older than t (id range).
 func (db *DB) CountLogsBefore(ctx context.Context, t int64) int64 {
 	var lo, hi sql.NullInt64
-	_ = db.R.QueryRowContext(ctx, `SELECT MIN(id), MAX(id) FROM request_logs WHERE created_at < ?`, t).Scan(&lo, &hi)
+	_ = db.R.QueryRowContext(ctx, `SELECT MIN(id) FROM request_logs`).Scan(&lo)
+	_ = db.R.QueryRowContext(ctx, `SELECT id FROM request_logs WHERE created_at < ? ORDER BY created_at DESC LIMIT 1`, t).Scan(&hi)
 	if !hi.Valid {
 		return 0
 	}
