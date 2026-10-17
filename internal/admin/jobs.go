@@ -16,7 +16,8 @@ type Job struct {
 	Kind       string     `json:"kind"`
 	State      string     `json:"state"` // running, done, failed
 	Progress   int64      `json:"progress"`
-	Total      int64      `json:"total"` // 0 = unknown
+	Total      int64      `json:"total"`           // 0 = unknown
+	Phase      string     `json:"phase,omitempty"` // purge_logs: delete, then reclaim (progress/total in pages)
 	Message    string     `json:"message,omitempty"`
 	Result     any        `json:"result,omitempty"`
 	Error      string     `json:"error,omitempty"`

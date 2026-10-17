@@ -547,7 +547,7 @@ func TestTotalKindsAndStorageStats(t *testing.T) {
 	if _, err := db.IncrementalVacuum(ctx, func(done, total int64) {}); err != nil {
 		t.Fatal(err)
 	}
-	if freed, err := db.IncrementalVacuumIfEnabled(ctx); err != nil || freed < 0 {
+	if freed, err := db.IncrementalVacuumIfEnabled(ctx, nil); err != nil || freed < 0 {
 		t.Fatalf("vacuum %d %v", freed, err)
 	}
 }

@@ -137,15 +137,22 @@ func (s *Server) deleteLogs(w http.ResponseWriter, r *http.Request) {
 	// small chunks (requests keep flowing) and report progress as a job.
 	j, _ := s.jobs.start("purge_logs", func(ctx context.Context, j *Job) (any, error) {
 		total := s.DB.CountLogsBefore(ctx, before)
-		s.jobs.update(j, func(j *Job) { j.Total = total })
+		s.jobs.update(j, func(j *Job) { j.Phase, j.Total = "delete", total })
 		n, err := s.DB.DeleteLogsBeforeProgress(ctx, before, func(done int64) {
 			s.jobs.update(j, func(j *Job) { j.Progress = done })
 		})
 		if err != nil {
 			return map[string]any{"deleted": n}, err
 		}
-		s.jobs.update(j, func(j *Job) { j.Message = "reclaiming disk space" })
-		freed, _ := s.DB.IncrementalVacuumIfEnabled(ctx)
+		// Second phase: return the freed pages to the disk. Progress and
+		// total switch to pages; phase tells the console which one it is.
+		s.jobs.update(j, func(j *Job) {
+			j.Phase, j.Message, j.Progress, j.Total = "reclaim", "reclaiming disk space", 0, 0
+			j.Result = map[string]any{"deleted": n}
+		})
+		freed, _ := s.DB.IncrementalVacuumIfEnabled(ctx, func(done, total int64) {
+			s.jobs.update(j, func(j *Job) { j.Progress, j.Total = done, total })
+		})
 		return map[string]any{"deleted": n, "freed_bytes": freed}, nil
 	})
 	writeJSON(w, http.StatusAccepted, j)

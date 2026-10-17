@@ -44,7 +44,8 @@ func TestPurgeRunsAsJob(t *testing.T) {
 	}
 	done := h.waitJob(num(j["id"]))
 	res, _ := done["result"].(map[string]any)
-	if done["state"] != "done" || num(res["deleted"]) != 2500 || num(done["total"]) != 2500 || num(done["progress"]) != 2500 {
+	// After deleting, the job moves to the reclaim phase (progress in pages).
+	if done["state"] != "done" || num(res["deleted"]) != 2500 || done["phase"] != "reclaim" {
 		t.Fatalf("purge job %v", done)
 	}
 	if _, n, _ := h.db.ListLogs(ctx, store.LogFilter{Limit: 10}); n != 1 {

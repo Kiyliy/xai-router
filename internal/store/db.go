@@ -31,6 +31,7 @@ type DB struct {
 	R    *sql.DB
 	Path string
 	bind *bindingCache // write-behind cache for bindings (see bindings.go)
+	toks tokenCache    // client tokens by hash, for request authentication (see tokens.go)
 }
 
 // Open opens (creating if needed) the database at path and runs migrations.

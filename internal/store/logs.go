@@ -586,33 +586,64 @@ func (db *DB) CountLogsBefore(ctx context.Context, t int64) int64 {
 	return hi.Int64 - lo.Int64 + 1
 }
 
-// purgeChunk is how many logs one delete statement removes; between chunks
-// the write lock is released briefly so request logging and bindings are
-// never held up for long.
-const purgeChunk = 1000
+// Purges and space reclaim run in small steps that hold SQLite's single
+// write lock only briefly, so request logging and billing are never held
+// up: each step's size adapts to keep it near stepTarget, and after each
+// step the writer is left free for at least as long as the step took.
+const (
+	stepTarget   = 10 * time.Millisecond
+	purgeMin     = 50
+	purgeMax     = 2000
+	reclaimMin   = 16  // pages (64 KB)
+	reclaimMax   = 512 // pages (2 MB)
+	minStepPause = 5 * time.Millisecond
+)
 
-// DeleteLogsBeforeProgress deletes logs created before t in small chunks,
-// reporting progress after each chunk.
+// adapt grows or shrinks a step size so a step takes about stepTarget.
+func adapt(size, lo, hi int64, took time.Duration) int64 {
+	switch {
+	case took > 2*stepTarget:
+		size /= 2
+	case took < stepTarget/2:
+		size *= 2
+	}
+	return min(max(size, lo), hi)
+}
+
+// pause waits after a step: at least as long as the step held the lock.
+func pause(ctx context.Context, took time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(max(took, minStepPause)):
+		return nil
+	}
+}
+
+// DeleteLogsBeforeProgress deletes logs created before t in small steps,
+// reporting progress after each one.
 func (db *DB) DeleteLogsBeforeProgress(ctx context.Context, t int64, progress func(deleted int64)) (int64, error) {
 	var total int64
+	size := int64(200)
 	for {
+		start := time.Now()
 		res, err := db.W.ExecContext(ctx, `DELETE FROM request_logs WHERE id IN
-(SELECT id FROM request_logs WHERE created_at < ? ORDER BY created_at LIMIT ?)`, t, purgeChunk)
+(SELECT id FROM request_logs WHERE created_at < ? ORDER BY created_at LIMIT ?)`, t, size)
 		if err != nil {
 			return total, err
 		}
+		took := time.Since(start)
 		n, _ := res.RowsAffected()
 		total += n
 		if progress != nil {
 			progress(total)
 		}
-		if n < purgeChunk {
+		if n < size {
 			return total, nil
 		}
-		select {
-		case <-ctx.Done():
-			return total, ctx.Err()
-		case <-time.After(5 * time.Millisecond):
+		size = adapt(size, purgeMin, purgeMax, took)
+		if err := pause(ctx, took); err != nil {
+			return total, err
 		}
 	}
 }
@@ -620,18 +651,18 @@ func (db *DB) DeleteLogsBeforeProgress(ctx context.Context, t int64, progress fu
 // IncrementalVacuumIfEnabled reclaims free pages when the database supports
 // it without a full rebuild (auto_vacuum = INCREMENTAL); otherwise it only
 // checkpoints the WAL.
-func (db *DB) IncrementalVacuumIfEnabled(ctx context.Context) (int64, error) {
+func (db *DB) IncrementalVacuumIfEnabled(ctx context.Context, progress func(done, total int64)) (int64, error) {
 	var mode int64
 	if db.Path == ":memory:" || db.W.QueryRowContext(ctx, `PRAGMA auto_vacuum`).Scan(&mode) != nil || mode != 2 {
 		return 0, db.Vacuum(ctx)
 	}
-	return db.IncrementalVacuum(ctx, nil)
+	return db.IncrementalVacuum(ctx, progress)
 }
 
-// IncrementalVacuum returns free pages to the file system in small steps.
-// Databases created before v0.3 have auto_vacuum disabled; they are
-// converted first with a one-off VACUUM (which rebuilds the file and blocks
-// writes while it runs).
+// IncrementalVacuum returns free pages to the file system in small steps
+// (see stepTarget), reporting pages done / total. Databases created before
+// v0.3 have auto_vacuum disabled; they are converted first with a one-off
+// VACUUM (which rebuilds the file and blocks writes while it runs).
 func (db *DB) IncrementalVacuum(ctx context.Context, progress func(done, total int64)) (int64, error) {
 	if db.Path == ":memory:" {
 		return 0, nil
@@ -651,25 +682,28 @@ func (db *DB) IncrementalVacuum(ctx context.Context, progress func(done, total i
 	} else {
 		var free int64
 		_ = db.W.QueryRowContext(ctx, `PRAGMA freelist_count`).Scan(&free)
-		var done int64
-		for free > 0 {
-			step := min(free, 2000) // 2000 pages = 8 MB per statement
+		total, done, step := free, int64(0), int64(64)
+		for done < total {
+			step = min(step, total-done)
+			start := time.Now()
 			if _, err := db.W.ExecContext(ctx, `PRAGMA incremental_vacuum(`+strconv.FormatInt(step, 10)+`)`); err != nil {
-				return 0, err
+				return before - db.Size(), err
 			}
+			took := time.Since(start)
 			done += step
-			free -= step
 			if progress != nil {
-				progress(done, done+free)
+				progress(done, total)
 			}
-			select {
-			case <-ctx.Done():
-				return before - db.Size(), ctx.Err()
-			case <-time.After(5 * time.Millisecond):
+			step = adapt(step, reclaimMin, reclaimMax, took)
+			if err := pause(ctx, took); err != nil {
+				return before - db.Size(), err
+			}
+			if done%(64*1024) < step { // every ~256 MB, keep the WAL small
+				_, _ = db.W.ExecContext(ctx, `PRAGMA wal_checkpoint(PASSIVE)`)
 			}
 		}
 	}
-	_, _ = db.W.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`)
+	_, _ = db.W.ExecContext(ctx, `PRAGMA wal_checkpoint(PASSIVE)`)
 	return before - db.Size(), nil
 }
 

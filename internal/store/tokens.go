@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Token is a client (downstream) API token.
@@ -54,8 +56,75 @@ func scanToken(s interface{ Scan(...any) error }) (*Token, error) {
 }
 
 // GetTokenByHash looks up a token by the SHA-256 hash of its secret.
+//
+// Every proxied request authenticates, so lookups are served from memory
+// for up to tokenCacheTTL: the request path then does not wait on SQLite
+// while a large purge or vacuum keeps the database busy. Any change made
+// through this package (create, update, regenerate, reset, delete) clears
+// the cache, so disabling or deleting a token takes effect at once. Usage
+// (used_ticks) may be up to tokenCacheTTL old; quotas are enforced by the
+// in-memory ledger, which never goes below the stored value.
 func (db *DB) GetTokenByHash(ctx context.Context, hash string) (*Token, error) {
-	return scanToken(db.R.QueryRowContext(ctx, `SELECT `+tokenCols+` FROM tokens WHERE token_hash = ?`, hash))
+	if t := db.toks.get(hash); t != nil {
+		return t, nil
+	}
+	gen := db.toks.generation()
+	t, err := scanToken(db.R.QueryRowContext(ctx, `SELECT `+tokenCols+` FROM tokens WHERE token_hash = ?`, hash))
+	if err == nil {
+		db.toks.put(hash, t, gen)
+	}
+	return t, err
+}
+
+const tokenCacheTTL = 5 * time.Second
+
+type tokenCache struct {
+	mu  sync.Mutex
+	gen uint64
+	m   map[string]cachedToken
+}
+
+type cachedToken struct {
+	t   Token
+	exp time.Time
+}
+
+func (c *tokenCache) get(hash string) *Token {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.m[hash]
+	if !ok || time.Now().After(e.exp) {
+		return nil
+	}
+	cp := e.t
+	return &cp
+}
+
+func (c *tokenCache) generation() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.gen
+}
+
+// put stores t unless the cache was cleared since the lookup started (a
+// change racing with the read must not be overwritten by the old row).
+func (c *tokenCache) put(hash string, t *Token, gen uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if gen != c.gen {
+		return
+	}
+	if c.m == nil || len(c.m) > 10000 {
+		c.m = map[string]cachedToken{}
+	}
+	c.m[hash] = cachedToken{t: *t, exp: time.Now().Add(tokenCacheTTL)}
+}
+
+func (c *tokenCache) clear() {
+	c.mu.Lock()
+	c.gen++
+	c.m = nil
+	c.mu.Unlock()
 }
 
 // GetToken returns one token.
@@ -120,6 +189,7 @@ func (db *DB) ListTokensByStatus(ctx context.Context, q, status string, limit, o
 
 // CreateToken inserts t.
 func (db *DB) CreateToken(ctx context.Context, t *Token) error {
+	defer db.toks.clear()
 	now := NowMs()
 	t.CreatedAt, t.UpdatedAt = now, now
 	models, _ := json.Marshal(nonNil(t.AllowedModels))
@@ -139,6 +209,7 @@ allowed_models, notes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
 // UpdateToken saves the editable fields of t (including hash/prefix). Usage
 // counters are owned by the log writer and are not touched here.
 func (db *DB) UpdateToken(ctx context.Context, t *Token) error {
+	defer db.toks.clear()
 	t.UpdatedAt = NowMs()
 	models, _ := json.Marshal(nonNil(t.AllowedModels))
 	res, err := db.W.ExecContext(ctx, `UPDATE tokens SET name=?, token_hash=?, prefix=?, enabled=?, quota_ticks=?,
@@ -157,6 +228,7 @@ expires_at=?, allowed_models=?, notes=?, updated_at=? WHERE id=? AND deleted_at 
 // ResetTokenUsage sets a token's quota usage back to zero. The cleared
 // amount is kept in reset_ticks, so the token's total spend still adds up.
 func (db *DB) ResetTokenUsage(ctx context.Context, id int64) error {
+	defer db.toks.clear()
 	now := NowMs()
 	_, err := db.W.ExecContext(ctx, `UPDATE tokens SET reset_ticks = reset_ticks + used_ticks, used_ticks = 0,
 used_reset_at = ?, updated_at = ? WHERE id = ? AND deleted_at = 0`, now, now, id)
@@ -167,6 +239,7 @@ used_reset_at = ?, updated_at = ? WHERE id = ? AND deleted_at = 0`, now, now, id
 // hash is replaced) and leaves every list, but its name, prefix and spend
 // stay for the history.
 func (db *DB) DeleteToken(ctx context.Context, id int64) error {
+	defer db.toks.clear()
 	now := NowMs()
 	res, err := db.W.ExecContext(ctx, `UPDATE tokens SET deleted_at = ?, enabled = 0, token_hash = 'deleted:' || id,
 updated_at = ? WHERE id = ? AND deleted_at = 0`, now, now, id)
