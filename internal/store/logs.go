@@ -731,6 +731,6 @@ func (db *DB) IncrementalVacuum(ctx context.Context, progress func(done, total i
 // Vacuum checkpoints the WAL after large deletions so the -wal file shrinks.
 // Freed pages are reused by SQLite; the main file does not shrink.
 func (db *DB) Vacuum(ctx context.Context) error {
-	_, err := db.W.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`)
+	_, err := db.W.ExecContext(ctx, `PRAGMA wal_checkpoint(PASSIVE)`)
 	return err
 }

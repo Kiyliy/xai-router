@@ -48,6 +48,7 @@ var (
 	chunkGap    = flag.Duration("chunk-gap", 20*time.Millisecond, "time between streamed chunks")
 	purgeBefore = flag.Duration("purge-before", 0, "if set, purge logs older than this (e.g. 600h) during the test")
 	purgeAt     = flag.Duration("purge-at", time.Minute, "when to start the purge")
+	purgeWait   = flag.Duration("purge-wait", 10*time.Minute, "how long to wait after the load for an unfinished purge before failing")
 	p99Limit    = flag.Duration("p99", 20*time.Millisecond, "gateway overhead p99 limit")
 	token       string
 )
@@ -131,6 +132,7 @@ func api(method, path string, body any, out any) int {
 }
 
 type result struct {
+	at       time.Time // when the request was sent
 	overhead time.Duration
 	total    time.Duration
 	err      string
@@ -183,7 +185,10 @@ func main() {
 			r := rand.New(rand.NewPCG(uint64(i), 99))
 			for time.Now().Before(stop) {
 				sent.Add(1)
-				results <- one(client, tok.Token, r)
+				at := time.Now()
+				res := one(client, tok.Token, r)
+				res.at = at
+				results <- res
 			}
 		}(i)
 	}
@@ -205,6 +210,7 @@ func main() {
 	}
 	start := time.Now()
 	var purgeStarted bool
+	var purgeFrom, purgeTo time.Time // window in which the purge job ran (as observed every 10 s)
 	monitorDone := make(chan struct{})
 	go func() {
 		defer close(monitorDone)
@@ -224,10 +230,14 @@ func main() {
 				purgeStarted = true
 				before := time.Now().Add(-*purgeBefore).Unix()
 				api("DELETE", fmt.Sprintf("/api/v1/logs?before=%d", before), nil, &purgeJob)
+				purgeFrom = time.Now()
 				log.Printf("purge job %d started (logs before %s)", purgeJob.ID, time.Unix(before, 0).Format(time.RFC3339))
 			} else if purgeStarted && purgeJob.ID != 0 && purgeJob.State != "done" && purgeJob.State != "failed" {
 				api("GET", fmt.Sprintf("/api/v1/jobs/%d", purgeJob.ID), nil, &purgeJob)
 				log.Printf("purge: %s %d/%d", purgeJob.State, purgeJob.Progress, purgeJob.Total)
+				if purgeJob.State != "running" {
+					purgeTo = time.Now()
+				}
 			}
 			if now.After(stop) {
 				return
@@ -268,8 +278,9 @@ func main() {
 		return over[min(len(over)-1, int(float64(len(over))*q))]
 	}
 
-	// Wait for the purge and the log writer to finish.
-	for purgeJob.ID != 0 && purgeJob.State == "running" {
+	// Wait (bounded) for the purge and the log writer to finish.
+	waitUntil := time.Now().Add(*purgeWait)
+	for purgeJob.ID != 0 && purgeJob.State == "running" && time.Now().Before(waitUntil) {
 		time.Sleep(5 * time.Second)
 		api("GET", fmt.Sprintf("/api/v1/jobs/%d", purgeJob.ID), nil, &purgeJob)
 		log.Printf("waiting for purge: %d/%d", purgeJob.Progress, purgeJob.Total)
@@ -309,7 +320,34 @@ func main() {
 	for _, m := range mem {
 		fmt.Printf("| %v | %.1f | %.1f | %d | %d | %d |\n", m.at, float64(m.heap)/1e6, float64(m.sys)/1e6, m.gor, m.queue, m.logs)
 	}
-	pass := len(all) == ok && p(0.99) < *p99Limit && logged.Total == int64(len(all)) && usedTicks == wantTicks && keyTicks == wantTicks
+	// Overhead of the requests sent while the purge ran.
+	purgeOK := true
+	if purgeJob.ID != 0 {
+		if purgeTo.IsZero() {
+			purgeTo = start.Add(*dur)
+		}
+		var po []time.Duration
+		for _, r := range all {
+			if r.err == "" && !r.at.Before(purgeFrom) && r.at.Before(purgeTo) {
+				po = append(po, r.overhead)
+			}
+		}
+		sort.Slice(po, func(i, j int) bool { return po[i] < po[j] })
+		q := func(f float64) time.Duration {
+			if len(po) == 0 {
+				return 0
+			}
+			return po[min(len(po)-1, int(float64(len(po))*f))]
+		}
+		fmt.Printf("\n### While the purge ran (%v, %d requests)\n\n| p50 | p95 | p99 | max |\n|---|---|---|---|\n| %v | %v | %v | %v |\n",
+			purgeTo.Sub(purgeFrom).Round(time.Second), len(po), q(0.5).Round(time.Microsecond), q(0.95).Round(time.Microsecond),
+			q(0.99).Round(time.Microsecond), q(1).Round(time.Microsecond))
+		purgeOK = purgeJob.State == "done" && q(0.99) < *p99Limit
+		if purgeJob.State == "running" {
+			fmt.Printf("\npurge still running after the load and %v of waiting: %d/%d\n", *purgeWait, purgeJob.Progress, purgeJob.Total)
+		}
+	}
+	pass := len(all) == ok && p(0.99) < *p99Limit && logged.Total == int64(len(all)) && usedTicks == wantTicks && keyTicks == wantTicks && purgeOK
 	fmt.Printf("\nRESULT: %s\n", map[bool]string{true: "PASS", false: "FAIL"}[pass])
 	if !pass {
 		os.Exit(1)

@@ -144,17 +144,12 @@ func (s *Server) deleteLogs(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return map[string]any{"deleted": n}, err
 		}
-		// Second phase: return the freed pages to the disk. Progress and
-		// total switch to bytes; phase tells the console which one it is.
-		s.jobs.update(j, func(j *Job) {
-			j.Phase, j.Message, j.Progress, j.Total = "reclaim", "reclaiming disk space", 0, 0
-			j.Result = map[string]any{"deleted": n}
-		})
-		freed, _ := s.DB.IncrementalVacuumIfEnabled(ctx, func(done, total int64) {
-			ps := s.DB.PageSize(ctx)
-			s.jobs.update(j, func(j *Job) { j.Progress, j.Total = done*ps, total*ps })
-		})
-		return map[string]any{"deleted": n, "freed_bytes": freed}, nil
+		// The freed pages are not returned to the disk here: new logs reuse
+		// them, and incremental_vacuum after a mass delete moves pages one
+		// by one (measured ~25 pages/s, a day for 13 GB). Returning space to
+		// the OS is the explicit, paced "compact" job.
+		_ = s.DB.Vacuum(ctx) // WAL checkpoint
+		return map[string]any{"deleted": n}, nil
 	})
 	writeJSON(w, http.StatusAccepted, j)
 }
