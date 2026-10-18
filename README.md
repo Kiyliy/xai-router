@@ -67,6 +67,10 @@ external services.
   payloads are stripped, bodies are capped at a configurable size, and old logs are deleted
   daily. Search by time, model, status, key, token, path or request id; open any log to see
   request and response side by side, or copy it as a `curl` command.
+- **Event log** — every change an administrator makes (who, from which IP, what, before/after where it
+  matters, secrets redacted) and everything the gateway does on its own (keys disabled, retention runs,
+  model syncs, low disk) in one append-only table that is kept forever. Token quotas are never reset:
+  they are raised or lowered with a recorded adjustment.
 - **Statistics per client request** — requests, success rate, tokens, cost and latency over time,
   broken down by model, key and token. Aggregates survive log retention.
 - **Open admin API** — everything the console does goes through a versioned REST API
@@ -262,7 +266,8 @@ curl -s "${auth[@]}" -X POST $BASE/api/v1/models/sync
 |---|---|
 | Auth | `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, `PUT /auth/password` |
 | Keys | `GET/POST /keys`, `GET/PATCH/DELETE /keys/{id}`, `POST /keys/import`, `POST /keys/test`, `POST /keys/{id}/test`, `POST /keys/{id}/reset` |
-| Tokens | `GET/POST /tokens`, `GET/PATCH/DELETE /tokens/{id}`, `POST /tokens/{id}/regenerate` |
+| Tokens | `GET/POST /tokens`, `GET/PATCH/DELETE /tokens/{id}`, `POST /tokens/{id}/regenerate`, `POST /tokens/{id}/quota` |
+| Event log | `GET /events` (operation and system events, append-only) |
 | Admin tokens | `GET/POST /admin-tokens`, `DELETE /admin-tokens/{id}` |
 | Models | `GET/POST /models`, `PATCH/DELETE /models/{id}`, `POST /models/sync` |
 | Logs | `GET/DELETE /logs`, `GET /logs/{id}`, `GET /logs/{id}/curl` |

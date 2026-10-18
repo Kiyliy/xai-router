@@ -49,6 +49,7 @@ xai-router 位于你的应用和 `https://api.x.ai` 之间。把任意 OpenAI / 
   首包时间、总耗时、模型、各类 token、费用及其来源、key、令牌和客户端 IP。base64 大字段会被剔除，
   单条日志大小可配置上限，过期日志每天自动清理。可按时间、模型、状态、key、令牌、路径、请求 ID 搜索；
   打开任意一条可左右分栏查看请求和响应，或一键"复制为 curl"。
+- **事件日志**：管理员做的每一次修改（谁、从哪个 IP、改了什么，必要时记下前后的值，密文不落盘），以及网关自己做的事（自动禁用 key、定时清理日志、模型同步、磁盘告警），都记在一张只能追加、永久保留的表里。令牌额度不能重置，只能通过留有记录的调整来增减。
 - **按客户端请求口径统计**：请求数、成功率、token、费用、延迟的时间趋势，按模型、key、令牌拆分。日志被清理后统计数据仍保留。
 - **管理 API 全部开放**：后台的所有操作都通过带版本号的 REST API（`/api/v1`）完成，错误格式统一，
   提供 [OpenAPI 3 规范](web/static/openapi.yaml)，后台内也能直接浏览。
@@ -226,7 +227,8 @@ curl -s "${auth[@]}" -X POST $BASE/api/v1/models/sync
 |---|---|
 | 认证 | `POST /auth/login`、`POST /auth/logout`、`GET /auth/me`、`PUT /auth/password` |
 | Key | `GET/POST /keys`、`GET/PATCH/DELETE /keys/{id}`、`POST /keys/import`、`POST /keys/test`、`POST /keys/{id}/test`、`POST /keys/{id}/reset` |
-| 令牌 | `GET/POST /tokens`、`GET/PATCH/DELETE /tokens/{id}`、`POST /tokens/{id}/regenerate` |
+| 令牌 | `GET/POST /tokens`、`GET/PATCH/DELETE /tokens/{id}`、`POST /tokens/{id}/regenerate`、`POST /tokens/{id}/quota` |
+| 事件日志 | `GET /events`（操作和系统事件，只能追加） |
 | 管理令牌 | `GET/POST /admin-tokens`、`DELETE /admin-tokens/{id}` |
 | 模型 | `GET/POST /models`、`PATCH/DELETE /models/{id}`、`POST /models/sync` |
 | 日志 | `GET/DELETE /logs`、`GET /logs/{id}`、`GET /logs/{id}/curl` |
