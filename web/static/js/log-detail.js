@@ -23,7 +23,7 @@ if (!document.querySelector('link[href$="logs-v041.css"]')) {
 const ACTION_VARIANT ={ success: 'success', retry: 'warning', return: 'neutral', cooldown: 'warning', disable: 'danger', verify: 'warning' };
 
 export function statusBadge(code) {
-  return badge(code ? String(code) : 'ERR', statusClass(code), { class: 'badge-status mono' });
+  return badge(code ? String(code) : t('lg.failed'), statusClass(code), { class: 'badge-status mono' });
 }
 export function methodTag(m) { return h('span', { class: `method method-${(m || 'GET').toLowerCase()}` }, m || 'GET'); }
 
@@ -117,7 +117,7 @@ function sseView(text, { filename = 'response.sse.txt' } = {}) {
     const prev = previewer(pre, () => text, filename);
     prev.paint();
     return h('div', { class: 'pane-content' },
-      h('div', { class: 'pane-meta' }, h('span', null, 'text/event-stream'), size, h('span', { class: 'pane-meta-spacer' }), downloadTool(() => text, filename), expandToggle(pre)),
+      h('div', { class: 'pane-meta' }, h('span', null, t('logs.rawSse')), size, h('span', { class: 'pane-meta-spacer' }), downloadTool(() => text, filename), expandToggle(pre)),
       prev.slot, pre);
   }
   const paint = () => {
@@ -144,7 +144,7 @@ function sseView(text, { filename = 'response.sse.txt' } = {}) {
     fmtBtn.classList.toggle('on', sseFormatPref); fmtBtn.setAttribute('aria-pressed', sseFormatPref ? 'true' : 'false');
     paint();
   });
-  return h('div', { class: 'pane-content' }, h('div', { class: 'pane-meta' }, h('span', null, 'text/event-stream'), size,
+  return h('div', { class: 'pane-content' }, h('div', { class: 'pane-meta' }, h('span', null, t('logs.rawSse')), size,
     h('span', { class: 'pane-meta-spacer' }), fmtBtn, downloadTool(() => text, filename), expandToggle(pre)), pre);
 }
 
@@ -200,7 +200,7 @@ function attemptsView(d) {
             h('span', { class: 'strong' }, a.key_name || (a.key_id != null ? `#${a.key_id}` : '—')),
             a.status ? statusBadge(a.status) : badge(t('logs.networkError'), 'danger'),
             a.action ? badge(t(`action.${a.action}`) || a.action, ACTION_VARIANT[a.action] || 'neutral', { class: 'badge-outline' }) : null,
-            h('span', { class: 'attempt-times mono muted' }, `+${fmtMs(offs[i])}`, ' · ', h('span', { title: t('logs.ttfbUpstreamHint') }, `${t('logs.ttfbUpstream')} ${fmtMs(a.ttfb_ms)}`), ' · ', fmtMs(a.latency_ms))),
+            h('span', { class: 'attempt-times mono muted' }, `+${fmtMs(offs[i])}`, t('lg.sep'), h('span', { title: t('logs.ttfbUpstreamHint') }, `${t('logs.ttfbUpstream')} ${fmtMs(a.ttfb_ms)}`), t('lg.sep'), `${t('common.latency')} ${fmtMs(a.latency_ms)}`)),
           a.error ? h('div', { class: 'attempt-error' }, a.error) : null,
           h('div', { class: 'waterfall' }, h('div', { class: `wf-bar wf-${v}`, style: { left: `${left}%`, width: `${width}%` } }, h('div', { class: 'wf-ttfb', style: { width: `${ttfbW}%` } })))));
     }));
@@ -228,7 +228,7 @@ function wsSessionView(s) {
     s.subprotocol ? [t('logs.wsSubprotocol'), h('span', { class: 'mono small break' }, s.subprotocol.replace(/xai-client-secret\.\S+/, 'xai-client-secret.…'))] : null,
     s.text_inputs ? [t('logs.wsTextInputs'), fmtInt(s.text_inputs)] : null,
     s.tts_chars ? [t('logs.wsTtsChars'), fmtInt(s.tts_chars)] : null,
-    s.audio_seconds ? [t('logs.wsAudio'), `${s.audio_seconds.toFixed(1)} s`] : null,
+    s.audio_seconds ? [t('logs.wsAudio'), t('lg.seconds', { n: s.audio_seconds.toFixed(1) })] : null,
     [t('logs.wsLogged'), fmtInt(s.logged_messages || 0)],
   ]));
 }

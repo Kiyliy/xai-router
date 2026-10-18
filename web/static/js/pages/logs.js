@@ -3,7 +3,7 @@
 // selected types, everything in the URL. type=request alone pages by number; any other
 // selection is merged newest first and pages with a cursor.
 import {
-  h, fmtInt, fmtUSD, fmtMs, fmtCompact, fmtDateTime, fmtTimeShort, relTime, debounce, toLocalInput, fromLocalInput, downloadText,
+  h, fmtInt, fmtUSD, fmtMs, fmtCompact, fmtDateTime, relTime, debounce, toLocalInput, fromLocalInput, downloadText,
   fmtTotal, latestSignal,
 } from '../util.js';
 import { icon } from '../icons.js';
@@ -266,7 +266,12 @@ export function render(el, ctx) {
   const keyLink = (r) => (r.key_name
     ? (r.key_id != null ? h('a', { class: 'link cell-link', href: `#/keys?open=${r.key_id}`, title: `${t('lg.openKey')}: ${r.key_name}`, onclick: stop }, icon('key', 10), ' ', r.key_name) : h('span', null, icon('key', 10), ' ', r.key_name))
     : h('span', { class: 'muted' }, icon('key', 10), ' —'));
-  const timeCell = (r) => h('td', { class: 'nowrap m-meta m-time' }, h('div', { class: 'mono', title: fmtDateTime(r.created_at) }, fmtTimeShort(r.created_at)), h('div', { class: 'cell-sub', 'data-rel': r.created_at }, relTime(r.created_at)));
+  // List time "10月18日 14:02" (pm-spec 10.3); the relative time below only within the last day.
+  const timeCell = (r) => {
+    const recent = Date.now() - new Date(r.created_at).getTime() < 86400e3;
+    return h('td', { class: 'nowrap m-meta m-time' }, h('div', { title: fmtDateTime(r.created_at) }, fmtDateTime(r.created_at, { seconds: false })),
+      recent ? h('div', { class: 'cell-sub', 'data-rel': r.created_at }, relTime(r.created_at)) : null);
+  };
   const isErr = (r) => (r.type === 'request' ? (r.status >= 400 || !r.status) : r.level === 'error');
   function tok4(r) {
     if (r.images) return h('span', null, `${r.images} ${t('logs.imgShort')}`);
