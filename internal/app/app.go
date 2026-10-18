@@ -52,6 +52,7 @@ type App struct {
 	GeneratedPassword string
 
 	handler http.Handler
+	diskLow bool // the last disk check was over the warning threshold
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 }
@@ -274,6 +275,7 @@ func (a *App) syncLoop(ctx context.Context) {
 		case <-t.C:
 		}
 		a.Quota.ExpireHolds(time.Now())
+		a.checkDisk(ctx)
 		if h := a.Settings.Get().ModelSyncIntervalHours; h > 0 && a.syncDue(ctx, time.Duration(h)*time.Hour) {
 			res, err := a.Admin.RunSync(ctx, false)
 			switch {
@@ -287,6 +289,27 @@ func (a *App) syncLoop(ctx context.Context) {
 			}
 		}
 		t.Reset(10 * time.Minute)
+	}
+}
+
+// checkDisk records a system event when the data volume crosses the warning
+// threshold (once per crossing, not on every check).
+func (a *App) checkDisk(ctx context.Context) {
+	du, ok := a.Admin.DiskUsage()
+	if !ok {
+		return
+	}
+	warn := float64(a.Settings.Get().DiskWarnPercent)
+	pct := du.UsedPercent()
+	switch {
+	case !a.diskLow && pct >= warn:
+		a.diskLow = true
+		a.Log.Warn("data volume almost full", "used_percent", pct, "free_bytes", du.Free)
+		_ = a.DB.AddEvent(ctx, &store.Event{Kind: store.EventSystem, Action: "disk.low", Actor: "system", ActorName: "system",
+			TargetType: "disk", Detail: map[string]any{"used_percent": pct, "free_bytes": du.Free, "total_bytes": du.Total,
+				"warn_percent": warn}})
+	case a.diskLow && pct < warn-2:
+		a.diskLow = false
 	}
 }
 

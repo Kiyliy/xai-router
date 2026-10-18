@@ -463,7 +463,7 @@ func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.Cance
 	rc := http.NewResponseController(w)
 	_ = rc.Flush()
 
-	maxLog := s.LogBodyMaxBytes()
+	maxLog := s.LogResponseBodyMaxBytes()
 	capt := newCapture(maxLog)
 	ss := &billing.StreamState{MaxText: maxLog}
 	parser := &sseParser{onEvent: ss.AddEvent}
@@ -593,10 +593,10 @@ func (st *state) handleBody(r *http.Request, body []byte) {
 	}
 	st.log.UpstreamID = firstNonEmpty(env.ID, env.RequestID)
 	if st.s.LogBodies {
-		st.log.RespBody, st.log.Truncated = reqlog.SanitizeBody(body, st.s.LogBodyMaxBytes())
+		st.log.RespBody, st.log.Truncated = reqlog.SanitizeBody(body, st.s.LogResponseBodyMaxBytes())
 		if u.Found && len(body) <= 8<<20 {
 			t, rs := billing.ExtractText(body)
-			limit := st.s.LogBodyMaxBytes()
+			limit := st.s.LogResponseBodyMaxBytes()
 			st.log.RespText, st.log.ReasoningText = truncateStr(t, limit), truncateStr(rs, limit)
 		}
 	}
@@ -760,7 +760,7 @@ func (st *state) writeUpstreamError(w http.ResponseWriter, ue *upstreamError) {
 	st.markTTFB()
 	_, _ = w.Write(body)
 	if st.s.LogBodies {
-		st.log.RespBody, _ = reqlog.SanitizeBody(body, st.s.LogBodyMaxBytes())
+		st.log.RespBody, _ = reqlog.SanitizeBody(body, st.s.LogResponseBodyMaxBytes())
 	}
 }
 
@@ -808,7 +808,7 @@ func (st *state) finish(r *http.Request) {
 		l.HasBodies = true
 		l.ReqHeaders = reqlog.HeadersJSON(r.Header)
 		var trunc bool
-		l.ReqBody, trunc = reqlog.SanitizeBody(st.reqBody, s.LogBodyMaxBytes())
+		l.ReqBody, trunc = reqlog.SanitizeBody(st.reqBody, s.LogRequestBodyMaxBytes())
 		l.Truncated = l.Truncated || trunc
 		if l.RespHeaders == "" {
 			l.RespHeaders = "{}"

@@ -29,7 +29,9 @@ type Settings struct {
 	MaxBodyMB                int      `json:"max_body_mb"`
 	LogEnabled               bool     `json:"log_enabled"`
 	LogBodies                bool     `json:"log_bodies"`
-	LogBodyMaxKB             int      `json:"log_body_max_kb"`
+	LogRequestBodyMaxKB      int      `json:"log_request_body_max_kb"`  // per stored request body
+	LogResponseBodyMaxKB     int      `json:"log_response_body_max_kb"` // per stored response body (and assembled text)
+	DiskWarnPercent          int      `json:"disk_warn_percent"`        // warn when the data volume is this full
 	LogRetentionDays         int      `json:"log_retention_days"`
 	ModelSyncIntervalHours   int      `json:"model_sync_interval_hours"`
 	TaskBindingTTLHours      int      `json:"task_binding_ttl_hours"`
@@ -79,7 +81,9 @@ func DefaultSettings() Settings {
 		MaxBodyMB:                50,
 		LogEnabled:               true,
 		LogBodies:                true,
-		LogBodyMaxKB:             256,
+		LogRequestBodyMaxKB:      32,
+		LogResponseBodyMaxKB:     32,
+		DiskWarnPercent:          85,
 		LogRetentionDays:         30,
 		ModelSyncIntervalHours:   24,
 		TaskBindingTTLHours:      720,
@@ -142,7 +146,9 @@ func (s *Settings) Validate() error {
 		{"connect_timeout_seconds", &s.ConnectTimeoutSeconds, 1, 300},
 		{"stream_idle_timeout_seconds", &s.StreamIdleTimeoutSeconds, 5, 7200},
 		{"max_body_mb", &s.MaxBodyMB, 1, 1024},
-		{"log_body_max_kb", &s.LogBodyMaxKB, 1, 65536},
+		{"log_request_body_max_kb", &s.LogRequestBodyMaxKB, 1, 65536},
+		{"log_response_body_max_kb", &s.LogResponseBodyMaxKB, 1, 65536},
+		{"disk_warn_percent", &s.DiskWarnPercent, 50, 99},
 		{"log_retention_days", &s.LogRetentionDays, 0, 3650},
 		{"model_sync_interval_hours", &s.ModelSyncIntervalHours, 0, 8760},
 		{"task_binding_ttl_hours", &s.TaskBindingTTLHours, 1, 8760},
@@ -188,8 +194,13 @@ func (s *Settings) RequestTimeout() time.Duration {
 func (s *Settings) StreamIdleTimeout() time.Duration {
 	return time.Duration(s.StreamIdleTimeoutSeconds) * time.Second
 }
-func (s *Settings) MaxBodyBytes() int64  { return int64(s.MaxBodyMB) << 20 }
-func (s *Settings) LogBodyMaxBytes() int { return s.LogBodyMaxKB << 10 }
+func (s *Settings) MaxBodyBytes() int64 { return int64(s.MaxBodyMB) << 20 }
+
+// LogRequestBodyMaxBytes caps a stored request body.
+func (s *Settings) LogRequestBodyMaxBytes() int { return s.LogRequestBodyMaxKB << 10 }
+
+// LogResponseBodyMaxBytes caps a stored response body and assembled text.
+func (s *Settings) LogResponseBodyMaxBytes() int { return s.LogResponseBodyMaxKB << 10 }
 
 // IsRetryStatus reports whether status should trigger trying the next key.
 func (s *Settings) IsRetryStatus(status int) bool {

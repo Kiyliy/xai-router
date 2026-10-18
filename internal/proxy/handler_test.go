@@ -723,3 +723,23 @@ func TestLogStoresTokenPrefix(t *testing.T) {
 		t.Fatalf("token prefix %q, want %q", l.TokenPrefix, hs.tok.Prefix)
 	}
 }
+
+// Request and response bodies are capped separately in the log.
+func TestBodyCapsPerDirection(t *testing.T) {
+	hs := newHarness(t, func(s *config.Settings) { s.LogRequestBodyMaxKB, s.LogResponseBodyMaxKB = 4, 8 })
+	big := strings.Repeat("hello world ", 40<<10/12) // ordinary text (long single runs are stripped as base64)
+	hs.addKey("k1", newMockUp(t, jsonReply(200, `{"id":"c1","model":"grok-4.5","choices":[{"message":{"content":"`+big+`"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)).srv.URL, nil)
+	if resp, _ := hs.do(http.MethodPost, "/v1/chat/completions", `{"model":"grok-4.5","messages":[{"role":"user","content":"`+big+`"}]}`); resp.StatusCode != 200 {
+		t.Fatal(resp.Status)
+	}
+	l := hs.lastLog(1)
+	if n := len(l.ReqBody); n > 4<<10+200 || n < 4<<10 {
+		t.Fatalf("request body stored %d bytes, cap 4 KB", n)
+	}
+	if n := len(l.RespBody); n > 8<<10+200 || n < 8<<10 {
+		t.Fatalf("response body stored %d bytes, cap 8 KB", n)
+	}
+	if !l.Truncated {
+		t.Fatal("truncation not flagged")
+	}
+}

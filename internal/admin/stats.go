@@ -2,7 +2,10 @@ package admin
 
 import (
 	"context"
+	"github.com/Kiyliy/xai-router/internal/diskusage"
+	"math"
 	"net/http"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -323,7 +326,7 @@ func (s *Server) systemInfo(w http.ResponseWriter, r *http.Request) {
 	ls, _ := s.DB.LogStorageStats(r.Context())
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"version": s.Build.Version, "commit": s.Build.Commit, "build_date": s.Build.Date,
 		"go_version": runtime.Version(), "started_at": s.Started.UTC(),
 		"uptime_seconds": int64(time.Since(s.Started).Seconds()), "db_size_bytes": s.DB.Size(),
@@ -332,5 +335,25 @@ func (s *Server) systemInfo(w http.ResponseWriter, r *http.Request) {
 		"log_count":             ls.Count, "oldest_log_at": msTime(ls.OldestAt), "newest_log_at": msTime(ls.NewestAt),
 		"db_free_bytes": ls.FreeBytes, "db_auto_vacuum": ls.AutoVacuum,
 		"go_heap_bytes": ms.HeapAlloc, "go_sys_bytes": ms.Sys, "goroutines": runtime.NumGoroutine(),
-	})
+	}
+	// The volume holding the database: logs fill disks long before SQLite
+	// runs out of write capacity.
+	warnAt := s.Settings.Get().DiskWarnPercent
+	out["disk_warn_percent"] = warnAt
+	if du, ok := s.DiskUsage(); ok {
+		pct := du.UsedPercent()
+		out["disk_total_bytes"], out["disk_free_bytes"] = du.Total, du.Free
+		out["disk_used_percent"] = math.Round(pct*10) / 10
+		out["disk_warning"] = pct >= float64(warnAt)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// DiskUsage returns the usage of the volume holding the database.
+func (s *Server) DiskUsage() (diskusage.Usage, bool) {
+	if s.DB.Path == ":memory:" {
+		return diskusage.Usage{}, false
+	}
+	u, err := diskusage.Of(filepath.Dir(s.DB.Path))
+	return u, err == nil && u.Total > 0
 }

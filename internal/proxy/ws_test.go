@@ -517,7 +517,7 @@ func TestWSSessionChargeQuota(t *testing.T) {
 }
 
 func TestWSSessionLogging(t *testing.T) {
-	hs := newHarness(t, func(s *config.Settings) { s.LogBodyMaxKB = 1 })
+	hs := newHarness(t, func(s *config.Settings) { s.LogResponseBodyMaxKB = 1 })
 	st := &state{h: hs.h, s: hs.set.Get(), token: &store.Token{}, log: &store.Log{Path: "/v1/realtime"}}
 	ss := newWSSession(st, &wsStats{}, 2)
 	ss.message("upstream", opText, []byte(`{"type":"response.text.delta","delta":"a"}`), 40, false)

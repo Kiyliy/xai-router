@@ -75,7 +75,7 @@ func TestValidateNormalises(t *testing.T) {
 func TestHelpersAndHolder(t *testing.T) {
 	s := DefaultSettings()
 	if s.RequestTimeout() != 600*time.Second || s.StreamIdleTimeout() != 300*time.Second ||
-		s.MaxBodyBytes() != 50<<20 || s.LogBodyMaxBytes() != 256<<10 {
+		s.MaxBodyBytes() != 50<<20 || s.LogRequestBodyMaxBytes() != 32<<10 || s.LogResponseBodyMaxBytes() != 32<<10 || s.DiskWarnPercent != 85 {
 		t.Fatal("duration/size helpers")
 	}
 	if !s.IsRetryStatus(503) || s.IsRetryStatus(400) {

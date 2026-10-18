@@ -489,7 +489,7 @@ func (ss *wsSession) appendLine(by, text string) {
 	case "gateway":
 		arrow = "•"
 	}
-	if ss.transcript.Len() < ss.st.s.LogBodyMaxBytes() {
+	if ss.transcript.Len() < ss.st.s.LogResponseBodyMaxBytes() {
 		ss.transcript.WriteString(arrow + " " + by + " " + text + "\n")
 	} else {
 		ss.st.log.Truncated = true
@@ -572,7 +572,7 @@ func (ss *wsSession) account(by string, ev *wsEvent) {
 		ss.st.log.Error = truncateStr("upstream error event: "+ev.Error.Message, 500)
 	case by == "upstream" && (ev.Type == "response.output_audio_transcript.delta" || ev.Type == "response.text.delta" ||
 		ev.Type == "response.output_text.delta"):
-		if ss.text.Len() < ss.st.s.LogBodyMaxBytes() {
+		if ss.text.Len() < ss.st.s.LogResponseBodyMaxBytes() {
 			ss.text.WriteString(ev.Delta)
 		}
 	}
