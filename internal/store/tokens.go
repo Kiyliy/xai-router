@@ -18,7 +18,8 @@ type Token struct {
 	Hash          string
 	Prefix        string
 	Enabled       bool
-	QuotaTicks    int64 // 0 = unlimited
+	QuotaTicks    int64 // when Limited: requests are refused once UsedTicks reaches it (0 blocks)
+	Limited       bool  // false = unlimited (stored as the column unlimited)
 	UsedTicks     int64
 	ExpiresAt     int64 // unix ms, 0 = never
 	AllowedModels []string
@@ -27,21 +28,18 @@ type Token struct {
 	Notes         string
 	CreatedAt     int64
 	UpdatedAt     int64
-	// ResetTicks is the usage cleared by "reset usage" (UsedTicks + ResetTicks
-	// is the token's total spend); UsedResetAt the time of the last reset.
-	ResetTicks  int64
-	UsedResetAt int64
 }
 
 const tokenCols = `id, name, token_hash, prefix, enabled, quota_ticks, used_ticks, expires_at, allowed_models,
-requests, last_used_at, notes, created_at, updated_at, reset_ticks, used_reset_at`
+requests, last_used_at, notes, created_at, updated_at, unlimited`
 
 func scanToken(s interface{ Scan(...any) error }) (*Token, error) {
 	var t Token
-	var en int
+	var en, unl int
 	var models string
 	err := s.Scan(&t.ID, &t.Name, &t.Hash, &t.Prefix, &en, &t.QuotaTicks, &t.UsedTicks, &t.ExpiresAt, &models,
-		&t.Requests, &t.LastUsedAt, &t.Notes, &t.CreatedAt, &t.UpdatedAt, &t.ResetTicks, &t.UsedResetAt)
+		&t.Requests, &t.LastUsedAt, &t.Notes, &t.CreatedAt, &t.UpdatedAt, &unl)
+	t.Limited = unl == 0
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -141,10 +139,10 @@ func (db *DB) ListTokens(ctx context.Context, q string, limit, offset int) ([]*T
 // Token list status filters (see ListTokensByStatus).
 var tokenStatusSQL = map[string]string{
 	// usable: enabled, not expired and not out of quota
-	"enabled":   `enabled = 1 AND (expires_at = 0 OR expires_at > ?) AND (quota_ticks = 0 OR used_ticks < quota_ticks)`,
+	"enabled":   `enabled = 1 AND (expires_at = 0 OR expires_at > ?) AND (unlimited = 1 OR used_ticks < quota_ticks)`,
 	"disabled":  `enabled = 0`,
 	"expired":   `expires_at > 0 AND expires_at <= ?`,
-	"exhausted": `quota_ticks > 0 AND used_ticks >= quota_ticks`,
+	"exhausted": `unlimited = 0 AND used_ticks >= quota_ticks`,
 }
 
 // ValidTokenStatus reports whether s is a known token status filter.
@@ -190,13 +188,29 @@ func (db *DB) ListTokensByStatus(ctx context.Context, q, status string, limit, o
 
 // CreateToken inserts t.
 func (db *DB) CreateToken(ctx context.Context, t *Token) error {
+	return db.CreateTokenRecorded(ctx, t, nil)
+}
+
+// CreateTokenRecorded inserts t and, in the same transaction, the event e
+// (the token's first quota record: initial quota or unlimited), filling in
+// the target and the amounts.
+func (db *DB) CreateTokenRecorded(ctx context.Context, t *Token, e *Event) error {
 	defer db.toks.clear()
+	if t.QuotaTicks > 0 {
+		t.Limited = true // a positive quota is a limit (callers predating the Limited flag)
+	}
 	now := NowMs()
 	t.CreatedAt, t.UpdatedAt = now, now
 	models, _ := json.Marshal(nonNil(t.AllowedModels))
-	res, err := db.W.ExecContext(ctx, `INSERT INTO tokens (name, token_hash, prefix, enabled, quota_ticks, expires_at,
-allowed_models, notes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		t.Name, t.Hash, t.Prefix, boolInt(t.Enabled), t.QuotaTicks, t.ExpiresAt, string(models), t.Notes, now, now)
+	tx, err := db.W.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	res, err := tx.ExecContext(ctx, `INSERT INTO tokens (name, token_hash, prefix, enabled, quota_ticks, unlimited,
+expires_at, allowed_models, notes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		t.Name, t.Hash, t.Prefix, boolInt(t.Enabled), t.QuotaTicks, boolInt(!t.Limited), t.ExpiresAt, string(models),
+		t.Notes, now, now)
 	if isUnique(err) {
 		return ErrConflict
 	}
@@ -204,7 +218,19 @@ allowed_models, notes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
 		return err
 	}
 	t.ID, _ = res.LastInsertId()
-	return nil
+	if e != nil {
+		e.TargetType, e.TargetID, e.TargetName, e.TargetHint = "token", strconv.FormatInt(t.ID, 10), t.Name, t.Prefix
+		if e.Detail == nil {
+			e.Detail = map[string]any{}
+		}
+		d := e.Detail
+		d["amount_ticks"], d["before_ticks"], d["after_ticks"] = t.QuotaTicks, int64(0), t.QuotaTicks
+		d["used_ticks"], d["unlimited"] = int64(0), !t.Limited
+		if err := insertEvent(ctx, tx, e); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // UpdateToken saves the editable fields of t (including hash/prefix). Usage
@@ -213,9 +239,10 @@ func (db *DB) UpdateToken(ctx context.Context, t *Token) error {
 	defer db.toks.clear()
 	t.UpdatedAt = NowMs()
 	models, _ := json.Marshal(nonNil(t.AllowedModels))
-	res, err := db.W.ExecContext(ctx, `UPDATE tokens SET name=?, token_hash=?, prefix=?, enabled=?, quota_ticks=?,
+	// The quota is not written here: it only changes through AdjustTokenQuota.
+	res, err := db.W.ExecContext(ctx, `UPDATE tokens SET name=?, token_hash=?, prefix=?, enabled=?,
 expires_at=?, allowed_models=?, notes=?, updated_at=? WHERE id=? AND deleted_at = 0`,
-		t.Name, t.Hash, t.Prefix, boolInt(t.Enabled), t.QuotaTicks, t.ExpiresAt, string(models), t.Notes,
+		t.Name, t.Hash, t.Prefix, boolInt(t.Enabled), t.ExpiresAt, string(models), t.Notes,
 		t.UpdatedAt, t.ID)
 	if err != nil {
 		return err
@@ -224,16 +251,6 @@ expires_at=?, allowed_models=?, notes=?, updated_at=? WHERE id=? AND deleted_at 
 		return ErrNotFound
 	}
 	return nil
-}
-
-// ResetTokenUsage sets a token's quota usage back to zero. The cleared
-// amount is kept in reset_ticks, so the token's total spend still adds up.
-func (db *DB) ResetTokenUsage(ctx context.Context, id int64) error {
-	defer db.toks.clear()
-	now := NowMs()
-	_, err := db.W.ExecContext(ctx, `UPDATE tokens SET reset_ticks = reset_ticks + used_ticks, used_ticks = 0,
-used_reset_at = ?, updated_at = ? WHERE id = ? AND deleted_at = 0`, now, now, id)
-	return err
 }
 
 // DeleteToken soft-deletes a token: it stops authenticating at once (the
@@ -411,21 +428,36 @@ func (db *DB) PurgeExpiredSessions(ctx context.Context) error {
 	return err
 }
 
-// ErrQuotaInvalid is returned when an adjustment would leave a token
-// without a positive quota (0 means unlimited; use unlimited for that).
-var ErrQuotaInvalid = errors.New("invalid quota adjustment")
+// Quota adjustment actions.
+const (
+	QuotaIncrease     = "increase"
+	QuotaDecrease     = "decrease"
+	QuotaSetLimited   = "set_limited"   // amount = balance left to spend: quota = used + amount
+	QuotaSetUnlimited = "set_unlimited" // the stored quota is kept (and ignored while unlimited)
+)
+
+// ErrQuotaInvalid is an adjustment the rules forbid; the text says why.
+type ErrQuotaInvalid struct{ Reason string }
+
+func (e ErrQuotaInvalid) Error() string { return e.Reason }
 
 // QuotaChange is the result of AdjustTokenQuota.
 type QuotaChange struct {
-	Before, After int64 // ticks; 0 = unlimited
+	BeforeTicks, AfterTicks         int64
+	BeforeUnlimited, AfterUnlimited bool
+	UsedTicks                       int64
 }
 
-// AdjustTokenQuota changes a token's quota by delta ticks, or makes it
-// unlimited, and appends the operation event e in the same transaction, so
-// a quota never changes without a record. An unlimited token given a
-// positive delta becomes limited to that amount. The quota can never be set
-// directly and never goes to zero or below through an adjustment.
-func (db *DB) AdjustTokenQuota(ctx context.Context, id, delta int64, unlimited bool, e *Event) (QuotaChange, error) {
+// AdjustTokenQuota applies one quota adjustment and appends its event e in
+// the same transaction, so a quota never changes without a record. The
+// quota is never written directly; the amounts of a token's quota records
+// always add up to its stored quota.
+//
+// used reports the token's spend at this moment (the caller passes the
+// quota ledger's value while holding the ledger's lock, so billing and the
+// adjustment cannot interleave); the database value wins when larger. A
+// decrease may not take the quota below what has been used.
+func (db *DB) AdjustTokenQuota(ctx context.Context, id int64, action string, amount int64, used func(dbUsed int64) int64, e *Event) (QuotaChange, error) {
 	defer db.toks.clear()
 	var qc QuotaChange
 	tx, err := db.W.BeginTx(ctx, nil)
@@ -433,35 +465,61 @@ func (db *DB) AdjustTokenQuota(ctx context.Context, id, delta int64, unlimited b
 		return qc, err
 	}
 	defer tx.Rollback() //nolint:errcheck
-	var name string
-	err = tx.QueryRowContext(ctx, `SELECT quota_ticks, name FROM tokens WHERE id = ? AND deleted_at = 0`, id).Scan(&qc.Before, &name)
+	var name, prefix string
+	var unl int
+	err = tx.QueryRowContext(ctx, `SELECT quota_ticks, unlimited, used_ticks, name, prefix FROM tokens
+WHERE id = ? AND deleted_at = 0`, id).Scan(&qc.BeforeTicks, &unl, &qc.UsedTicks, &name, &prefix)
 	if errors.Is(err, sql.ErrNoRows) {
 		return qc, ErrNotFound
 	}
 	if err != nil {
 		return qc, err
 	}
-	switch {
-	case unlimited:
-		qc.After = 0
-	case delta == 0:
-		return qc, ErrQuotaInvalid
-	case qc.Before == 0 && delta < 0:
-		return qc, ErrQuotaInvalid
-	default:
-		qc.After = qc.Before + delta
-		if qc.After <= 0 {
-			return qc, ErrQuotaInvalid
-		}
+	qc.BeforeUnlimited = unl == 1
+	if used != nil {
+		qc.UsedTicks = max(qc.UsedTicks, used(qc.UsedTicks))
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE tokens SET quota_ticks = ?, updated_at = ? WHERE id = ?`, qc.After, NowMs(), id); err != nil {
+	qc.AfterTicks, qc.AfterUnlimited = qc.BeforeTicks, qc.BeforeUnlimited
+	switch action {
+	case QuotaIncrease, QuotaDecrease:
+		if qc.BeforeUnlimited {
+			return qc, ErrQuotaInvalid{"the token is unlimited; switch it to limited first"}
+		}
+		if amount <= 0 {
+			return qc, ErrQuotaInvalid{"amount must be greater than 0"}
+		}
+		if action == QuotaIncrease {
+			qc.AfterTicks = qc.BeforeTicks + amount
+		} else if qc.AfterTicks = qc.BeforeTicks - amount; qc.AfterTicks < qc.UsedTicks {
+			return qc, ErrQuotaInvalid{"the quota cannot go below what has been used"}
+		}
+	case QuotaSetLimited:
+		if !qc.BeforeUnlimited {
+			return qc, ErrQuotaInvalid{"the token is already limited"}
+		}
+		if amount < 0 {
+			return qc, ErrQuotaInvalid{"the balance to allow must be 0 or more"}
+		}
+		qc.AfterTicks, qc.AfterUnlimited = qc.UsedTicks+amount, false
+	case QuotaSetUnlimited:
+		if qc.BeforeUnlimited {
+			return qc, ErrQuotaInvalid{"the token is already unlimited"}
+		}
+		qc.AfterUnlimited = true
+	default:
+		return qc, ErrQuotaInvalid{"action must be increase, decrease, set_limited or set_unlimited"}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE tokens SET quota_ticks = ?, unlimited = ?, updated_at = ? WHERE id = ?`,
+		qc.AfterTicks, boolInt(qc.AfterUnlimited), NowMs(), id); err != nil {
 		return qc, err
 	}
-	e.TargetType, e.TargetID, e.TargetName = "token", strconv.FormatInt(id, 10), name
+	e.TargetType, e.TargetID, e.TargetName, e.TargetHint = "token", strconv.FormatInt(id, 10), name, prefix
 	if e.Detail == nil {
 		e.Detail = map[string]any{}
 	}
-	e.Detail["before_ticks"], e.Detail["after_ticks"], e.Detail["delta_ticks"] = qc.Before, qc.After, qc.After-qc.Before
+	d := e.Detail
+	d["amount_ticks"], d["before_ticks"], d["after_ticks"] = qc.AfterTicks-qc.BeforeTicks, qc.BeforeTicks, qc.AfterTicks
+	d["used_ticks"], d["before_unlimited"], d["unlimited"] = qc.UsedTicks, qc.BeforeUnlimited, qc.AfterUnlimited
 	if err := insertEvent(ctx, tx, e); err != nil {
 		return qc, err
 	}

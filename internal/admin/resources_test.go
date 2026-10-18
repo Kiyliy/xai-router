@@ -248,7 +248,7 @@ func TestTokensCRUD(t *testing.T) {
 		t.Fatalf("patched: %v", got)
 	}
 	// Usage is never reset, and the quota is only adjusted (with a record).
-	for body, code := range map[string]string{`{"reset_usage":true}`: "reset_removed", `{"quota_usd":9}`: "quota_not_editable"} {
+	for body, code := range map[string]string{`{"reset_usage":true}`: "quota_is_adjustment_only", `{"quota_usd":9}`: "quota_is_adjustment_only"} {
 		if r := h.call(http.MethodPatch, "/api/v1/tokens/"+itoa(id), body); r.status != 400 || r.code(t) != code {
 			t.Fatalf("%s: %d %s", body, r.status, r.body)
 		}

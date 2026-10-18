@@ -31,7 +31,8 @@ func logSummaryJSON(l *store.Log) map[string]any {
 		"prompt_tokens": l.PromptTokens, "completion_tokens": l.CompletionTokens, "cached_tokens": l.CachedTokens,
 		"reasoning_tokens": l.ReasoningTokens, "image_tokens": l.ImageTokens, "total_tokens": l.TotalTokens,
 		"images": l.Images, "video_seconds": l.VideoSeconds, "cost_usd": usd(l.CostTicks), "cost_source": l.CostSource,
-		"websocket": l.WS,
+		"websocket": l.WS, "type": "request", "level": requestLevel(l.Status),
+		"cache_write_tokens": l.CacheWriteTokens, // null: the upstream did not report it
 	}
 }
 
@@ -41,11 +42,45 @@ func headersMap(s string) map[string]string {
 	return m
 }
 
+// requestLevel is a request's level for the unified log: 2xx/3xx/101 are
+// info, 4xx (including the gateway's own refusals) and 499 are warnings,
+// 5xx and failures without a status are errors.
+func requestLevel(status int) string {
+	switch {
+	case status == 101 || status >= 200 && status < 400:
+		return store.LevelInfo
+	case status >= 400 && status < 500:
+		return store.LevelWarn
+	default:
+		return store.LevelError
+	}
+}
+
+// listLogs serves the unified log: requests (request_logs) and audit and
+// system events (events), selected with type=request,audit,system.
+//
+// type=request alone (the default, as before v0.4.1) pages by number.
+// Any other selection merges the sources newest first and pages with a
+// cursor (next_cursor), which stays cheap however deep the page.
 func (s *Server) listLogs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	p := paging(r)
+	types := map[string]bool{}
+	for _, t := range strings.Split(q.Get("type"), ",") {
+		switch t = strings.TrimSpace(t); t {
+		case "":
+		case "request", store.EventAudit, store.EventSystem:
+			types[t] = true
+		default:
+			writeErr(w, http.StatusBadRequest, "invalid_type", "type must be a list of request, audit and system")
+			return
+		}
+	}
+	if len(types) == 0 {
+		types["request"] = true
+	}
 	f := store.LogFilter{Model: q.Get("model"), Status: q.Get("status"), Path: q.Get("path"), Q: strings.TrimSpace(q.Get("q")),
-		Limit: p.size, Offset: p.offset()}
+		Problems: q.Get("problems") == "1" || q.Get("problems") == "true", Limit: p.size, Offset: p.offset()}
 	var err error
 	if f.From, err = parseTimeParam(q.Get("from")); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_time", err.Error())
@@ -57,6 +92,145 @@ func (s *Server) listLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	f.KeyID, _ = strconv.ParseInt(q.Get("key_id"), 10, 64)
 	f.TokenID, _ = strconv.ParseInt(q.Get("token_id"), 10, 64)
+	if len(types) == 1 && types["request"] {
+		s.listRequests(w, r, f, p)
+		return
+	}
+
+	// Filters that only apply to one source exclude the other; key and
+	// token filters apply to both (a key's requests and its events).
+	ef := store.EventFilter{ProblemsOnly: f.Problems, Action: q.Get("action"), TargetType: q.Get("target_type"),
+		TargetID: q.Get("target_id"), Actor: q.Get("actor"), From: f.From, To: f.To, Q: f.Q, Limit: p.size}
+	// Event-only filters (action, object, actor) leave requests out.
+	wantRequests := types["request"] && ef.Action == "" && ef.TargetType == "" && ef.TargetID == "" && ef.Actor == ""
+	for _, k := range []string{store.EventAudit, store.EventSystem} {
+		if types[k] {
+			ef.Kinds = append(ef.Kinds, k)
+		}
+	}
+	switch {
+	case f.KeyID != 0 && f.TokenID != 0:
+		ef.Kinds = nil // an event concerns one object
+	case f.KeyID != 0:
+		ef.TargetType, ef.TargetID = "key", strconv.FormatInt(f.KeyID, 10)
+	case f.TokenID != 0:
+		ef.TargetType, ef.TargetID = "token", strconv.FormatInt(f.TokenID, 10)
+	}
+	if f.Model != "" || f.Status != "" || f.Path != "" { // request-only filters leave events out
+		ef.Kinds = nil
+	}
+	wantEvents := len(ef.Kinds) > 0
+
+	// Cursor: "<created_at ms>.<0 request | 1 event>.<id>" of the last row
+	// shown. Order: created_at DESC, events before requests at the same
+	// millisecond, id DESC.
+	var curAt, curKind, curID int64
+	if c := q.Get("cursor"); c != "" {
+		parts := strings.Split(c, ".")
+		if len(parts) != 3 {
+			writeErr(w, http.StatusBadRequest, "invalid_cursor", "invalid cursor")
+			return
+		}
+		curAt, _ = strconv.ParseInt(parts[0], 10, 64)
+		curKind, _ = strconv.ParseInt(parts[1], 10, 64)
+		curID, _ = strconv.ParseInt(parts[2], 10, 64)
+		if curAt <= 0 {
+			writeErr(w, http.StatusBadRequest, "invalid_cursor", "invalid cursor")
+			return
+		}
+	}
+	limit := p.size
+	var reqs []*store.Log
+	var evs []*store.Event
+	var total int64
+	totalKind := "exact"
+	if wantRequests {
+		rf := f
+		rf.Limit, rf.Offset = limit+1, 0
+		if curAt > 0 {
+			rf.NoCount = true
+			rf.BeforeAt, rf.BeforeID = curAt, curID
+			if curKind == 1 { // the cursor is an event: requests at that millisecond are all still to come
+				rf.BeforeAt, rf.BeforeID = curAt+1, 0
+			}
+		}
+		pg, err := s.DB.ListLogsPage(r.Context(), rf)
+		if err != nil {
+			s.internalErr(w, err)
+			return
+		}
+		reqs = pg.Logs
+		total += pg.Total
+		if pg.TotalKind != "" && pg.TotalKind != "exact" {
+			totalKind = pg.TotalKind
+		}
+	}
+	if wantEvents {
+		ef2 := ef
+		ef2.Limit = limit + 1
+		if curAt > 0 {
+			ef2.BeforeAt, ef2.BeforeID = curAt, curID
+			if curKind == 0 { // the cursor is a request: events at that millisecond were shown first
+				ef2.BeforeAt, ef2.BeforeID = curAt, 0
+			}
+		} else {
+			n, err := s.DB.CountEvents(r.Context(), ef)
+			if err != nil {
+				s.internalErr(w, err)
+				return
+			}
+			total += n
+		}
+		evs, err = s.DB.ListEvents(r.Context(), ef2)
+		if err != nil {
+			s.internalErr(w, err)
+			return
+		}
+	}
+
+	// Merge newest first.
+	labels := s.hints(r.Context(), "token")
+	out := make([]map[string]any, 0, limit)
+	var next string
+	i, j := 0, 0
+	for len(out) < limit && (i < len(reqs) || j < len(evs)) {
+		takeEvent := j < len(evs) && (i >= len(reqs) || evs[j].CreatedAt >= reqs[i].CreatedAt)
+		if takeEvent {
+			e := evs[j]
+			j++
+			out = append(out, eventJSON(e))
+			next = strconv.FormatInt(e.CreatedAt, 10) + ".1." + strconv.FormatInt(e.ID, 10)
+		} else {
+			l := reqs[i]
+			i++
+			row := logSummaryJSON(l)
+			row["token_prefix"] = firstNonEmpty(l.TokenPrefix, labels[strconv.FormatInt(l.TokenID, 10)])
+			out = append(out, row)
+			next = strconv.FormatInt(l.CreatedAt, 10) + ".0." + strconv.FormatInt(l.ID, 10)
+		}
+	}
+	if i >= len(reqs) && j >= len(evs) {
+		next = "" // nothing after this page
+	}
+	resp := map[string]any{"data": out, "page_size": limit, "next_cursor": next, "types": typesList(types)}
+	if curAt == 0 {
+		resp["total"], resp["total_kind"], resp["total_exact"] = total, totalKind, totalKind == "exact"
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func typesList(t map[string]bool) []string {
+	var out []string
+	for _, k := range []string{"request", store.EventAudit, store.EventSystem} {
+		if t[k] {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// listRequests is the request-only view (paged by number).
+func (s *Server) listRequests(w http.ResponseWriter, r *http.Request, f store.LogFilter, p page) {
 	pg, err := s.DB.ListLogsPage(r.Context(), f)
 	if err != nil {
 		s.internalErr(w, err)
@@ -107,6 +281,13 @@ func (s *Server) getLog(w http.ResponseWriter, r *http.Request) {
 	out["response_text"] = l.RespText
 	out["reasoning_text"] = l.ReasoningText
 	out["truncated"] = l.Truncated
+	// Unit prices the request was billed at (absent before v0.4.1).
+	var snap map[string]any
+	if l.PriceSnapshot != "" && json.Unmarshal([]byte(l.PriceSnapshot), &snap) == nil {
+		out["price_snapshot"] = snap
+	} else {
+		out["price_snapshot"] = nil
+	}
 	out["upstream_attempts"] = attempts
 	if l.WS && l.Extra != "" {
 		var ws map[string]any

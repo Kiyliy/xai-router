@@ -685,6 +685,8 @@ func (st *state) applyUsage(u billing.Usage) {
 	l.ReasoningTokens, l.ImageTokens, l.TotalTokens = u.ReasoningTokens, u.ImageTokens, u.TotalTokens
 	l.Images, l.VideoSeconds = u.Images, u.VideoSeconds
 	l.CostTicks, l.CostSource = st.h.Prices.Cost(l.Model, u, st.pricingRequest())
+	l.CacheWriteTokens = u.CacheWriteTokens
+	l.PriceSnapshot = st.h.Prices.PriceSnapshot(l.Model, u, st.pricingRequest())
 }
 
 // pricingRequest returns the parameters media prices depend on: those of an
@@ -865,7 +867,7 @@ func (h *Handler) authenticate(r *http.Request) (*store.Token, error) {
 	if tok.ExpiresAt > 0 && time.Now().UnixMilli() >= tok.ExpiresAt {
 		return nil, errf(http.StatusForbidden, "token_expired", "this API key has expired")
 	}
-	if tok.QuotaTicks > 0 && tok.UsedTicks >= tok.QuotaTicks {
+	if tok.Limited && tok.UsedTicks >= tok.QuotaTicks {
 		return nil, errf(http.StatusTooManyRequests, "insufficient_quota",
 			"this API key has used its quota of $%.2f", billing.TicksToUSD(tok.QuotaTicks))
 	}

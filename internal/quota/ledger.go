@@ -24,6 +24,15 @@ type Ledger struct {
 	used     map[int64]int64 // known spend per token (loaded from DB, then kept current)
 	inflight map[int64]int64 // reserved by running requests and pending async jobs
 	holds    map[string]hold // async job id -> reservation kept until the job is billed
+	// quotas holds the quota set by an adjustment made while this process
+	// runs. It wins over the (possibly cached) token passed to Reserve, so a
+	// request admitted after an adjustment is judged by the new quota.
+	quotas map[int64]quotaState
+}
+
+type quotaState struct {
+	ticks     int64
+	unlimited bool
 }
 
 type hold struct {
@@ -34,7 +43,7 @@ type hold struct {
 
 // New returns an empty ledger.
 func New() *Ledger {
-	return &Ledger{used: map[int64]int64{}, inflight: map[int64]int64{}, holds: map[string]hold{}}
+	return &Ledger{used: map[int64]int64{}, inflight: map[int64]int64{}, holds: map[string]hold{}, quotas: map[int64]quotaState{}}
 }
 
 // Reservation is an admitted request's claim on a token's quota.
@@ -61,9 +70,9 @@ func (l *Ledger) Reserve(t *store.Token, amount int64) *Reservation {
 		used = t.UsedTicks
 		l.used[t.ID] = used
 	}
-	if t.QuotaTicks > 0 {
+	if quota, limited := l.quotaOf(t); limited {
 		committed := used + l.inflight[t.ID]
-		if committed >= t.QuotaTicks || committed+amount > t.QuotaTicks {
+		if committed >= quota || committed+amount > quota {
 			return nil
 		}
 	}
@@ -142,16 +151,17 @@ func (l *Ledger) ExpireHolds(now time.Time) {
 // Remaining returns how much a token can still spend now (quota minus known
 // spend and reservations); -1 means unlimited.
 func (l *Ledger) Remaining(t *store.Token) int64 {
-	if t.QuotaTicks <= 0 {
-		return -1
-	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	quota, limited := l.quotaOf(t)
+	if !limited {
+		return -1
+	}
 	used, ok := l.used[t.ID]
 	if !ok || t.UsedTicks > used {
 		used = t.UsedTicks
 	}
-	return max(t.QuotaTicks-used-l.inflight[t.ID], 0)
+	return max(quota-used-l.inflight[t.ID], 0)
 }
 
 // Charge adds spend that happens during a long-lived session (WebSocket)
@@ -164,7 +174,8 @@ func (l *Ledger) Charge(t *store.Token, ticks int64) bool {
 		l.used[t.ID] = t.UsedTicks
 	}
 	l.used[t.ID] += ticks
-	return t.QuotaTicks <= 0 || l.used[t.ID]+l.inflight[t.ID] < t.QuotaTicks
+	quota, limited := l.quotaOf(t)
+	return !limited || l.used[t.ID]+l.inflight[t.ID] < quota
 }
 
 // Invalidate forgets the cached spend of a token so the next request reloads
@@ -175,9 +186,33 @@ func (l *Ledger) Invalidate(tokenID int64) {
 	delete(l.used, tokenID)
 }
 
-// Reset sets a token's known spend to zero (admin "reset usage").
-func (l *Ledger) Reset(tokenID int64) {
+// quotaOf returns the quota that applies to t (an adjustment made in this
+// process wins over the token passed in). Callers hold l.mu.
+func (l *Ledger) quotaOf(t *store.Token) (int64, bool) {
+	if q, ok := l.quotas[t.ID]; ok {
+		return q.ticks, !q.unlimited
+	}
+	return t.QuotaTicks, t.Limited
+}
+
+// Adjust runs a quota adjustment for a token while holding the ledger's
+// lock, so no request is admitted or billed in between. change receives the
+// token's known spend (database value as fallback) and returns the new
+// quota; on success the ledger applies it to every later reservation.
+func (l *Ledger) Adjust(tokenID int64, change func(used func(dbUsed int64) int64) (ticks int64, unlimited bool, err error)) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.used[tokenID] = 0
+	used := func(dbUsed int64) int64 {
+		u, ok := l.used[tokenID]
+		if !ok || dbUsed > u {
+			u = dbUsed
+		}
+		return u
+	}
+	ticks, unlimited, err := change(used)
+	if err != nil {
+		return err
+	}
+	l.quotas[tokenID] = quotaState{ticks: ticks, unlimited: unlimited}
+	return nil
 }

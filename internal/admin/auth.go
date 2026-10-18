@@ -47,7 +47,17 @@ func ResetPassword(ctx context.Context, db *store.DB, pw string) error {
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	ip := netutil.ClientIP(r, s.Settings.Get().TrustedProxies)
+	loginEvent := func(action, level, reason string) {
+		e := &store.Event{Kind: store.EventAudit, Level: level, Action: action, Actor: "anonymous", IP: ip}
+		if reason != "" {
+			e.Detail = map[string]any{"reason": reason} // never what was typed
+		} else {
+			e.Actor, e.ActorName = "password", "admin"
+		}
+		s.recordEvent(r.Context(), e)
+	}
 	if s.limiter.blocked(ip) {
+		loginEvent("auth.login_failed", store.LevelWarn, "locked out after too many failed attempts")
 		writeErr(w, http.StatusTooManyRequests, "too_many_attempts", "too many failed logins; try again in a few minutes")
 		return
 	}
@@ -65,10 +75,11 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if in.Password == "" || !s.checkPassword(r.Context(), in.Password, hash) {
 		s.limiter.fail(ip)
 		s.Log.Warn("failed admin login", "ip", ip)
-		if s.limiter.blocked(ip) { // recorded once per lockout, not per attempt
-			_ = s.DB.AddEvent(r.Context(), &store.Event{Kind: store.EventSystem, Action: "auth.login_blocked", Actor: "system",
-				ActorName: "system", IP: ip, Detail: map[string]any{"reason": "too many failed password attempts"}})
+		reason := "wrong password"
+		if in.Password == "" {
+			reason = "empty password"
 		}
+		loginEvent("auth.login_failed", store.LevelWarn, reason)
 		writeErr(w, http.StatusUnauthorized, "invalid_password", "wrong password")
 		return
 	}
@@ -80,10 +91,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Log.Info("admin login", "ip", ip)
-	if err := s.DB.AddEvent(r.Context(), &store.Event{Kind: store.EventOperation, Action: "auth.login", Actor: "password",
-		ActorName: "admin", IP: ip}); err != nil {
-		s.Log.Error("record login", "err", err)
-	}
+	loginEvent("auth.login", store.LevelInfo, "")
 	writeJSON(w, http.StatusOK, map[string]any{"token": tok, "expires_at": exp.UTC()})
 }
 

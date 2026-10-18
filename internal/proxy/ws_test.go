@@ -498,7 +498,7 @@ func TestCloseWebSockets(t *testing.T) {
 
 func TestWSSessionChargeQuota(t *testing.T) {
 	hs := newHarness(t, nil)
-	tok := &store.Token{ID: 99, QuotaTicks: billing.RealtimeTicksPerMinute / 2}
+	tok := &store.Token{ID: 99, QuotaTicks: billing.RealtimeTicksPerMinute / 2, Limited: true}
 	st := &state{h: hs.h, s: hs.set.Get(), token: tok, log: &store.Log{Path: "/v1/realtime"}}
 	ss := newWSSession(st, &wsStats{}, 10)
 	if !ss.charge(10 * time.Second) {

@@ -405,3 +405,6 @@ func (s *Server) reloadPool(r *http.Request) {
 		s.Log.Error("reload pool", "err", err)
 	}
 }
+
+// maskKey masks an upstream key for display and events.
+func maskKey(k string) string { return reqlog.MaskSecret(k) }

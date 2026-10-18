@@ -40,6 +40,8 @@ type Log struct {
 	TokenID          int64 // 0 = none
 	TokenName        string
 	TokenPrefix      string // the token value's prefix when the request was made
+	CacheWriteTokens *int64 // nil: the upstream did not report it
+	PriceSnapshot    string // JSON: the prices the request was billed at
 	KeyID            int64  // 0 = none
 	KeyName          string
 	TTFBMs           int64
@@ -103,7 +105,8 @@ func (db *DB) InsertLogs(ctx context.Context, logs []*Log) error {
 	insLog, err := tx.PrepareContext(ctx, `INSERT INTO request_logs (request_id, created_at, method, path, query, model,
 stream, status, error, client_ip, user_agent, token_id, token_name, key_id, key_name, attempts, ttfb_ms, latency_ms,
 prompt_tokens, completion_tokens, cached_tokens, reasoning_tokens, image_tokens, total_tokens, images, video_seconds,
-cost_ticks, cost_source, upstream_id, truncated, ws, extra, token_prefix) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+cost_ticks, cost_source, upstream_id, truncated, ws, extra, token_prefix, cache_write_tokens, price_snapshot)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
@@ -156,7 +159,7 @@ cost_ticks = cost_ticks + excluded.cost_ticks, latency_ms_sum = latency_ms_sum +
 			l.Status, l.Error, l.ClientIP, l.UserAgent, nullID(l.TokenID), l.TokenName, nullID(l.KeyID), l.KeyName,
 			len(l.Attempts), l.TTFBMs, l.LatencyMs, l.PromptTokens, l.CompletionTokens, l.CachedTokens, l.ReasoningTokens,
 			l.ImageTokens, l.TotalTokens, l.Images, l.VideoSeconds, l.CostTicks, l.CostSource, l.UpstreamID,
-			boolInt(l.Truncated), boolInt(l.WS), l.Extra, l.TokenPrefix)
+			boolInt(l.Truncated), boolInt(l.WS), l.Extra, l.TokenPrefix, l.CacheWriteTokens, l.PriceSnapshot)
 		if err != nil {
 			return err
 		}
@@ -227,9 +230,14 @@ type LogFilter struct {
 	TokenID  int64
 	Path     string
 	Q        string
-	Limit    int
-	Offset   int
-	qIsID    bool // set by ListLogsPage: search Q as a request/upstream id
+	Problems bool // only warnings and errors (status not 2xx/3xx/101)
+	// BeforeAt/BeforeID restrict to logs strictly older than this position
+	// in (created_at DESC, id DESC) order: cursor paging (with Offset 0).
+	BeforeAt, BeforeID int64
+	NoCount            bool // skip the total (later cursor pages)
+	Limit              int
+	Offset             int
+	qIsID              bool // set by ListLogsPage: search Q as a request/upstream id
 }
 
 func (f LogFilter) where() (string, []any) {
@@ -240,6 +248,12 @@ func (f LogFilter) where() (string, []any) {
 	}
 	if f.To > 0 {
 		w, a = append(w, "created_at <= ?"), append(a, f.To)
+	}
+	if f.BeforeAt > 0 {
+		w, a = append(w, "(created_at < ? OR (created_at = ? AND id < ?))"), append(a, f.BeforeAt, f.BeforeAt, f.BeforeID)
+	}
+	if f.Problems && f.Status == "" {
+		w = append(w, successSQL+" = 0")
 	}
 	if f.Model != "" {
 		w, a = append(w, "model = ?"), append(a, f.Model)
@@ -293,15 +307,16 @@ func escapeLike(s string) string {
 const logCols = `id, request_id, created_at, method, path, query, model, stream, status, error, client_ip, user_agent,
 COALESCE(token_id,0), token_name, COALESCE(key_id,0), key_name, attempts, ttfb_ms, latency_ms, prompt_tokens,
 completion_tokens, cached_tokens, reasoning_tokens, image_tokens, total_tokens, images, video_seconds, cost_ticks,
-cost_source, upstream_id, truncated, ws, extra, token_prefix`
+cost_source, upstream_id, truncated, ws, extra, token_prefix, cache_write_tokens, price_snapshot`
 
 func scanLog(s interface{ Scan(...any) error }) (*Log, error) {
 	var l Log
 	var stream, trunc, ws int
+	var cw sql.NullInt64
 	err := s.Scan(&l.ID, &l.RequestID, &l.CreatedAt, &l.Method, &l.Path, &l.Query, &l.Model, &stream, &l.Status,
 		&l.Error, &l.ClientIP, &l.UserAgent, &l.TokenID, &l.TokenName, &l.KeyID, &l.KeyName, &l.AttemptCount, &l.TTFBMs,
 		&l.LatencyMs, &l.PromptTokens, &l.CompletionTokens, &l.CachedTokens, &l.ReasoningTokens, &l.ImageTokens,
-		&l.TotalTokens, &l.Images, &l.VideoSeconds, &l.CostTicks, &l.CostSource, &l.UpstreamID, &trunc, &ws, &l.Extra, &l.TokenPrefix)
+		&l.TotalTokens, &l.Images, &l.VideoSeconds, &l.CostTicks, &l.CostSource, &l.UpstreamID, &trunc, &ws, &l.Extra, &l.TokenPrefix, &cw, &l.PriceSnapshot)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -309,6 +324,9 @@ func scanLog(s interface{ Scan(...any) error }) (*Log, error) {
 		return nil, err
 	}
 	l.Stream, l.Truncated, l.WS = stream == 1, trunc == 1, ws == 1
+	if cw.Valid {
+		l.CacheWriteTokens = &cw.Int64
+	}
 	return &l, nil
 }
 
@@ -398,7 +416,14 @@ func (db *DB) listLogsPage(ctx context.Context, f LogFilter) (*LogPage, error) {
 	// add rows, so the total never exceeds what the page shows.
 	p := &LogPage{}
 	counted := false
-	if est, ok := db.estimateCount(ctx, f); ok && est > largeResult {
+	// A time range alone (the purge preview) is counted on the created_at
+	// index: rollup estimates can overcount when log ids are not in time
+	// order or hours were partly purged before.
+	timeOnly := f.Model == "" && f.KeyID == 0 && f.TokenID == 0 && f.Path == "" && f.Q == "" && f.Status == "" &&
+		!f.Problems && (f.From > 0 || f.To > 0)
+	if f.NoCount {
+		counted = true
+	} else if est, ok := db.estimateCount(ctx, f); ok && est > largeResult && !timeOnly {
 		// A large result is reported from the rollups straight away;
 		// counting it exactly would take longer than the page itself.
 		p.Total, p.TotalKind, counted = est, "approx", true
@@ -409,6 +434,9 @@ func (db *DB) listLogsPage(ctx context.Context, f LogFilter) (*LogPage, error) {
 		// total nobody needs exactly. Reaching the cap reports a lower
 		// bound that still lets the pager move on.
 		limit := int64(max(countCap, f.Offset+20*f.Limit)) + 1
+		if timeOnly {
+			limit = 1 << 62
+		}
 		cctx, cancel := context.WithTimeout(ctx, CountBudget)
 		var total int64
 		err := db.R.QueryRowContext(cctx, `SELECT COUNT(*) FROM (SELECT 1`+from+w+` LIMIT ?)`,
@@ -456,7 +484,7 @@ func (db *DB) listLogsPage(ctx context.Context, f LogFilter) (*LogPage, error) {
 // rollups. It works for a time range combined with at most one of model,
 // key or token and an optional success/error filter.
 func (db *DB) estimateCount(ctx context.Context, f LogFilter) (int64, bool) {
-	if f.Path != "" || f.Q != "" {
+	if f.Path != "" || f.Q != "" || f.Problems || f.BeforeAt > 0 {
 		return 0, false
 	}
 	dim, id := "all", ""
@@ -587,15 +615,12 @@ func (db *DB) DeleteLogsBefore(ctx context.Context, t int64) (int64, error) {
 	return db.DeleteLogsBeforeProgress(ctx, t, nil)
 }
 
-// CountLogsBefore estimates how many logs are older than t (id range).
+// CountLogsBefore counts the logs created before t (the created_at index;
+// log ids are not always in time order, so an id range is not used).
 func (db *DB) CountLogsBefore(ctx context.Context, t int64) int64 {
-	var lo, hi sql.NullInt64
-	_ = db.R.QueryRowContext(ctx, `SELECT MIN(id) FROM request_logs`).Scan(&lo)
-	_ = db.R.QueryRowContext(ctx, `SELECT id FROM request_logs WHERE created_at < ? ORDER BY created_at DESC LIMIT 1`, t).Scan(&hi)
-	if !hi.Valid {
-		return 0
-	}
-	return hi.Int64 - lo.Int64 + 1
+	var n int64
+	_ = db.R.QueryRowContext(ctx, `SELECT COUNT(*) FROM request_logs WHERE created_at < ?`, t).Scan(&n)
+	return n
 }
 
 // Purges and space reclaim run in small steps that hold SQLite's single

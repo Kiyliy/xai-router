@@ -117,6 +117,7 @@ func (s *Server) Handler() http.Handler {
 	priv("DELETE /api/v1/tokens/{id}", s.deleteToken)
 	priv("POST /api/v1/tokens/{id}/regenerate", s.regenerateToken)
 	priv("POST /api/v1/tokens/{id}/quota", s.adjustQuota)
+	priv("GET /api/v1/tokens/{id}/quota-history", s.quotaHistory)
 
 	priv("GET /api/v1/admin-tokens", s.listAdminTokens)
 	priv("POST /api/v1/admin-tokens", s.createAdminToken)
@@ -143,7 +144,7 @@ func (s *Server) Handler() http.Handler {
 	priv("POST /api/v1/system/compact", s.compact)
 	priv("GET /api/v1/jobs", s.listJobs)
 	priv("GET /api/v1/jobs/{id}", s.getJob)
-	priv("GET /api/v1/events", s.listEvents)
+	priv("GET /api/v1/events/{id}", s.getEvent)
 
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", "no such endpoint: "+r.Method+" "+r.URL.Path)

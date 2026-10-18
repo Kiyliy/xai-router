@@ -593,7 +593,7 @@ func (ss *wsSession) charge(elapsed time.Duration) bool {
 	ss.charged = total
 	ss.mu.Unlock()
 	if delta <= 0 {
-		return ss.st.token.QuotaTicks <= 0 || ss.st.h.Quota.Remaining(ss.st.token) > 0
+		return !ss.st.token.Limited || ss.st.h.Quota.Remaining(ss.st.token) > 0
 	}
 	return ss.st.h.Quota.Charge(ss.st.token, delta)
 }

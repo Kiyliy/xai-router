@@ -386,30 +386,67 @@ ALTER TABLE models RENAME COLUMN image_input_ticks TO image_token_ticks;
 ALTER TABLE request_logs ADD COLUMN token_prefix TEXT NOT NULL DEFAULT '';
 DROP TABLE stats_hourly;
 `,
-	// v9 (v0.4.1): the event log: what administrators did (operation) and
-	// what the gateway decided on its own (system). Kept forever and
-	// append-only: the triggers refuse any UPDATE or DELETE.
+	// v9 (v0.4.1): the event log, behind the console's unified "Logs" page
+	// together with request_logs. audit = what administrators did, system =
+	// what the gateway decided on its own; both kept forever and append-only
+	// (the triggers refuse any UPDATE or DELETE). Client token quotas become
+	// adjustment-only: "unlimited" is its own flag (a limited quota of 0
+	// blocks), usage is never reset again, and the usage cleared by v0.4.0's
+	// resets is folded back (with a matching quota increase, so what is left
+	// does not change); every token gets a migration record so that the sum
+	// of its quota records equals its quota. Request logs gain the cache-write
+	// token count (NULL when the upstream does not report it) and the prices
+	// the request was billed at.
 	`
 CREATE TABLE events (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at  INTEGER NOT NULL,
   kind        TEXT    NOT NULL,
+  level       TEXT    NOT NULL DEFAULT 'info',
   action      TEXT    NOT NULL,
   actor       TEXT    NOT NULL DEFAULT '',
   actor_name  TEXT    NOT NULL DEFAULT '',
   target_type TEXT    NOT NULL DEFAULT '',
   target_id   TEXT    NOT NULL DEFAULT '',
   target_name TEXT    NOT NULL DEFAULT '',
+  target_hint TEXT    NOT NULL DEFAULT '',
   ip          TEXT    NOT NULL DEFAULT '',
+  request_id  TEXT    NOT NULL DEFAULT '',
   detail      TEXT    NOT NULL DEFAULT '{}'
 );
 CREATE INDEX idx_events_created ON events(created_at);
 CREATE INDEX idx_events_kind ON events(kind, created_at);
 CREATE INDEX idx_events_target ON events(target_type, target_id, created_at);
+CREATE INDEX idx_events_problems ON events(created_at) WHERE level <> 'info';
 CREATE TRIGGER events_append_only_update BEFORE UPDATE ON events
 BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
 CREATE TRIGGER events_append_only_delete BEFORE DELETE ON events
 BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
+
+INSERT INTO events (created_at, kind, level, action, actor, actor_name, target_type, target_id, target_name, target_hint, detail)
+SELECT CAST(strftime('%s','now') AS INTEGER) * 1000, 'audit', 'info', 'token.quota_migrate', 'system', 'system', 'token',
+  CAST(id AS TEXT), name, prefix,
+  json_object('amount_ticks', quota_ticks, 'before_ticks', 0, 'after_ticks', quota_ticks, 'used_ticks', used_ticks,
+    'unlimited', json(CASE WHEN quota_ticks = 0 THEN 'true' ELSE 'false' END), 'reason_code', 'pre_v0_4_1')
+FROM tokens;
+INSERT INTO events (created_at, kind, level, action, actor, actor_name, target_type, target_id, target_name, target_hint, detail)
+SELECT CAST(strftime('%s','now') AS INTEGER) * 1000, 'audit', 'info', 'token.quota_migrate', 'system', 'system', 'token',
+  CAST(id AS TEXT), name, prefix,
+  json_object('amount_ticks', CASE WHEN quota_ticks = 0 THEN 0 ELSE reset_ticks END, 'before_ticks', quota_ticks,
+    'after_ticks', CASE WHEN quota_ticks = 0 THEN 0 ELSE quota_ticks + reset_ticks END,
+    'used_ticks', used_ticks + reset_ticks, 'unlimited', json(CASE WHEN quota_ticks = 0 THEN 'true' ELSE 'false' END),
+    'reason_code', 'reset_folded', 'reset_ticks', reset_ticks, 'last_reset_at', used_reset_at)
+FROM tokens WHERE reset_ticks > 0;
+ALTER TABLE tokens ADD COLUMN unlimited INTEGER NOT NULL DEFAULT 0;
+UPDATE tokens SET unlimited = 1 WHERE quota_ticks = 0;
+UPDATE tokens SET used_ticks = used_ticks + reset_ticks,
+  quota_ticks = CASE WHEN unlimited = 1 THEN quota_ticks ELSE quota_ticks + reset_ticks END
+WHERE reset_ticks > 0;
+ALTER TABLE tokens DROP COLUMN reset_ticks;
+ALTER TABLE tokens DROP COLUMN used_reset_at;
+
+ALTER TABLE request_logs ADD COLUMN cache_write_tokens INTEGER;
+ALTER TABLE request_logs ADD COLUMN price_snapshot TEXT NOT NULL DEFAULT '';
 `,
 }
 

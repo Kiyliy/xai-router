@@ -34,6 +34,9 @@ type Usage struct {
 	VideoSeconds     float64
 	ServiceTier      string
 	Tools            Tools
+	// CacheWriteTokens is set only when the upstream reports it (Messages'
+	// cache_creation_input_tokens); xAI does not bill cache writes separately.
+	CacheWriteTokens *int64
 }
 
 // Merge copies the fields set in o into u (later events win).
@@ -65,6 +68,9 @@ func (u *Usage) Merge(o Usage) {
 	}
 	if o.Tools != (Tools{}) {
 		u.Tools = o.Tools
+	}
+	if o.CacheWriteTokens != nil {
+		u.CacheWriteTokens = o.CacheWriteTokens
 	}
 }
 
@@ -99,7 +105,8 @@ type rawUsage struct {
 	OutputTokensDetails *struct {
 		ReasoningTokens int64 `json:"reasoning_tokens"`
 	} `json:"output_tokens_details"`
-	CacheReadInputTokens *int64 `json:"cache_read_input_tokens"`
+	CacheReadInputTokens     *int64 `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens *int64 `json:"cache_creation_input_tokens"`
 	// common
 	TotalTokens int64  `json:"total_tokens"`
 	CostTicks   *int64 `json:"cost_in_usd_ticks"`
@@ -141,6 +148,10 @@ func (r *rawUsage) normalize() Usage {
 			u.ReasoningTokens = d.ReasoningTokens
 		}
 		u.CompletionTokens = max(out-u.ReasoningTokens, 0)
+	}
+	if r.CacheCreationInputTokens != nil {
+		v := *r.CacheCreationInputTokens
+		u.CacheWriteTokens = &v
 	}
 	if r.CostTicks != nil {
 		u.CostTicks, u.HasCost = *r.CostTicks, true

@@ -6,18 +6,23 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
+	"reflect"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/Kiyliy/xai-router/internal/netutil"
 	"github.com/Kiyliy/xai-router/internal/store"
 )
 
-// Every successful write through the admin API is recorded as an operation
+// Every successful write through the admin API is recorded as an audit
 // event (see store.Event): who (password session or which admin API token),
-// from where, what, on which object, with the request fields (secrets
-// redacted). Handlers can name the target or add detail through opFrom;
-// a handler that records its own event (atomically with the change, like
-// quota adjustments) marks the operation as recorded.
+// from where, what, on which object, and for updates the fields that
+// changed with their old and new values (secrets masked). Handlers can name
+// the target or add detail through opFrom; a handler that records its own
+// event (atomically with the change, like quota adjustments, or when a
+// background job finishes) marks the operation as recorded.
 
 // auditActions maps a route to an action name and the type of its {id}.
 var auditActions = map[string][2]string{
@@ -56,10 +61,13 @@ type opCtxKey struct{}
 
 // op is the operation being recorded for the current request.
 type op struct {
-	TargetName string
+	Action     string
 	TargetID   string
+	TargetName string
+	TargetHint string
+	Level      string
 	Detail     map[string]any
-	Recorded   bool // the handler wrote its own event
+	Recorded   bool // the handler wrote (or will write) its own event
 }
 
 // opFrom returns the operation of an audited request (nil otherwise).
@@ -72,7 +80,7 @@ func opFrom(r *http.Request) *op {
 func actor(c *credential) (string, string) {
 	switch {
 	case c == nil:
-		return "", ""
+		return "anonymous", ""
 	case c.Type == "admin_token":
 		return "admin_token:" + c.ID, c.Name
 	default:
@@ -84,7 +92,13 @@ func (s *Server) clientIP(r *http.Request) string {
 	return netutil.ClientIP(r, s.Settings.Get().TrustedProxies)
 }
 
-// audit wraps a write handler and records it as an operation event when it
+// newAudit starts an audit event for the request (actor, IP).
+func (s *Server) newAudit(r *http.Request, action string) *store.Event {
+	a, an := actor(credFrom(r))
+	return &store.Event{Kind: store.EventAudit, Action: action, Actor: a, ActorName: an, IP: s.clientIP(r)}
+}
+
+// audit wraps a write handler and records it as an audit event when it
 // succeeds.
 func (s *Server) audit(pattern string, next http.HandlerFunc) http.HandlerFunc {
 	act, ok := auditActions[pattern]
@@ -97,68 +111,197 @@ func (s *Server) audit(pattern string, next http.HandlerFunc) http.HandlerFunc {
 			body, _ = io.ReadAll(io.LimitReader(r.Body, 64<<20))
 			r.Body = io.NopCloser(bytes.NewReader(body))
 		}
-		o := &op{TargetID: r.PathValue("id")}
-		if o.TargetID != "" {
-			o.TargetName = s.targetName(r.Context(), act[1], o.TargetID) // before a delete removes it
+		o := &op{Action: act[0], TargetID: r.PathValue("id")}
+		var before map[string]any
+		if o.TargetID != "" || act[1] == "settings" {
+			// Resolved before the handler runs: a delete removes the object.
+			before = s.snapshot(r.Context(), act[1], o.TargetID)
+			o.TargetName, o.TargetHint = s.targetLabel(r.Context(), act[1], o.TargetID)
 		}
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next(rec, r.WithContext(context.WithValue(r.Context(), opCtxKey{}, o)))
 		if rec.status >= 400 || o.Recorded {
 			return
 		}
-		detail := redactedFields(body)
+		detail := map[string]any{}
+		if before != nil && r.Method != http.MethodDelete {
+			after := s.snapshot(r.Context(), act[1], o.TargetID)
+			if ch := diff(before, after); len(ch) > 0 {
+				detail["changes"] = ch
+				o.Action = refineAction(o.Action, ch)
+			}
+		} else if fields := redactedFields(body); len(fields) > 0 {
+			detail["request"] = fields
+		}
 		if q := r.URL.RawQuery; q != "" {
 			detail["query"] = q
 		}
 		for k, v := range o.Detail {
 			detail[k] = v
 		}
-		if o.TargetID == "" && act[1] != "" { // created: take the id and name from the response
+		if o.TargetID == "" && act[1] != "" && act[1] != "settings" { // created: id and name from the response
 			var created struct {
-				ID   json.Number `json:"id"`
-				Name string      `json:"name"`
+				ID     json.Number `json:"id"`
+				Name   string      `json:"name"`
+				Prefix string      `json:"prefix"`
+				Masked string      `json:"key_masked"`
 			}
 			if json.Unmarshal(rec.body.Bytes(), &created) == nil && created.ID != "" {
-				o.TargetID, o.TargetName = created.ID.String(), created.Name
+				o.TargetID, o.TargetName, o.TargetHint = created.ID.String(), created.Name, created.Prefix+created.Masked
 			}
 		}
-		a, an := actor(credFrom(r))
-		e := &store.Event{Kind: store.EventOperation, Action: act[0], Actor: a, ActorName: an,
-			TargetType: act[1], TargetID: o.TargetID, TargetName: o.TargetName, IP: s.clientIP(r), Detail: detail}
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5e9)
-		defer cancel()
-		if err := s.DB.AddEvent(ctx, e); err != nil {
-			s.Log.Error("record operation", "action", act[0], "err", err)
-		}
+		e := s.newAudit(r, o.Action)
+		e.Level, e.TargetType, e.TargetID, e.TargetName, e.TargetHint, e.Detail = o.Level, act[1], o.TargetID,
+			o.TargetName, o.TargetHint, detail
+		s.recordEvent(r.Context(), e)
 	}
 }
 
-// targetName resolves the display name of an object about to be changed.
-func (s *Server) targetName(ctx context.Context, typ, id string) string {
+// recordEvent appends an event, outliving the request's context.
+func (s *Server) recordEvent(ctx context.Context, e *store.Event) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := s.DB.AddEvent(ctx, e); err != nil {
+		s.Log.Error("record event", "action", e.Action, "err", err)
+	}
+}
+
+// refineAction names an update by what it did when that is clearer: an
+// update that only switches "enabled" is an enable or a disable.
+func refineAction(action string, ch map[string]any) string {
+	if !strings.HasSuffix(action, ".update") || len(ch) != 1 {
+		return action
+	}
+	c, ok := ch["enabled"].(map[string]any)
+	if !ok {
+		return action
+	}
+	base := strings.TrimSuffix(action, ".update")
+	if c["after"] == true {
+		return base + ".enable"
+	}
+	return base + ".disable"
+}
+
+// targetLabel resolves the display name and hint (masked key, token prefix)
+// of an object about to be changed.
+func (s *Server) targetLabel(ctx context.Context, typ, id string) (string, string) {
 	n, ok := parseID(id)
 	switch {
 	case typ == "model":
-		return id
+		return id, ""
 	case !ok:
-		return ""
+		return "", ""
 	case typ == "key":
-		if k, err := s.DB.GetKey(ctx, n); err == nil {
-			return k.Name
+		if l, err := s.DB.KeyLabels(ctx, maskKey); err == nil {
+			return l[n].Name, l[n].Hint
 		}
 	case typ == "token":
-		if t, err := s.DB.GetToken(ctx, n); err == nil {
-			return t.Name
+		if l, err := s.DB.TokenLabels(ctx); err == nil {
+			return l[n].Name, l[n].Hint
 		}
 	case typ == "admin_token":
 		if ts, err := s.DB.ListAdminTokens(ctx); err == nil {
 			for _, t := range ts {
 				if t.ID == n {
-					return t.Name
+					return t.Name, t.Prefix
 				}
 			}
 		}
 	}
-	return ""
+	return "", ""
+}
+
+// snapshot returns the auditable fields of an object (secrets masked), for
+// computing what an update changed.
+func (s *Server) snapshot(ctx context.Context, typ, id string) map[string]any {
+	n, ok := parseID(id)
+	var v any
+	switch {
+	case typ == "settings":
+		b, _ := json.Marshal(s.Settings.Get())
+		var m map[string]any
+		_ = json.Unmarshal(b, &m)
+		for k, val := range m {
+			if str, ok := val.(string); ok {
+				m[k] = maskURLCredentials(str)
+			}
+		}
+		return m
+	case typ == "model":
+		if m, err := s.DB.GetModel(ctx, id); err == nil {
+			v = modelJSON(m)
+		}
+	case !ok:
+		return nil
+	case typ == "key":
+		if k, err := s.DB.GetKey(ctx, n); err == nil {
+			v = map[string]any{"name": k.Name, "key": maskKey(k.Key), "base_url": maskURLCredentials(k.BaseURL),
+				"priority": k.Priority, "weight": k.Weight, "enabled": k.Enabled, "max_concurrency": k.MaxConcurrency,
+				"rpm_limit": k.RPMLimit, "notes": k.Notes}
+		}
+	case typ == "token":
+		if t, err := s.DB.GetToken(ctx, n); err == nil {
+			v = map[string]any{"name": t.Name, "prefix": t.Prefix, "enabled": t.Enabled, "expires_at": msTime(t.ExpiresAt),
+				"allowed_models": t.AllowedModels, "notes": t.Notes}
+		}
+	}
+	if v == nil {
+		return nil
+	}
+	b, _ := json.Marshal(v)
+	var m map[string]any
+	_ = json.Unmarshal(b, &m)
+	delete(m, "updated_at")
+	delete(m, "synced_at")
+	return m
+}
+
+// diff lists the fields whose value changed: {field: {before, after}}.
+func diff(before, after map[string]any) map[string]any {
+	out := map[string]any{}
+	keys := map[string]bool{}
+	for k := range before {
+		keys[k] = true
+	}
+	for k := range after {
+		keys[k] = true
+	}
+	for k := range keys {
+		if !reflect.DeepEqual(emptyAsNil(before[k]), emptyAsNil(after[k])) {
+			out[k] = map[string]any{"before": before[k], "after": after[k]}
+		}
+	}
+	return out
+}
+
+// emptyAsNil treats an empty list or object like a missing one, so a value
+// normalised from null to [] is not reported as a change.
+func emptyAsNil(v any) any {
+	switch t := v.(type) {
+	case []any:
+		if len(t) == 0 {
+			return nil
+		}
+	case map[string]any:
+		if len(t) == 0 {
+			return nil
+		}
+	}
+	return v
+}
+
+// maskURLCredentials hides a user:password in a URL.
+func maskURLCredentials(s string) string {
+	if !strings.Contains(s, "@") || !strings.Contains(s, "://") {
+		return s
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.User == nil {
+		return s
+	}
+	u.User = url.User("***")
+	return u.String()
 }
 
 // redactedFields returns the top-level fields of a JSON object body with
@@ -181,15 +324,12 @@ func redactedFields(body []byte) map[string]any {
 		out[k] = v
 	}
 	if b, _ := json.Marshal(out); len(b) > maxAuditBody {
-		return map[string]any{"body": "(too large to record)", "fields": keysOf(m)}
-	}
-	return out
-}
-
-func keysOf(m map[string]any) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		return map[string]any{"body": "(too large to record)", "fields": keys}
 	}
 	return out
 }
@@ -213,37 +353,24 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 	return r.ResponseWriter.Write(b)
 }
 
-// listEvents returns the event log (operation and system events), newest
-// first. Filters: kind, action (exact, or a prefix ending in "."),
-// target_type, target_id, from, to, q.
-func (s *Server) listEvents(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	p := paging(r)
-	f := store.EventFilter{Kind: q.Get("kind"), Action: q.Get("action"), TargetType: q.Get("target_type"),
-		TargetID: q.Get("target_id"), Q: strings.TrimSpace(q.Get("q")), Limit: p.size, Offset: p.offset()}
-	if f.Kind != "" && f.Kind != store.EventOperation && f.Kind != store.EventSystem {
-		writeErr(w, http.StatusBadRequest, "invalid_kind", "kind must be operation or system")
+// eventJSON is the API shape of an event (type audit or system).
+func eventJSON(e *store.Event) map[string]any {
+	return map[string]any{"type": e.Kind, "id": e.ID, "created_at": msTime(e.CreatedAt), "level": e.Level,
+		"action": e.Action, "actor": e.Actor, "actor_name": e.ActorName, "target_type": e.TargetType,
+		"target_id": e.TargetID, "target_name": e.TargetName, "target_hint": e.TargetHint, "ip": e.IP,
+		"request_id": e.RequestID, "detail": e.Detail}
+}
+
+// getEvent returns one event (GET /api/v1/events/{id}).
+func (s *Server) getEvent(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
 		return
 	}
-	var err error
-	if f.From, err = parseTimeParam(q.Get("from")); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid_time", err.Error())
-		return
-	}
-	if f.To, err = parseTimeParam(q.Get("to")); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid_time", err.Error())
-		return
-	}
-	evs, total, err := s.DB.ListEvents(r.Context(), f)
+	e, err := s.DB.GetEvent(r.Context(), id)
 	if err != nil {
-		s.internalErr(w, err)
+		s.storeErr(w, err, "event")
 		return
 	}
-	out := make([]map[string]any, 0, len(evs))
-	for _, e := range evs {
-		out = append(out, map[string]any{"id": e.ID, "created_at": msTime(e.CreatedAt), "kind": e.Kind, "action": e.Action,
-			"actor": e.Actor, "actor_name": e.ActorName, "target_type": e.TargetType, "target_id": e.TargetID,
-			"target_name": e.TargetName, "ip": e.IP, "detail": e.Detail})
-	}
-	writeJSON(w, http.StatusOK, pageJSON(out, int(total), p))
+	writeJSON(w, http.StatusOK, eventJSON(e))
 }

@@ -223,7 +223,7 @@ func TestAdmit(t *testing.T) {
 	hs := newHarness(t, nil)
 	open := &store.Token{}
 	limited := &store.Token{AllowedModels: []string{"grok-4.5"}}
-	quotaTok := &store.Token{QuotaTicks: 100}
+	quotaTok := &store.Token{QuotaTicks: 100, Limited: true}
 	allow := testSettings()
 	allow.UnpricedModels = "allow"
 	cases := []struct {

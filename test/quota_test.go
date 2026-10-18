@@ -110,7 +110,7 @@ func TestQuotaRaise(t *testing.T) {
 		t.Fatalf("over-quota request: %d", st)
 	}
 	e.waitUsed(tok.ID)
-	e.api("POST", fmt.Sprintf("/api/v1/tokens/%d/quota", tok.ID), map[string]any{"delta_usd": 0.05, "note": "top-up"}, 200, nil)
+	e.api("POST", fmt.Sprintf("/api/v1/tokens/%d/quota", tok.ID), map[string]any{"action": "increase", "amount_usd": 0.05, "reason": "top-up"}, 200, nil)
 	if st := e.sendChat(tok.Token, 100, 0, 1); st != 200 {
 		t.Fatalf("after raising the quota: %d", st)
 	}

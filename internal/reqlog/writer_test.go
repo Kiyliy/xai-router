@@ -241,7 +241,7 @@ func TestJanitorRunOnce(t *testing.T) {
 	if err != nil || agg.Requests != 2 || agg.CostTicks != 7 {
 		t.Fatalf("stats must survive retention: %+v %v", agg, err)
 	}
-	if evs, _, _ := db.ListEvents(ctx, store.EventFilter{Action: "logs.retention"}); len(evs) != 1 || evs[0].Detail["deleted"] != float64(1) {
+	if evs, _ := db.ListEvents(ctx, store.EventFilter{Action: "logs.retention"}); len(evs) != 1 || evs[0].Detail["deleted"] != float64(1) {
 		t.Fatalf("retention run not recorded: %+v", evs)
 	}
 

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 )
@@ -111,13 +112,8 @@ func TestUpgradeFromV031Schema(t *testing.T) {
 		t.Fatalf("stats_hourly still there: %d %v", n, err)
 	}
 
-	// Reset keeps the cleared usage; total spend still equals the logs.
-	if err := db.ResetTokenUsage(ctx, 1); err != nil {
-		t.Fatal(err)
-	}
-	tok, _ := db.GetToken(ctx, 1)
-	if tok.UsedTicks != 0 || tok.ResetTicks != 300 || tok.UsedResetAt == 0 {
-		t.Fatalf("reset: %+v", tok)
+	if tok, _ := db.GetToken(ctx, 1); !tok.Limited || tok.QuotaTicks != 1000 || tok.UsedTicks != 300 {
+		t.Fatalf("token after upgrade: %+v", tok)
 	}
 	// Soft delete: gone from lists and auth, still labelled; the same key can
 	// be added again.
@@ -153,7 +149,7 @@ func TestUpgradeFromV031Schema(t *testing.T) {
 		t.Fatalf("re-adding a deleted key: %v", err)
 	}
 	var spent int64
-	_ = db.R.QueryRowContext(ctx, `SELECT SUM(used_ticks + reset_ticks) FROM tokens`).Scan(&spent)
+	_ = db.R.QueryRowContext(ctx, `SELECT SUM(used_ticks) FROM tokens`).Scan(&spent)
 	if spent != 300 {
 		t.Fatalf("token spend %d, want the log total 300", spent)
 	}
@@ -166,5 +162,89 @@ func TestUpgradeFromV031Schema(t *testing.T) {
 	if db, err := Open(path); err == nil {
 		db.Close()
 		t.Fatal("a newer schema must be refused")
+	}
+}
+
+// v0.4.0 (schema v8) to v9: the usage cleared by "reset usage" is folded
+// back with a matching quota increase, so what is left does not change; the
+// token's usage equals its log total again; every token gets migration
+// records whose amounts add up to its quota (acceptance U18).
+func TestUpgradeFromV040ResetFolding(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "xai-router.db")
+	raw, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?_pragma=journal_mode(WAL)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmts := []string{`CREATE TABLE schema_version (v INTEGER NOT NULL)`}
+	stmts = append(stmts, migrations[:8]...)
+	stmts = append(stmts, `INSERT INTO schema_version (v) VALUES (8)`,
+		// 1: limited $10, spent 7 of which 5 were reset (used 2 now) -> left 8
+		`INSERT INTO tokens (id, name, token_hash, prefix, quota_ticks, used_ticks, reset_ticks, used_reset_at, created_at, updated_at)
+		 VALUES (1, 'limited-reset', 'h1', 'sk-xr-1', 100, 20, 50, 1700000000000, 1, 1)`,
+		// 2: unlimited, spent 9 of which 4 were reset
+		`INSERT INTO tokens (id, name, token_hash, prefix, quota_ticks, used_ticks, reset_ticks, used_reset_at, created_at, updated_at)
+		 VALUES (2, 'unlimited-reset', 'h2', 'sk-xr-2', 0, 50, 40, 1700000000000, 1, 1)`,
+		// 3: limited, never reset
+		`INSERT INTO tokens (id, name, token_hash, prefix, quota_ticks, used_ticks, created_at, updated_at)
+		 VALUES (3, 'plain', 'h3', 'sk-xr-3', 30, 10, 1, 1)`)
+	// Each token's logs add up to its whole spend (used + reset).
+	for id, cost := range map[int]int{1: 70, 2: 90, 3: 10} {
+		stmts = append(stmts, fmt.Sprintf(`INSERT INTO request_logs (request_id, created_at, method, path, status, token_id, cost_ticks)
+			VALUES ('r%d', 1, 'POST', '/v1/chat/completions', 200, %d, %d)`, id, id, cost))
+	}
+	for _, q := range stmts {
+		if _, err := raw.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	raw.Close()
+
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	want := map[int64]struct {
+		limited     bool
+		quota, used int64
+	}{1: {true, 150, 70}, 2: {false, 0, 90}, 3: {true, 30, 10}}
+	for id, w := range want {
+		tok, err := db.GetToken(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tok.Limited != w.limited || tok.QuotaTicks != w.quota || tok.UsedTicks != w.used {
+			t.Errorf("token %d: %+v, want %+v", id, tok, w)
+		}
+		var logs int64
+		_ = db.R.QueryRowContext(ctx, `SELECT SUM(cost_ticks) FROM request_logs WHERE token_id = ?`, id).Scan(&logs)
+		if tok.UsedTicks != logs {
+			t.Errorf("token %d: used %d != log total %d", id, tok.UsedTicks, logs)
+		}
+		evs, _ := db.ListEvents(ctx, EventFilter{Action: "token.quota_", TargetType: "token", TargetID: fmt.Sprint(id), Limit: 10})
+		var sum int64
+		for _, e := range evs {
+			if e.Action != "token.quota_migrate" || e.Actor != "system" || e.Kind != EventAudit {
+				t.Errorf("token %d: unexpected record %+v", id, e)
+			}
+			sum += int64(e.Detail["amount_ticks"].(float64))
+		}
+		wantRecords := 1
+		if id != 3 {
+			wantRecords = 2 // plus the folded resets
+		}
+		if len(evs) != wantRecords || sum != tok.QuotaTicks {
+			t.Errorf("token %d: %d records summing to %d, want %d summing to the quota %d", id, len(evs), sum, wantRecords, tok.QuotaTicks)
+		}
+	}
+	// Left to spend is unchanged for the limited token: 100-20 = 150-70.
+	if tok, _ := db.GetToken(ctx, 1); tok.QuotaTicks-tok.UsedTicks != 80 {
+		t.Fatalf("remaining changed: %+v", tok)
+	}
+	var cols int
+	_ = db.R.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('tokens') WHERE name IN ('reset_ticks', 'used_reset_at')`).Scan(&cols)
+	if cols != 0 {
+		t.Fatal("reset columns still present")
 	}
 }

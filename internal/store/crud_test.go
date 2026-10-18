@@ -207,11 +207,9 @@ func TestTokensCRUD(t *testing.T) {
 	if _, err := db.W.ExecContext(ctx, `UPDATE tokens SET used_ticks = 50 WHERE id = ?`, tok.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.ResetTokenUsage(ctx, tok.ID); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ = db.GetToken(ctx, tok.ID); got.UsedTicks != 0 {
-		t.Fatalf("reset: %d", got.UsedTicks)
+	// UpdateToken never touches the quota or the usage.
+	if got, _ = db.GetToken(ctx, tok.ID); got.UsedTicks != 50 {
+		t.Fatalf("usage changed by an update: %d", got.UsedTicks)
 	}
 	if err := db.DeleteToken(ctx, tok.ID); err != nil {
 		t.Fatal(err)

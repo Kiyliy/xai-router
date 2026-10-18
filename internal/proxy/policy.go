@@ -50,7 +50,7 @@ func (h *Handler) admit(st *state, r *http.Request) *apiError {
 	if m != nil && !m.Enabled {
 		return errf(http.StatusForbidden, "model_disabled", "the model %q is disabled on this gateway", model)
 	}
-	if m == nil && inference && !ep.modelOptional && tok.QuotaTicks > 0 && s.UnpricedModels != "allow" {
+	if m == nil && inference && !ep.modelOptional && tok.Limited && s.UnpricedModels != "allow" {
 		return errf(http.StatusForbidden, "model_not_priced",
 			"the model %q has no known price, so API keys with a spending limit cannot use it (sync models or add a price)", model)
 	}

@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"strings"
 	"sync"
@@ -218,6 +219,45 @@ func imagePrice(m *store.Model, req Request) int64 {
 		best = max(best, tr.Ticks)
 	}
 	return best
+}
+
+// PriceSnapshot returns, as JSON, the unit prices that apply to a request
+// (ticks per token, per image or per second), so the console can split the
+// cost by category even after prices change. Empty when the model is not
+// in the table.
+func (t *Table) PriceSnapshot(model string, u Usage, req Request) string {
+	m := t.Lookup(model)
+	if m == nil {
+		return ""
+	}
+	snap := map[string]any{"model": m.ID}
+	switch {
+	case u.VideoSeconds > 0 && (m.VideoTicksPerSec > 0 || len(m.VideoTiers) > 0):
+		snap["video_per_second"] = VideoPrice(m, req.Resolution)
+		snap["input_image"], snap["input_video_per_second"] = m.InputImageTicks, m.InputVideoTicksPerSec
+	case u.Images > 0 && (m.ImageTicks > 0 || len(m.ImageTiers) > 0):
+		snap["image"], snap["input_image"] = imagePrice(m, req), m.InputImageTicks
+	default:
+		in, cached, out, imgIn := m.InputTicks, m.CachedTicks, m.OutputTicks, m.ImageTokenTicks
+		long := m.LongThreshold > 0 && u.PromptTokens >= m.LongThreshold
+		if long {
+			in, cached, out = m.LongInputTicks, m.LongCachedTicks, m.LongOutputTicks
+			if imgIn == m.InputTicks {
+				imgIn = in
+			}
+		}
+		if imgIn == 0 {
+			imgIn = in
+		}
+		mult := int64(1)
+		if u.ServiceTier == "priority" {
+			mult = 2
+		}
+		snap["input"], snap["cached_input"], snap["output"], snap["image_input"] = in*mult, cached*mult, out*mult, imgIn*mult
+		snap["long_context"], snap["priority"] = long, mult == 2
+	}
+	b, _ := json.Marshal(snap)
+	return string(b)
 }
 
 func tokenCost(m *store.Model, u Usage) int64 {

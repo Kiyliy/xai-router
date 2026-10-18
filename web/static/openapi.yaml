@@ -330,23 +330,61 @@ paths:
     post:
       tags: [Tokens]
       summary: Adjust a client token's quota
-      description: "The quota is set when a token is created and afterwards only adjusted here; usage is never reset. Each adjustment is recorded atomically as an operation event (token.quota_adjust) with the amounts before and after. Send either delta_usd (positive adds, negative subtracts; the quota must stay above zero; an unlimited token given a positive delta becomes limited to it) or unlimited: true."
+      description: "The quota is set when a token is created and afterwards only moves by these adjustments; usage is never reset. increase / decrease change a limited quota by amount_usd (> 0, at most 4 decimals); a decrease may not go below what has been used. set_limited switches an unlimited token to a quota of used + amount_usd (the balance it may still spend, >= 0). set_unlimited removes the limit. A reason is required. Each adjustment and its record (token.quota_<action> in the log) are written in one transaction, under the same lock as quota checks, so no request is admitted against the old quota."
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required: [action, reason]
               properties:
-                delta_usd: { type: number, example: 5 }
-                unlimited: { type: boolean }
-                note: { type: string, description: "Recorded with the event (max 500 characters)" }
+                action: { type: string, enum: [increase, decrease, set_limited, set_unlimited] }
+                amount_usd: { type: number, example: 5, description: "Required except for set_unlimited" }
+                reason: { type: string, maxLength: 200 }
       responses:
         "200":
-          description: The token, plus quota_change { before_usd, after_usd, event_id }
+          description: The token, plus record (the new quota record)
           content: { application/json: { schema: { $ref: "#/components/schemas/Token" } } }
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/tokens/{id}/quota-history:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get:
+      tags: [Tokens]
+      summary: A token's quota records, newest first
+      description: "Initial quota, increases, decreases, switches, and the v0.4.1 migration records. granted_total_usd (the sum of all amounts) always equals the stored quota."
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        created_at: { type: string, format: date-time }
+                        action: { type: string, enum: [initial, increase, decrease, set_limited, set_unlimited, migrate] }
+                        amount_usd: { type: number }
+                        before_usd: { type: number }
+                        after_usd: { type: number }
+                        used_usd: { type: number, description: "Used at the moment of the adjustment" }
+                        unlimited: { type: boolean }
+                        reason: { type: string }
+                        reason_code: { type: string, description: "migrate records: pre_v0_4_1 or reset_folded" }
+                        actor: { type: string }
+                        actor_name: { type: string }
+                        ip: { type: string }
+                  total: { type: integer }
+                  granted_total_usd: { type: number }
 
   /api/v1/admin-tokens:
     get:
@@ -458,8 +496,16 @@ paths:
   /api/v1/logs:
     get:
       tags: [Logs]
-      summary: Search request logs
+      summary: The log (requests, audit and system events)
+      description: "type selects the sources (default request). type=request alone pages by number as before. Any other selection merges the sources newest first and pages with cursor / next_cursor (total is only returned on the first page). key_id / token_id apply to requests and to events about that key or token; model, status and path apply to requests only (they leave events out); action, target_type, target_id and actor apply to events only (they leave requests out). problems=1 keeps warnings and errors: requests whose status is not 2xx/3xx/101, events of level warn or error. Event rows have type audit or system and the fields of the Event schema."
       parameters:
+        - { name: type, in: query, schema: { type: string, example: "request,audit,system" } }
+        - { name: problems, in: query, schema: { type: boolean } }
+        - { name: cursor, in: query, schema: { type: string }, description: "next_cursor of the previous page (merged views)" }
+        - { name: action, in: query, schema: { type: string }, description: "Events: exact action, or a prefix ending in . or _" }
+        - { name: target_type, in: query, schema: { type: string } }
+        - { name: target_id, in: query, schema: { type: string } }
+        - { name: actor, in: query, schema: { type: string } }
         - { name: from, in: query, schema: { type: string } }
         - { name: to, in: query, schema: { type: string } }
         - { name: model, in: query, schema: { type: string } }
@@ -483,6 +529,7 @@ paths:
                       data: { type: array, items: { $ref: "#/components/schemas/LogSummary" } }
                       total_kind: { type: string, enum: [exact, approx, at_least], description: "How `total` was obtained: an exact count, an estimate from the hourly rollups (when counting would exceed 250 ms), or a lower bound" }
                       total_exact: { type: boolean }
+                      next_cursor: { type: string, description: "Merged views: pass as cursor for the next page; empty at the end" }
     delete:
       tags: [Logs]
       summary: Delete logs older than a time
@@ -623,33 +670,14 @@ paths:
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
         "404": { $ref: "#/components/responses/Error" }
-  /api/v1/events:
+  /api/v1/events/{id}:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
     get:
-      tags: [System]
-      summary: Event log (operations and system events)
-      description: "Append-only and kept forever. operation = an administrator changed something (actor password or admin_token:<id>; request fields with secrets redacted); system = the gateway acted on its own (key.auto_disable, logs.retention, model.sync, system.start/stop/migrate, auth.login_blocked, disk.low). Request traffic is in /api/v1/logs."
-      parameters:
-        - { name: kind, in: query, schema: { type: string, enum: [operation, system] } }
-        - { name: action, in: query, description: "Exact action, or a prefix ending in a dot (token.)", schema: { type: string } }
-        - { name: target_type, in: query, schema: { type: string, example: token } }
-        - { name: target_id, in: query, schema: { type: string } }
-        - { name: from, in: query, schema: { type: string } }
-        - { name: to, in: query, schema: { type: string } }
-        - { name: q, in: query, schema: { type: string } }
-        - $ref: "#/components/parameters/Page"
-        - $ref: "#/components/parameters/PageSize"
+      tags: [Logs]
+      summary: One audit or system event
       responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  data: { type: array, items: { $ref: "#/components/schemas/Event" } }
-                  total: { type: integer }
-                  page: { type: integer }
-                  page_size: { type: integer }
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Event" } } } }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/system/info:
     get:
       tags: [System]
@@ -725,18 +753,22 @@ components:
   schemas:
     Event:
       type: object
+      description: "Append-only, kept forever (not affected by log retention or purges)."
       properties:
+        type: { type: string, enum: [audit, system] }
         id: { type: integer }
         created_at: { type: string, format: date-time }
-        kind: { type: string, enum: [operation, system] }
-        action: { type: string, example: token.quota_adjust }
+        level: { type: string, enum: [info, warn, error] }
+        action: { type: string, example: token.quota_increase }
         actor: { type: string, example: "admin_token:3" }
         actor_name: { type: string }
         target_type: { type: string, example: token }
         target_id: { type: string }
         target_name: { type: string }
+        target_hint: { type: string, description: "Token prefix or masked key" }
         ip: { type: string }
-        detail: { type: object, additionalProperties: true }
+        request_id: { type: string, description: "The request that caused it (for example the one that got a key disabled)" }
+        detail: { type: object, additionalProperties: true, description: "changes: {field: {before, after}} for updates; amounts for quota records; results for tests, imports, syncs and purges" }
     Job:
       type: object
       properties:
@@ -846,10 +878,11 @@ components:
         name: { type: string }
         prefix: { type: string, example: "sk-xr-a1b2" }
         enabled: { type: boolean }
-        quota_usd: { type: number, description: 0 = unlimited }
-        used_usd: { type: number, description: "Quota usage since the last reset (used_reset_at)" }
-        spent_usd: { type: number, description: "Everything the token has spent, including usage cleared by resets" }
-        used_reset_at: { type: string, format: date-time, nullable: true, description: "When the usage was last reset" }
+        unlimited: { type: boolean, description: "Its own state: when false, quota_usd applies even at 0 (a $0 quota blocks)" }
+        quota_usd: { type: number }
+        used_usd: { type: number, description: "Everything spent (usage is never reset)" }
+        exhausted: { type: boolean }
+        spent_usd: { type: number, deprecated: true, description: "Equals used_usd" }
         remaining_usd: { type: number, nullable: true }
         expires_at: { type: string, format: date-time, nullable: true }
         expired: { type: boolean }
@@ -864,7 +897,7 @@ components:
       properties:
         name: { type: string }
         enabled: { type: boolean }
-        quota_usd: { type: number, description: "Create only (0 = unlimited). Afterwards adjust it with POST /api/v1/tokens/{id}/quota; PATCH with quota_usd returns 400 quota_not_editable" }
+        quota_usd: { type: number, description: "Create only: the first quota (0 is allowed and blocks); omit for an unlimited token. Afterwards use POST /api/v1/tokens/{id}/quota; PATCH with quota_usd or reset_usage returns 400 quota_is_adjustment_only" }
         expires_at: { type: string, format: date-time, nullable: true, description: null or empty = never }
         allowed_models: { type: array, items: { type: string } }
         notes: { type: string }
@@ -935,6 +968,9 @@ components:
     LogSummary:
       type: object
       properties:
+        type: { type: string, enum: [request] }
+        level: { type: string, enum: [info, warn, error], description: "From the status: 2xx/3xx/101 info, 4xx and 499 warn, 5xx or no status error" }
+        cache_write_tokens: { type: integer, nullable: true, description: "Only when the upstream reports it (Messages: cache_creation_input_tokens); xAI does not bill cache writes" }
         id: { type: integer }
         request_id: { type: string }
         created_at: { type: string, format: date-time }
@@ -979,6 +1015,7 @@ components:
             response_text: { type: string, description: For streams, the assembled assistant text }
             reasoning_text: { type: string }
             truncated: { type: boolean }
+            price_snapshot: { type: object, nullable: true, additionalProperties: true, description: "Unit prices the request was billed at (ticks per token, per image or per second; long_context, priority). null before v0.4.1" }
             websocket_session:
               type: object
               nullable: true
