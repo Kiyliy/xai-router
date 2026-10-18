@@ -213,15 +213,6 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 	return r.ResponseWriter.Write(b)
 }
 
-// systemEvent records something the gateway did on its own.
-func (s *Server) systemEvent(ctx context.Context, action, targetType, targetID, targetName string, detail map[string]any) {
-	e := &store.Event{Kind: store.EventSystem, Action: action, Actor: "system", ActorName: "system",
-		TargetType: targetType, TargetID: targetID, TargetName: targetName, Detail: detail}
-	if err := s.DB.AddEvent(ctx, e); err != nil {
-		s.Log.Error("record system event", "action", action, "err", err)
-	}
-}
-
 // listEvents returns the event log (operation and system events), newest
 // first. Filters: kind, action (exact, or a prefix ending in "."),
 // target_type, target_id, from, to, q.
