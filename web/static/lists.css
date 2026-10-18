@@ -139,3 +139,15 @@ tr:hover .inline-num, .inline-num:hover { border-color: var(--border); backgroun
 .inline-ok.show { animation: inline-ok 1.4s ease-out; }
 @keyframes inline-ok { 0%, 60% { opacity: 1; } 100% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .inline-ok.show { animation-duration: .01s; } }
+
+/* ---------- data disk usage on #/data (v0.4.1) ---------- */
+.storage-disk { display: flex; flex-direction: column; gap: 8px; padding: 14px 20px 16px; border-top: 1px solid var(--border-subtle); }
+.storage-disk-head { display: flex; align-items: baseline; gap: 4px 10px; flex-wrap: wrap; font-size: 13px; min-width: 0; }
+.storage-disk-head .l { font-size: 12px; color: var(--text-3); font-weight: 500; }
+.storage-disk-head .pct { font-weight: 600; font-variant-numeric: tabular-nums; }
+.storage-disk-head .s { margin-left: auto; font-size: 12px; color: var(--text-3); }
+.storage-disk .progress { height: 6px; }
+@media (max-width: 640px) {
+  .storage-disk { padding: 12px 14px; }
+  .storage-disk-head .s { margin-left: 0; flex-basis: 100%; }
+}

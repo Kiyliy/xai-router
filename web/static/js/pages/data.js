@@ -5,7 +5,7 @@ import { jobPanel, asJob } from '../jobs.js';
 import { icon } from '../icons.js';
 import { t } from '../i18n.js';
 import { get, put, post, del } from '../api.js';
-import { card, toast, toastError, confirmDialog, field, input, button, busy, kv, errorMessage } from '../ui.js';
+import { card, toast, toastError, confirmDialog, field, input, button, busy, kv, errorMessage, progress } from '../ui.js';
 
 const mono = (v) => h('span', { class: 'mono' }, v);
 const title = (ic, text) => h('span', { class: 'card-title-ic' }, icon(ic, 16), text);
@@ -13,6 +13,7 @@ const title = (ic, text) => h('span', { class: 'card-title-ic' }, icon(ic, 16), 
 export function render(el, ctx) {
   let info = null;
   let retention = null; // saved log_retention_days
+  let diskWarn = null; // saved disk_warn_percent
 
   // ---- 1. storage overview ----
   const stat = (l) => {
@@ -20,39 +21,60 @@ export function render(el, ctx) {
     return { el: h('div', { class: 'storage-stat' }, h('div', { class: 'l' }, l), v, s), v, s };
   };
   const stDb = stat(t('settings.dbSize')), stLogs = stat(t('settings.logCount')), stOld = stat(t('settings.oldestLog')), stNew = stat(t('settings.newestLog'));
+  // Data volume usage (system/info disk_*), under the four stats.
+  const diskPct = h('span', { class: 'pct' }, '—'), diskUsed = h('span'), diskFree = h('span', { class: 's' });
+  const diskBar = h('div');
+  const diskRow = h('div', { class: 'storage-disk' },
+    h('div', { class: 'storage-disk-head' }, h('span', { class: 'l' }, t('data.disk')), diskPct, diskUsed, diskFree), diskBar);
   const storageCard = card({
     cls: 'span-2', flush: true,
-    body: h('div', { class: 'storage-stats' }, stDb.el, stLogs.el, stOld.el, stNew.el),
+    body: [h('div', { class: 'storage-stats' }, stDb.el, stLogs.el, stOld.el, stNew.el), diskRow],
   });
 
   // ---- 2. retention ----
   const retInput = input({ type: 'number', min: 0, max: 3650, step: 1, inputmode: 'numeric' });
+  const diskInput = input({ type: 'number', min: 50, max: 99, step: 1, inputmode: 'numeric' });
   const retSave = button(t('common.save'), { variant: 'primary', onClick: () => saveRetention() });
   const retCard = card({
-    title: title('clock', t('data.retention')), subtitle: t('data.retentionSub'),
-    body: field(t('settings.f.log_retention_days'), h('div', { class: 'input-affix input-affix-end' }, retInput, h('span', { class: 'affix' }, t('data.daysUnit'))), { hint: t('data.retentionHint') }),
+    title: title('clock', t('data.retentionCard')), subtitle: t('data.retentionSub'),
+    body: h('div', { class: 'stack' },
+      field(t('settings.f.log_retention_days'), h('div', { class: 'input-affix input-affix-end' }, retInput, h('span', { class: 'affix' }, t('data.daysUnit'))), { hint: t('data.retentionHint') }),
+      field(t('settings.f.disk_warn_percent'), h('div', { class: 'input-affix input-affix-end' }, diskInput, h('span', { class: 'affix' }, '%')), { hint: t('settings.h.disk_warn_percent') })),
   });
   retCard.id = 'data-retention';
   retCard.append(h('div', { class: 'card-foot-actions' }, retSave));
-  const retDirty = () => retention != null && retInput.value !== '' && Number(retInput.value) !== retention;
+  const changedNum = (inp, saved) => saved != null && inp.value !== '' && Number(inp.value) !== saved;
+  const retDirty = () => changedNum(retInput, retention) || changedNum(diskInput, diskWarn);
   ctx.setGuard(retDirty);
   async function saveRetention() {
-    const v = Number(retInput.value);
-    if (retInput.value === '' || !Number.isInteger(v) || v < 0 || v > 3650) {
-      retInput.classList.add('invalid');
-      toast(t('err.settingsRange', { field: t('settings.f.log_retention_days'), a: 0, b: 3650 }), 'warning');
-      retInput.focus();
-      return;
+    const checks = [[retInput, 'log_retention_days', 0, 3650], [diskInput, 'disk_warn_percent', 50, 99]];
+    const body = {};
+    for (const [inp, k, a, b] of checks) {
+      const v = Number(inp.value);
+      const bad = inp.value === '' || !Number.isInteger(v) || v < a || v > b;
+      inp.classList.toggle('invalid', bad);
+      if (bad) {
+        toast(t('err.settingsRange', { field: t(`settings.f.${k}`), a, b }), 'warning');
+        inp.focus();
+        return;
+      }
+      body[k] = v;
     }
-    retInput.classList.remove('invalid');
+    if (body.log_retention_days === retention) delete body.log_retention_days;
+    if (body.disk_warn_percent === diskWarn) delete body.disk_warn_percent;
+    if (!Object.keys(body).length) return;
     await busy(retSave, async () => {
       try {
-        const res = await put('/api/v1/settings', { log_retention_days: v });
-        retention = res && typeof res === 'object' && res.log_retention_days != null ? res.log_retention_days : v;
+        const res = await put('/api/v1/settings', body);
+        const r = res && typeof res === 'object' ? res : {};
+        retention = r.log_retention_days ?? body.log_retention_days ?? retention;
+        diskWarn = r.disk_warn_percent ?? body.disk_warn_percent ?? diskWarn;
         retInput.value = retention;
+        diskInput.value = diskWarn;
         paintPolicy();
-        if (info) paintInfo(info);
         toast(t('settings.saved'), 'success');
+        // The threshold changes system/info disk_warning, which drives the global banner.
+        if ('disk_warn_percent' in body) loadInfo(); else if (info) paintInfo(info);
       } catch (e) { toastError(e); }
     });
   }
@@ -208,6 +230,7 @@ export function render(el, ctx) {
     stNew.v.textContent = i.newest_log_at ? relTime(i.newest_log_at) : '—';
     stNew.v.title = i.newest_log_at ? fmtDateTime(i.newest_log_at) : '';
     stNew.s.textContent = i.newest_log_at ? fmtDateTime(i.newest_log_at, { seconds: false }) : '';
+    paintDisk(i);
 
     freeN.textContent = fmtBytes(free);
     const av = i.db_auto_vacuum || '';
@@ -227,6 +250,22 @@ export function render(el, ctx) {
       [t('settings.logDropped'), h('span', { class: i.log_dropped ? 'text-warning' : '' }, fmtInt(i.log_dropped))],
     ]));
   }
+  function paintDisk(i) {
+    const total = i.disk_total_bytes || 0;
+    if (!total) {
+      diskPct.textContent = '—'; diskUsed.textContent = t('data.diskUnknown'); diskFree.textContent = ''; diskBar.replaceChildren();
+      return;
+    }
+    const free = i.disk_free_bytes || 0;
+    const used = Math.max(0, total - free);
+    const pct = typeof i.disk_used_percent === 'number' ? i.disk_used_percent : (used / total) * 100;
+    const warnAt = i.disk_warn_percent || diskWarn || 85;
+    diskPct.textContent = `${pct.toFixed(pct < 10 ? 1 : 0)}%`;
+    diskPct.classList.toggle('text-warning', !!i.disk_warning);
+    diskUsed.textContent = t('data.diskUsed', { used: fmtBytes(used), total: fmtBytes(total) });
+    diskFree.textContent = `${t('data.diskFree', { v: fmtBytes(free) })} · ${t('data.diskWarnAt', { p: warnAt })}`;
+    diskBar.replaceChildren(progress(pct / 100, i.disk_warning ? 'danger' : pct >= warnAt - 10 ? 'warning' : 'accent'));
+  }
   async function loadInfo() {
     try { const i = await ctx.refreshInfo(); if (!i || !ctx.alive()) return; info = i; paintInfo(i); paintEstimate(); } catch (e) { toastError(e); }
   }
@@ -235,6 +274,8 @@ export function render(el, ctx) {
       const s = await get('/api/v1/settings', null, { signal: ctx.signal });
       retention = s && s.log_retention_days != null ? s.log_retention_days : 0;
       retInput.value = retention;
+      diskWarn = s && s.disk_warn_percent != null ? s.disk_warn_percent : 85;
+      diskInput.value = diskWarn;
       paintPolicy();
       if (info) paintInfo(info);
     } catch (e) { if (e.name !== 'AbortError') toastError(e); }

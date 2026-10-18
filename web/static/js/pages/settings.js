@@ -32,7 +32,8 @@ const SECTIONS = [
   { id: 'logging', icon: 'logs', fields: [
     { k: 'log_enabled', type: 'bool' },
     { k: 'log_bodies', type: 'bool' },
-    { k: 'log_body_max_kb', type: 'int', unit: 'KB', min: 1, max: 65536 },
+    { k: 'log_request_body_max_kb', type: 'int', unit: 'KB', min: 1, max: 65536 },
+    { k: 'log_response_body_max_kb', type: 'int', unit: 'KB', min: 1, max: 65536 },
     { k: 'ws_log_messages', type: 'int', min: 0, max: 10000 },
   ] },
   { id: 'models', icon: 'cpu', fields: [

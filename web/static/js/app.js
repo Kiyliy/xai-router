@@ -1,5 +1,5 @@
 // Entry point: auth gate, app shell, hash router.
-import { h, mount, relTime, fmtDuration, qsParse, qsBuild } from './util.js';
+import { h, mount, relTime, fmtDuration, qsParse, qsBuild, fmtBytes } from './util.js';
 import { icon, logo } from './icons.js';
 import { t, getLang, setLang } from './i18n.js';
 import { auth, onUnauthorized, get, post } from './api.js';
@@ -90,7 +90,7 @@ function route() {
     ({ name, params } = parseHash());
   }
   state.lastHash = location.hash;
-  checkKeyHealth();
+  refreshBanners();
   // Same page, new query (back/forward, or a link to other filters): let the page apply the
   // params in place so the current rows stay visible instead of re-rendering from scratch.
   if (state.onParams && state.curName === name) {
@@ -266,6 +266,15 @@ function renderBanner() {
       h('span', { class: 'banner-text' }, h('strong', null, t('banner.noKeys')), ' ', t('banner.noKeysDesc')),
       h('a', { class: 'btn btn-sm', href: '#/keys' }, t('banner.noKeysBtn'))));
   }
+  // Data disk almost full (system/info disk_warning), between the no-keys and password banners.
+  const i = state.info;
+  if (i && i.disk_warning) {
+    const pct = typeof i.disk_used_percent === 'number' ? `${Math.floor(i.disk_used_percent)}%` : '—';
+    nodes.push(h('div', { class: 'banner banner-warning banner-disk', role: 'alert' },
+      icon('database', 16),
+      h('span', { class: 'banner-text' }, t('banner.disk', { p: pct, free: fmtBytes(i.disk_free_bytes) })),
+      h('a', { class: 'btn btn-sm', href: '#/data' }, t('banner.diskBtn'))));
+  }
   if (state.info && state.info.needs_password_change) {
     nodes.push(h('div', { class: 'banner banner-warning', role: 'alert' },
       icon('alert', 16),
@@ -290,12 +299,24 @@ async function checkKeyHealth() {
   catch (e) { if (e.status !== 401) console.warn('stats/overview', e); }
   finally { healthBusy = false; }
 }
-setInterval(() => { if (!document.hidden) checkKeyHealth(); }, 60000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) checkKeyHealth(); });
+// The disk banner rides along: system/info is refreshed with the key health (route change, every 60 s).
+function refreshBanners() {
+  checkKeyHealth();
+  if (state.view === 'shell' && auth.token) loadInfo();
+}
+setInterval(() => { if (!document.hidden) refreshBanners(); }, 60000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshBanners(); });
 
-async function loadInfo() {
-  try { state.info = await get('/api/v1/system/info'); renderBanner(); } catch (e) { if (e.status !== 401) console.warn('system/info', e); }
-  return state.info;
+// Concurrent callers (route change + a page asking for fresh info) share one request.
+let infoReq = null;
+function loadInfo() {
+  if (infoReq) return infoReq;
+  infoReq = (async () => {
+    try { state.info = await get('/api/v1/system/info'); renderBanner(); } catch (e) { if (e.status !== 401) console.warn('system/info', e); }
+    finally { infoReq = null; }
+    return state.info;
+  })();
+  return infoReq;
 }
 
 function rerender() {
@@ -391,8 +412,7 @@ async function boot() {
     return;
   }
   renderShell();
-  route();
-  loadInfo();
+  route(); // also loads system/info for the banners
 }
 
 onUnauthorized(() => { if (state.view !== 'login') showLogin(t('auth.sessionExpired')); });
