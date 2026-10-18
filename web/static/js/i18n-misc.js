@@ -1,6 +1,7 @@
 // v0.4.1 strings owned by one frontend agent (merged into i18n.js; keys here
 // override i18n.js and i18n-lists.js). Keep en and zh complete.
 export const en = {
+  'data.avLegacyHint': 'This database was created before v0.3: compact it once so space freed by deleted logs is reused automatically',
   // key drawer: recent events (pm-spec 9.6)
   'kd.recentEvents': 'Recent events',
   'kd.noEvents': 'No operation or system records for this key yet',
@@ -30,6 +31,7 @@ export const en = {
 };
 
 export const zh = {
+  'data.avLegacyHint': '这个数据库创建于 v0.3 之前，压缩一次后，删除日志腾出的空间才会自动复用',
   'kd.recentEvents': '最近事件',
   'kd.noEvents': '这个上游密钥还没有操作或系统记录',
   'kd.openEvent': '在日志页打开这条记录',

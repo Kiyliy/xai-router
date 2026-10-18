@@ -235,7 +235,7 @@ export function render(el, ctx) {
 
     freeN.textContent = fmtBytes(free);
     const av = i.db_auto_vacuum || '';
-    freeSub.textContent = [size ? t('data.freeShare', { p: ((free / size) * 100).toFixed(free / size < 0.1 ? 1 : 0) }) : '', av ? `${t('settings.autoVacuum')}: ${av}${av !== 'incremental' ? ` (${t('settings.avLegacy')})` : ''}` : ''].filter(Boolean).join(' · ');
+    freeSub.textContent = [size ? t('data.freeShare', { p: ((free / size) * 100).toFixed(free / size < 0.1 ? 1 : 0) }) : '', av && av !== 'incremental' ? t('data.avLegacyHint') : ''].filter(Boolean).join(' · ');
     vacuumWarn.hidden = !av || av === 'incremental';
 
     sysBody.replaceChildren(kv([
