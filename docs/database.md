@@ -7,7 +7,7 @@ xai-router 把全部状态存在一个 SQLite 文件里（`$XR_DATA_DIR/xai-rout
 - 数据的生命周期和迁移方式；
 - 背后的设计取舍。
 
-本文对应 **schema v8**（v0.4.0）。独立技术评审和产品评审的结论，以及据此做的决定，见[第 10 节](#10-评审与决定)。
+本文对应 **schema v9**（v0.4.1）。独立技术评审和产品评审的结论，以及据此做的决定，见[第 10 节](#10-评审与决定)。
 
 ## 1. 术语对照
 
@@ -23,6 +23,7 @@ xai-router 把全部状态存在一个 SQLite 文件里（`$XR_DATA_DIR/xai-rout
 | `tokens.token_hash` / `prefix` | 令牌值（只存 hash）/ 令牌前缀 | token value / prefix | `prefix`（令牌值只在创建或重新生成时返回一次） |
 | `tokens.quota_ticks` / `used_ticks` | 额度 / 额度已用 | Quota / quota used | `quota_usd` / `used_usd` |
 | `tokens.used_ticks + reset_ticks` | 累计花费 | Total spend | `spent_usd` |
+| `events` | 事件日志（操作 / 系统） | Event log (operation / system) | `/api/v1/events` |
 | `admin_tokens` | 管理 API 令牌 | Admin API token | `/api/v1/admin-tokens` |
 | `sessions` | 控制台登录会话 | Console session | — |
 | `request_logs` | 请求日志 | Request logs | `/api/v1/logs` |
@@ -60,6 +61,7 @@ xai-router 把全部状态存在一个 SQLite 文件里（`$XR_DATA_DIR/xai-rout
 | `log_attempts` | 每次上游尝试（一个请求可能换上游密钥重试多次） | 约等于日志条数 |
 | `bindings` | 上游资源与创建它的上游密钥、客户端令牌之间的绑定。资源包括异步视频/图片任务、已存的 response、文件、批处理等 | 随异步任务量 |
 | `stats_dim` | 按小时预聚合的统计，分 4 个维度：全部 / 模型 / 上游密钥 / 客户端令牌 | 每小时最多 1 + 模型数 + 上游密钥数 + 客户端令牌数 行 |
+| `events` | 事件日志：管理员做了什么（operation）、网关自己做了什么（system）。只能追加，永久保留 | 每天几十到几百行 |
 
 ## 4. 关系图
 
@@ -122,9 +124,9 @@ erDiagram
 | prefix | TEXT | NOT NULL | 令牌值的前几位（`sk-xr-xxxx`） |
 | enabled | INTEGER | 1 | |
 | quota_ticks | INTEGER | 0 | 额度，0 = 不限 |
-| used_ticks | INTEGER | 0 | **额度已用**：自上次"重置用量"以来的花费，用来判断额度够不够 |
-| reset_ticks | INTEGER | 0 | 历次"重置用量"清掉的金额之和（v8）。`used_ticks + reset_ticks` = 累计花费 |
-| used_reset_at | INTEGER | 0 | 最近一次重置用量的时间（v8） |
+| used_ticks | INTEGER | 0 | **额度已用**，用来判断额度够不够。从 v0.4.1 起不再提供"重置用量"，额度只能通过调整（见 5.9）增减 |
+| reset_ticks | INTEGER | 0 | v0.4.0 时"重置用量"清掉的金额之和（v8，之后不再写入）。`used_ticks + reset_ticks` = 累计花费 |
+| used_reset_at | INTEGER | 0 | v0.4.0 时最近一次重置用量的时间（v8，之后不再写入） |
 | expires_at | INTEGER | 0 | 0 = 永不过期 |
 | allowed_models | TEXT | '[]' | 模型白名单（JSON 数组，支持别名和 `grok-4*` 通配），空 = 全部 |
 | requests / last_used_at | INTEGER | 0 | 计数器 |
@@ -233,6 +235,24 @@ erDiagram
 
 每批日志写入时，在**同一个事务**里对 4 个维度做 upsert。关闭"记录日志"、或者某条日志写入失败只能记账时，统计照样累加，所以统计是计费的权威来源；日志会过期删除，统计不会。
 
+### 5.9 `events`（事件日志，v9）
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| id | INTEGER PK 自增 | |
+| created_at | INTEGER | 发生时间（Unix 毫秒） |
+| kind | TEXT | `operation`（管理员操作）/ `system`（网关自动行为） |
+| action | TEXT | 例如 `key.update`、`token.quota_adjust`、`key.auto_disable`、`logs.retention`、`disk.low` |
+| actor / actor_name | TEXT | `password` / admin；`admin_token:<id>` / 令牌名；`system` |
+| target_type / target_id / target_name | TEXT | 被操作对象；名称在操作当时解析（删除前） |
+| ip | TEXT | 管理员的客户端 IP |
+| detail | TEXT | JSON：请求字段（`key`、`password`、`token` 等密文一律写成 `[redacted]`），或该事件特有的数据（额度调整的前后金额、清理的条数等） |
+
+- **只能追加**：两个触发器拒绝任何 `UPDATE` 和 `DELETE`，所以连网关自己也改不了历史；**永久保留**，不受日志保留天数和手动清理影响。
+- **记录什么**：管理 API 每一次成功的写操作（由中间件统一记录）和登录；系统事件只记状态变化，不记高频事件。例如上游密钥只在"变成自动禁用"的那一刻记一条，冷却不记；模型同步只在价格变化或失败时记；磁盘告警每越过一次阈值记一条。
+- **额度调整**：客户端令牌的额度在创建时设定，之后只能用 `POST /api/v1/tokens/{id}/quota` 增减（或改为不限额度）。额度的修改和对应的 `token.quota_adjust` 事件在**同一个事务**里写入，事件 detail 里有调整前后的 tick 数和备注，所以额度不可能"没有记录地改变"。
+- 索引：`(created_at)`、`(kind, created_at)`、`(target_type, target_id, created_at)`，分别服务全量列表、按类型筛选、某个对象的历史（例如令牌的额度记录）。
+
 ## 6. 索引与它服务的查询
 
 `request_logs` 的列表接口按 `(created_at DESC, id DESC)` 排序。验收要求是 300 万条日志下任意筛选组合 p95 < 500ms；实测（`notes/xai-router-evidence/P1-P2-bench.md`）所有列表查询 p95 都低于 200ms。
@@ -301,14 +321,21 @@ v0.4.0 之前硬删除的对象，在统计里显示为"#id（已删除）"。
 
 | 数据 | 保留多久 | 由谁清理 |
 |---|---|---|
-| 请求日志（含正文、尝试记录） | 默认 30 天（`log_retention_days`，0 = 永久） | 后台清理每小时一次，每批 1000 行，批与批之间让出写锁；也可以在"数据与存储"页按日期手动清理（后台任务，有进度和预估条数） |
+| 请求日志（含正文、尝试记录） | 默认 30 天（`log_retention_days`，0 = 永久） | 后台清理在启动 1 分钟后执行第一次，之后每小时一次；按小步删除（每步持写锁约 10ms），每次执行都记一条 `logs.retention` 事件。也可以在"数据与存储"页按日期手动清理（后台任务，有进度和预估条数） |
 | 统计 `stats_dim` | **永久**。每小时最多几十行，一年约几十万行 | 不清理 |
 | 绑定 | 默认 720 小时（`task_binding_ttl_hours`） | 后台清理 |
 | 控制台会话 | 30 天滑动过期 | 后台清理 |
 | 上游密钥、客户端令牌 | 永久；删除是软删除，行保留 | — |
+| 事件日志 `events` | **永久**，只能追加 | 不清理（触发器禁止删除） |
 | 模型、设置、管理 API 令牌 | 永久，直到手动删除或吊销 | — |
 
-磁盘空间：新库是 `auto_vacuum=INCREMENTAL`，删除后的空闲页可以回收。v0.3 之前创建的库，需要在"数据与存储"页执行一次"压缩"，转成增量模式。这一次是完整的 VACUUM，期间会阻塞写入。
+**磁盘是真正的约束。** 旧项目线上 105 天产生了 766 万条日志（峰值每小时约 2.6 万条，约 7 次写入/秒，其中 90% 是失效 key 重试产生的 403），SQLite 的写入能力有 100 倍以上的余量；日志体积才是上限。对应的措施：
+
+- 请求体和响应体分别有单条大小上限：`log_request_body_max_kb`、`log_response_body_max_kb`，默认各 32KB（v0.4.1 之前是共用的 256KB）；拼好的回答文本也受响应上限约束；base64 媒体一律剥离。
+- 换上游密钥重试的中间尝试是挂在这条日志下的 `log_attempts` 子行，不会产生新的 `request_logs` 行；每个请求的尝试次数受 `max_attempts`（默认 5）限制，失效的 key 会被自动禁用，之后不再被尝试。
+- 系统信息里显示数据盘的总量、剩余和使用率；超过 `disk_warn_percent`（默认 85%）时控制台顶部显示横幅，并记一条 `disk.low` 事件（每 10 分钟检查一次，越过阈值才记）。
+
+磁盘空间回收：新库是 `auto_vacuum=INCREMENTAL`，删除后的空闲页会被新日志复用；需要把空间还给系统时，在"数据与存储"页执行"压缩"（分小步执行，空闲空间很大时可能需要几个小时）。v0.3 之前创建的库，需要在"数据与存储"页执行一次"压缩"，转成增量模式。这一次是完整的 VACUUM，期间会阻塞写入。
 
 ## 9. 迁移
 
@@ -331,6 +358,7 @@ v0.4.0 之前硬删除的对象，在统计里显示为"#id（已删除）"。
 | v6 | v0.3.0 | 错误文本搜索的覆盖索引 `idx_logs_errsearch`，替换 v4 的索引 |
 | v7 | v0.3.0 | 模型、上游密钥、客户端令牌三个索引改为覆盖其他筛选列（`*_f`），替换旧的单列索引 |
 | v8 | v0.4.0 | 以下改动依据第 10 节的评审：上游密钥和客户端令牌加 `deleted_at`（软删除）；令牌加 `reset_ticks`、`used_reset_at`；`keys.requests/errors` 改名为 `attempts/attempt_errors`；`models.image_input_ticks` 改名为 `image_token_ticks`；日志加 `token_prefix`；删除空表 `stats_hourly` |
+| v9 | v0.4.1 | 事件日志表 `events`（只能追加的触发器）。同版本的代码改动：额度只能调整并留记录，去掉重置用量；请求体 / 响应体分别设上限 |
 
 升级测试：
 - `store.TestUpgradeFromV010Schema`：用 v0.1.0 的 schema 和数据升级到最新版本，核对数据，并验证重复启动不会出错；
@@ -404,7 +432,7 @@ JSON 存成 TEXT、毫秒整数时间、整数金额都可以直接移植。用�
 |---|---|---|
 | 上游密钥分组 / 标签（例如"按组路由"） | 不卡 | `keys.tags TEXT '[]'`；需要按组路由时加 `tokens.key_tags`。组的统计由 `stats_dim` 的上游密钥维度相加，不需要新维度 |
 | 按天 / 按月导出账单（按客户端令牌、上游密钥、模型） | 不卡 | 直接汇总 `stats_dim`（永久保留，已删除对象也有名称）。注意两点：① 小时桶是 UTC，半小时偏移时区的日界线会差半小时；② **"令牌 × 模型"的交叉账单目前做不了**（`stats_dim` 只有单维度，日志过了保留期就没了）。真有这个需求时，加一个维度 `dim='token_model'`（id = `token_id:model`），写入时多 upsert 一行，属于增量改动 |
-| 操作审计日志 | 不卡 | 新表 `audit_logs(id, at, actor_type, actor_id, action, target_type, target_id, target_name, detail)`。操作者只有两类：密码会话和某个管理 API 令牌。被操作对象是软删除的，所以 id 永远能解析到名称 |
+| 操作审计日志 | 已实现（v0.4.1，`events` 表，见 5.9） | — |
 | 多实例部署 | 卡（SQLite 只有一个写入者） | 不在范围内（用户已确定单容器 + SQLite）；需要时按 10.3 节迁库 |
 
 ## 12. 关键设计取舍
