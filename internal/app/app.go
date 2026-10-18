@@ -206,13 +206,15 @@ const consoleCSP = "default-src 'self'; script-src 'self'; style-src 'self' 'uns
 	"base-uri 'self'; form-action 'self'; object-src 'none'"
 
 var staticTypes = map[string]string{
-	".html": "text/html; charset=utf-8",
-	".js":   "text/javascript; charset=utf-8",
-	".css":  "text/css; charset=utf-8",
-	".svg":  "image/svg+xml",
-	".png":  "image/png",
-	".yaml": "application/yaml; charset=utf-8",
-	".yml":  "application/yaml; charset=utf-8",
+	".html":  "text/html; charset=utf-8",
+	".js":    "text/javascript; charset=utf-8",
+	".css":   "text/css; charset=utf-8",
+	".svg":   "image/svg+xml",
+	".png":   "image/png",
+	".woff2": "font/woff2",
+	".txt":   "text/plain; charset=utf-8",
+	".yaml":  "application/yaml; charset=utf-8",
+	".yml":   "application/yaml; charset=utf-8",
 }
 
 type statusWriter struct {
