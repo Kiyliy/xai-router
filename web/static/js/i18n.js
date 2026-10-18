@@ -1,5 +1,7 @@
 // i18n: English + Simplified Chinese. t('a.b', { n: 1 }) with {placeholder} interpolation.
 import * as lists from './i18n-lists.js';
+import * as logsI18n from './i18n-logs.js';
+import * as miscI18n from './i18n-misc.js';
 const KEY = 'xr.lang';
 
 const en = {
@@ -7,14 +9,33 @@ const en = {
   'app.unreachable': 'Cannot reach the server',
 
   'nav.overview': 'Overview', 'nav.keys': 'Upstream keys', 'nav.tokens': 'Client tokens', 'nav.models': 'Models & pricing',
-  'nav.logs': 'Request logs', 'nav.settings': 'Settings', 'nav.docs': 'Integration guide', 'nav.menu': 'Menu',
-  'page.overview.subtitle': 'Traffic, spend and upstream key pool health at a glance',
-  'page.keys.subtitle': 'xAI API keys (xai-…) in the pool',
-  'page.tokens.subtitle': 'Credentials (sk-xr-…) for applications calling /v1/*',
-  'page.models.subtitle': 'Model catalogue and the price table used for billing',
-  'page.logs.subtitle': 'Every proxied request, with bodies and upstream attempts',
-  'page.settings.subtitle': 'How the gateway routes, retries, logs and bills requests',
-  'page.docs.subtitle': 'Connect an application with a client token',
+  'nav.logs': 'Logs', 'nav.settings': 'Settings', 'nav.docs': 'Integration guide', 'nav.menu': 'Menu',
+  // ---- v0.4.1 client token quota (pm-spec 8) ----
+  'tokens.unlimitedState': 'Unlimited',
+  'q.adjust': 'Adjust quota', 'q.history': 'Quota records', 'q.title': 'Adjust the quota of {name}', 'q.now': 'Now', 'q.state': 'Quota type',
+  'q.limited': 'Limited', 'q.unlimited': 'Unlimited', 'q.direction': 'Change', 'q.increase': 'Increase', 'q.decrease': 'Decrease',
+  'q.amount': 'Amount', 'q.balance': 'Available balance', 'q.reason': 'Reason', 'q.reasonPh': 'e.g. monthly top-up',
+  'q.ro': 'Quota {q}, {used} used, {left} remaining', 'q.roUnlimited': 'Unlimited, {used} used', 'q.exhaustedLine': 'Quota used up',
+  'q.errAmountReq': 'Enter an amount.', 'q.errAmountFmt': 'Enter an amount with at most 4 decimal places.', 'q.errAmountPos': 'The amount must be greater than $0.',
+  'q.errMaxDec': 'At most {max} can be removed ({used} used).', 'q.errReason': 'Enter a reason.', 'q.errAmountCreate': 'Enter a quota with at most 4 decimal places.',
+  'q.toUsed': 'Reduce to the amount used (−{v})', 'q.unlimitedWarn': 'After switching, this client token is no longer limited by a quota.',
+  'q.alreadyUnlimited': 'This client token is already unlimited.',
+  'q.preview': 'Quota {a} → {b}, remaining {ra} → {rb}', 'q.willExhaust': '. Nothing will remain, so the client token is used up at once.',
+  'q.previewLimited': 'The quota becomes {q} ({used} used + {x} available).', 'q.previewUnlimited': 'The quota of {q} stops applying.',
+  'q.btnIncreaseN': 'Increase by {v}', 'q.btnDecreaseN': 'Decrease by {v}', 'q.btnLimited': 'Switch to limited', 'q.btnUnlimited': 'Switch to unlimited',
+  'q.confirmUnlimitedTitle': 'Make {name} unlimited?', 'q.confirmUnlimitedMsg': 'This client token will no longer be limited by a quota (it was {q}). The switch is kept in its quota records.',
+  'q.toastIncrease': 'Quota increased by {v} ({a} → {b})', 'q.toastDecrease': 'Quota decreased by {v} ({a} → {b})',
+  'q.toastLimited': 'Switched to limited, quota {q}', 'q.toastUnlimited': 'Switched to unlimited',
+  'q.h.time': 'Time', 'q.h.action': 'Action', 'q.h.amount': 'Amount', 'q.h.beforeAfter': 'Before → after', 'q.h.before': 'Quota before', 'q.h.after': 'Quota after',
+  'q.h.used': 'Used then', 'q.h.actor': 'By', 'q.h.reason': 'Reason',
+  'q.act.initial': 'Created', 'q.act.increase': 'Increase', 'q.act.decrease': 'Decrease', 'q.act.set_limited': 'Switch to limited',
+  'q.act.set_unlimited': 'Switch to unlimited', 'q.act.migrate': 'Upgrade',
+  'q.actor.system': 'System', 'q.actor.password': 'Password session', 'q.actor.adminToken': 'Admin API token',
+  'q.code.pre': 'Quota set before the upgrade', 'q.code.reset': 'Earlier usage resets, folded into one increase',
+  'q.noRecords': 'No quota records yet.', 'q.total': 'Granted in total {g} = current quota {q}', 'q.totalUnlimited': 'Currently unlimited; granted in total {g}',
+  'q.viewInLogs': 'View in logs →', 'q.createHint': 'A limited quota can be $0; requests are then refused.',
+  'err.quota_is_adjustment_only': 'The quota can only be changed with “Adjust quota”.', 'err.reason_required': 'Enter a reason.',
+  'err.invalid_quota': 'This quota change is not allowed: {detail}',
 
   'auth.signIn': 'Sign in', 'auth.password': 'Password', 'auth.adminToken': 'Admin API token', 'auth.session': 'Signed in with password',
   'auth.passwordPlaceholder': 'Admin password', 'auth.tokenHint': 'Paste an admin API token (xra-…) created under Admin access.',
@@ -272,7 +293,6 @@ const en = {
   'settings.compactTitle': 'Compact the database?', 'settings.compactMsg': 'Free pages inside the database file are returned to the disk, in small steps in the background so requests are not held up. With many gigabytes of free space this can take hours; new logs reuse free space in the meantime anyway.',
   'settings.compactVacuumWarn': 'This database was created before v0.3: the first compaction runs a full VACUUM, which blocks writes (including new request logs) until it finishes — on a large database this can take many minutes. Later compactions are incremental.',
   'settings.compacted': '{freed} reclaimed · {before} → {after}', 'settings.purgedFreed': '{n} logs deleted · {freed} freed',
-  'settings.purgeBg': 'Runs in the background in small batches.',
   'settings.goHeap': 'Go heap', 'settings.goSys': 'Go memory (OS)', 'settings.goSysHint': 'Memory obtained from the OS by the Go runtime', 'settings.goroutines': 'Goroutines',
   // ---- v0.4.0 information architecture ----
   'nav.data': 'Data & storage',
@@ -282,10 +302,6 @@ const en = {
   'nav.group.gateway': 'Gateway',
   'nav.group.system': 'System',
   'nav.group.docs': 'Docs',
-  'page.data.subtitle': 'Database size, log retention and clean-up',
-  'page.access.subtitle': 'Who can manage this gateway',
-  'page.docsClient.subtitle': 'Connect an application with a client token',
-  'page.docsAdmin.subtitle': 'Script this console over the admin API',
   'account.admin': 'Administrator',
   'account.changePassword': 'Change password',
   'account.viaToken': 'Signed in with an admin API token',
@@ -310,13 +326,13 @@ const en = {
   'onboard.request.title': 'Send the first request',
   'onboard.request.desc': 'Point an OpenAI or Anthropic SDK at this gateway.',
   'onboard.request.btn': 'Integration guide',
-  'access.tokensIntro': 'Long-lived xra- tokens for scripts and CI; they can do everything this console can.',
+  'access.tokensIntro': 'For scripts that call the admin API; same permissions as the administrator.',
   'access.viewReference': 'Admin API reference →',
   'data.retention': 'Log retention',
   'data.retentionCard': 'Retention & disk warning',
   'data.disk': 'Data disk', 'data.diskUsed': '{used} of {total} used', 'data.diskFree': '{v} free',
   'data.diskWarnAt': 'warning at {p}%', 'data.diskUnknown': 'Disk usage is not available on this system',
-  'data.retentionSub': 'Older logs are deleted daily. Aggregated stats are kept.',
+  'data.retentionSub': 'Request logs older than the retention period are deleted automatically; stats and operation records are not affected.',
   'data.retentionHint': '0 = keep forever',
   'data.daysUnit': 'days',
   'data.purge': 'Delete logs',
@@ -354,14 +370,33 @@ const zh = {
   'app.unreachable': '无法连接到服务器',
 
   'nav.overview': '概览', 'nav.keys': '上游密钥', 'nav.tokens': '客户端令牌', 'nav.models': '模型与价格',
-  'nav.logs': '请求日志', 'nav.settings': '设置', 'nav.docs': '接入指南', 'nav.menu': '菜单',
-  'page.overview.subtitle': '流量、花费与上游密钥池健康状况一览',
-  'page.keys.subtitle': '池中的 xAI API 密钥（xai-…）',
-  'page.tokens.subtitle': '供应用调用 /v1/* 的凭据（sk-xr-…）',
-  'page.models.subtitle': '模型目录与计费所用的价格表',
-  'page.logs.subtitle': '每一次代理请求，包含请求体与上游尝试记录',
-  'page.settings.subtitle': '网关如何转发、重试、记录和计费',
-  'page.docs.subtitle': '用客户端令牌接入你的应用',
+  'nav.logs': '日志', 'nav.settings': '设置', 'nav.docs': '接入指南', 'nav.menu': '菜单',
+  // ---- v0.4.1 客户端令牌额度（pm-spec 8）----
+  'tokens.unlimitedState': '不限额',
+  'q.adjust': '调整额度', 'q.history': '额度记录', 'q.title': '调整 {name} 的额度', 'q.now': '当前', 'q.state': '额度类型',
+  'q.limited': '限额', 'q.unlimited': '不限额', 'q.direction': '方向', 'q.increase': '增加', 'q.decrease': '减少',
+  'q.amount': '金额', 'q.balance': '可用余额', 'q.reason': '原因', 'q.reasonPh': '例如：月度充值',
+  'q.ro': '额度 {q}，已用 {used}，剩余 {left}', 'q.roUnlimited': '不限额，已用 {used}', 'q.exhaustedLine': '额度用尽',
+  'q.errAmountReq': '请输入金额。', 'q.errAmountFmt': '请输入金额，最多 4 位小数。', 'q.errAmountPos': '金额必须大于 $0。',
+  'q.errMaxDec': '最多可减少 {max}（已用 {used}）。', 'q.errReason': '请填写原因。', 'q.errAmountCreate': '请输入额度，最多 4 位小数。',
+  'q.toUsed': '减到与已用相等（−{v}）', 'q.unlimitedWarn': '切换后，该令牌将不再受额度限制。',
+  'q.alreadyUnlimited': '该令牌已经是不限额。',
+  'q.preview': '额度 {a} → {b}，剩余 {ra} → {rb}', 'q.willExhaust': '。剩余为 $0，令牌会立即变为额度用尽。',
+  'q.previewLimited': '额度将设为 {q}（已用 {used} + 可用余额 {x}）。', 'q.previewUnlimited': '原额度 {q} 将不再生效。',
+  'q.btnIncreaseN': '增加 {v}', 'q.btnDecreaseN': '减少 {v}', 'q.btnLimited': '切换为限额', 'q.btnUnlimited': '切换为不限额',
+  'q.confirmUnlimitedTitle': '将 {name} 切换为不限额？', 'q.confirmUnlimitedMsg': '该令牌将不再受额度限制（原额度 {q}）。这次切换会记入额度记录。',
+  'q.toastIncrease': '已增加 {v} 额度（{a} → {b}）', 'q.toastDecrease': '已减少 {v} 额度（{a} → {b}）',
+  'q.toastLimited': '已切换为限额，额度 {q}', 'q.toastUnlimited': '已切换为不限额',
+  'q.h.time': '时间', 'q.h.action': '动作', 'q.h.amount': '金额', 'q.h.beforeAfter': '调整前 → 后', 'q.h.before': '调整前额度', 'q.h.after': '调整后额度',
+  'q.h.used': '当时已用', 'q.h.actor': '操作者', 'q.h.reason': '原因',
+  'q.act.initial': '创建', 'q.act.increase': '增加', 'q.act.decrease': '减少', 'q.act.set_limited': '切换为限额',
+  'q.act.set_unlimited': '切换为不限额', 'q.act.migrate': '迁移',
+  'q.actor.system': '系统', 'q.actor.password': '密码会话', 'q.actor.adminToken': '管理 API 令牌',
+  'q.code.pre': '升级前已有的额度', 'q.code.reset': '历史上的“重置用量”折算为一次增加',
+  'q.noRecords': '还没有额度记录。', 'q.total': '发放合计 {g} = 当前额度 {q}', 'q.totalUnlimited': '当前不限额，发放合计 {g}',
+  'q.viewInLogs': '在日志中查看 →', 'q.createHint': '限额可以为 $0，此时请求会被拦截。',
+  'err.quota_is_adjustment_only': '额度只能通过“调整额度”修改。', 'err.reason_required': '请填写原因。',
+  'err.invalid_quota': '无法这样调整额度：{detail}',
 
   'auth.signIn': '登录', 'auth.password': '密码', 'auth.adminToken': '管理 API 令牌', 'auth.session': '已使用密码登录',
   'auth.passwordPlaceholder': '管理员密码', 'auth.tokenHint': '粘贴在「管理访问」中创建的管理 API 令牌（xra-…）。',
@@ -569,7 +604,7 @@ const zh = {
   'keys.bulkTest': '测试', 'keys.bulkTestTitle': '测试选中的 {n} 个密钥？', 'keys.bulkDeleteTitle': '删除 {n} 个密钥？', 'keys.bulkDeleteMsg': '选中的密钥将从密钥池中移除，历史日志会保留。',
   // tokens
   'tokens.enabledToast': '已启用令牌「{name}」', 'tokens.disabledToast': '已禁用令牌「{name}」，其请求将被拒绝',
-  'tokens.exhausted': '额度已用完', 'tokens.loadingModels': '正在加载模型建议…',
+  'tokens.exhausted': '额度用尽', 'tokens.loadingModels': '正在加载模型建议…',
   'tokens.dupName': '已存在名为「{name}」的客户端令牌。日志和统计按名称和前缀显示令牌，建议使用唯一名称。',
   'tokens.dupInList': '另一个令牌也使用了这个名称', 'tokens.dupTitle': '令牌名称重复', 'tokens.dupConfirm': '「{name}」已被其他令牌使用，仍然创建吗？', 'tokens.dupContinue': '仍使用此名称',
   // models
@@ -619,7 +654,6 @@ const zh = {
   'settings.compactTitle': '压缩数据库？', 'settings.compactMsg': '数据库文件中的空闲页将归还给磁盘。这一步在后台分小步执行，不影响请求转发；空闲空间有几十 GB 时可能需要数小时。在此期间，新日志本来就会复用这些空闲空间。',
   'settings.compactVacuumWarn': '此数据库创建于 v0.3 之前：首次压缩会执行完整 VACUUM，期间会阻塞写入（包括新的请求日志），大型数据库可能需要很多分钟。之后的压缩为增量方式。',
   'settings.compacted': '回收 {freed} · {before} → {after}', 'settings.purgedFreed': '已删除 {n} 条日志 · 释放 {freed}',
-  'settings.purgeBg': '在后台分小批执行。',
   'settings.goHeap': 'Go 堆内存', 'settings.goSys': 'Go 内存（系统）', 'settings.goSysHint': 'Go 运行时从操作系统获取的内存', 'settings.goroutines': 'Goroutine 数',
   // ---- v0.4.0 information architecture ----
   'nav.data': '数据与存储',
@@ -629,10 +663,6 @@ const zh = {
   'nav.group.gateway': '网关',
   'nav.group.system': '系统',
   'nav.group.docs': '文档',
-  'page.data.subtitle': '数据库大小、日志保留与清理',
-  'page.access.subtitle': '谁可以管理这台网关',
-  'page.docsClient.subtitle': '用客户端令牌接入你的应用',
-  'page.docsAdmin.subtitle': '通过管理 API 用脚本操作本控制台',
   'account.admin': '管理员',
   'account.changePassword': '修改密码',
   'account.viaToken': '已使用管理 API 令牌登录',
@@ -657,13 +687,13 @@ const zh = {
   'onboard.request.title': '发送第一个请求',
   'onboard.request.desc': '把 OpenAI 或 Anthropic SDK 指向本网关。',
   'onboard.request.btn': '接入指南',
-  'access.tokensIntro': '供脚本和 CI 使用的长期 xra- 令牌，拥有与本控制台相同的全部权限。',
+  'access.tokensIntro': '用于脚本调用管理 API，权限与管理员相同。',
   'access.viewReference': '管理 API 参考 →',
   'data.retention': '日志保留',
   'data.retentionCard': '日志保留与磁盘告警',
   'data.disk': '数据盘', 'data.diskUsed': '已用 {used} / 共 {total}', 'data.diskFree': '剩余 {v}',
   'data.diskWarnAt': '{p}% 时告警', 'data.diskUnknown': '当前系统无法获取磁盘用量',
-  'data.retentionSub': '更早的日志每天自动删除，统计数据保留。',
+  'data.retentionSub': '超过保留天数的请求日志会自动删除，统计和操作记录不受影响。',
   'data.retentionHint': '0 = 永久保留',
   'data.daysUnit': '天',
   'data.purge': '清理日志',
@@ -698,7 +728,10 @@ const zh = {
 
 // Page-specific dictionaries are kept in their own modules and merged here;
 // keys defined in this file win.
-const DICTS = { en: { ...lists.en, ...en }, zh: { ...lists.zh, ...zh } };
+const DICTS = {
+  en: { ...lists.en, ...en, ...logsI18n.en, ...miscI18n.en },
+  zh: { ...lists.zh, ...zh, ...logsI18n.zh, ...miscI18n.zh },
+};
 
 function detect() {
   try { const v = localStorage.getItem(KEY); if (v === 'en' || v === 'zh') return v; } catch { /* ignore */ }

@@ -55,6 +55,13 @@ export function fmtInt(n) { return isNum(n) ? Math.round(n).toLocaleString(local
 
 export function fmtCompact(n) {
   if (!isNum(n)) return '—';
+  if (getLang() === 'zh') {
+    // 中文界面：小于 1 万写完整数字，1 万起用“万”（1 位小数），1 亿起用“亿”（2 位小数）。
+    const a = Math.abs(n);
+    if (a < 1e4) return Number.isInteger(n) ? fmtInt(n) : String(Math.round(n * 100) / 100);
+    if (a < 1e8) return `${(n / 1e4).toFixed(1)} 万`;
+    return `${(n / 1e8).toFixed(2)} 亿`;
+  }
   if (Math.abs(n) < 1000) return String(Math.round(n * 100) / 100);
   return new Intl.NumberFormat(locale(), { notation: 'compact', maximumFractionDigits: 1 }).format(n);
 }
@@ -81,6 +88,11 @@ export function fmtPrice(v) { return isNum(v) && v > 0 ? fmtUSD(v) : '—'; }
 
 export function fmtMs(ms) {
   if (!isNum(ms)) return '—';
+  if (getLang() === 'zh') {
+    if (ms < 1000) return `${Math.round(ms)} 毫秒`;
+    if (ms < 60000) return `${(ms / 1000).toFixed(1)} 秒`;
+    return `${Math.floor(ms / 60000)} 分 ${Math.round((ms % 60000) / 1000)} 秒`;
+  }
   if (ms < 1000) return `${Math.round(ms)} ms`;
   if (ms < 60000) return `${(ms / 1000).toFixed(ms < 10000 ? 2 : 1)} s`;
   const m = Math.floor(ms / 60000), sec = Math.round((ms % 60000) / 1000);

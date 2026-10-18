@@ -151,3 +151,22 @@ tr:hover .inline-num, .inline-num:hover { border-color: var(--border); backgroun
   .storage-disk { padding: 12px 14px; }
   .storage-disk-head .s { margin-left: 0; flex-basis: 100%; }
 }
+
+/* ---- v0.4.1 client token quota: adjust dialog, quota records ---- */
+.field-error { color: var(--danger); font-size: 12px; margin-top: 4px; }
+.link-btn { background: none; border: 0; padding: 0; margin-top: 4px; color: var(--accent-text); font-size: 12px; cursor: pointer; text-align: left; }
+.link-btn:hover { text-decoration: underline; }
+.q-form { gap: 14px; }
+.q-now { display: flex; gap: 8px; flex-wrap: wrap; font-size: 13px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--surface-2); }
+.q-now-v { font-variant-numeric: tabular-nums; }
+.q-preview { font-size: 13px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--text); font-variant-numeric: tabular-nums; }
+.q-preview[hidden] { display: none; }
+.q-reason-foot { align-items: flex-start; }
+.q-reason-foot .field-error { margin-top: 0; }
+.quota-ro { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; }
+.quota-block .section-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.q-history { gap: 10px; }
+.q-table { font-size: 12.5px; }
+.q-table td, .q-table th { padding: 7px 8px; vertical-align: top; }
+.q-table .q-reason { min-width: 120px; max-width: 220px; word-break: break-word; }
+.q-total { display: flex; align-items: center; gap: 6px; font-size: 13px; font-variant-numeric: tabular-nums; }

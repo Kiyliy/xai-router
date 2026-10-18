@@ -42,10 +42,6 @@ function titleKey(name, params) {
   if (name === 'docs') return docsTab(params) === 'admin' ? 'nav.docsAdmin' : 'nav.docsClient';
   return `nav.${name}`;
 }
-function subtitleKey(name, params) {
-  if (name === 'docs') return docsTab(params) === 'admin' ? 'page.docsAdmin.subtitle' : 'page.docsClient.subtitle';
-  return `page.${name}.subtitle`;
-}
 
 // Old links (v0.3.x) -> new pages.
 function redirectFor(name, params) {
@@ -103,7 +99,6 @@ function route() {
   const sh = state.shell;
   markNav(name, params);
   sh.title.textContent = t(titleKey(name, params));
-  sh.subtitle.textContent = t(subtitleKey(name, params));
   document.title = `${t(titleKey(name, params))} · xai-router`;
   sh.actions.replaceChildren();
   sh.shell.classList.remove('sidebar-open');
@@ -175,7 +170,6 @@ function renderShell() {
       accountButton(),
       h('div', { class: 'sidebar-tools' }, prefsButtons())));
   const title = h('h1', { class: 'topbar-title' });
-  const subtitle = h('p', { class: 'topbar-subtitle' });
   const actions = h('div', { class: 'topbar-actions' });
   const banner = h('div', { class: 'banner-slot' });
   const content = h('div', { class: 'content' });
@@ -184,12 +178,12 @@ function renderShell() {
     banner,
     h('header', { class: 'topbar' },
       h('button', { class: 'btn btn-ghost btn-icon hamburger', 'aria-label': t('nav.menu'), onclick: () => shell.classList.toggle('sidebar-open') }, icon('menu', 20)),
-      h('div', { class: 'topbar-heading' }, title, subtitle),
+      h('div', { class: 'topbar-heading' }, title),
       actions),
     content);
   mount(shell, sidebar, h('div', { class: 'sidebar-backdrop', onclick: () => shell.classList.remove('sidebar-open') }), main);
   mount(app, shell);
-  state.shell = { shell, nav, title, subtitle, actions, content, banner, main };
+  state.shell = { shell, nav, title, actions, content, banner, main };
   const topbar = main.querySelector('.topbar');
   const setTopVar = () => document.documentElement.style.setProperty('--topbar-real', `${topbar.offsetHeight}px`);
   if (state.topRO) state.topRO.disconnect();
