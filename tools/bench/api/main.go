@@ -128,6 +128,26 @@ func main() {
 		{"keys list", "/api/v1/keys"},
 		{"tokens list", "/api/v1/tokens"},
 	}
+	// The unified log (v0.4.1, acceptance U27): requests merged with audit
+	// and system events. Deep pages use a cursor 20 days back.
+	deep := fmt.Sprintf("%d.0.%d", time.Now().Add(-20*24*time.Hour).UnixMilli(), maxID)
+	mixed := []q{
+		{"type=audit", "/api/v1/logs?type=audit"},
+		{"type=system", "/api/v1/logs?type=system"},
+		{"type=audit,system", "/api/v1/logs?type=audit,system"},
+		{"type=audit, action prefix", "/api/v1/logs?type=audit&action=token.quota_"},
+		{"mixed page 1", "/api/v1/logs?type=request,audit,system"},
+		{"mixed page 1, 200/page", "/api/v1/logs?type=request,audit,system&page_size=200"},
+		{"mixed problems", "/api/v1/logs?type=request,audit,system&problems=1"},
+		{"mixed deep cursor (20 d back)", "/api/v1/logs?type=request,audit,system&cursor=" + deep},
+		{"mixed problems, deep cursor", "/api/v1/logs?type=request,audit,system&problems=1&cursor=" + deep},
+		{"mixed+key", fmt.Sprintf("/api/v1/logs?type=request,audit,system&key_id=%d", k1)},
+		{"mixed+key, deep cursor", fmt.Sprintf("/api/v1/logs?type=request,audit,system&key_id=%d&cursor=%s", k1, deep)},
+		{"mixed+token", fmt.Sprintf("/api/v1/logs?type=request,audit,system&token_id=%d", t1)},
+		{"mixed+key+problems", fmt.Sprintf("/api/v1/logs?type=request,audit,system&key_id=%d&problems=1", k1)},
+		{"system+key, deep cursor", fmt.Sprintf("/api/v1/logs?type=system&key_id=%d&cursor=%s", k1, deep)},
+		{"mixed q=text", "/api/v1/logs?type=request,audit,system&q=invalid"},
+	}
 	stats := []q{}
 	for _, rg := range []string{"7d", "30d"} {
 		stats = append(stats,
@@ -181,6 +201,7 @@ func main() {
 		}
 	}
 	run("Log list (P1)", list, *limit)
+	run("Unified log (U27)", mixed, *limit)
 	run("Statistics (P2)", stats, *limit)
 
 	// Log detail: random ids, plus the largest bodies.
@@ -194,6 +215,21 @@ func main() {
 		}
 		ds = append(ds, d)
 	}
+	// Event detail.
+	_, eb, _ := call("/api/v1/logs?type=audit,system&page_size=1")
+	var ev struct{ Data []struct{ ID int64 } }
+	_ = json.Unmarshal(eb, &ev)
+	var eds []time.Duration
+	if len(ev.Data) > 0 {
+		for i := 0; i < *n*5; i++ {
+			id := 1 + r.Int64N(ev.Data[0].ID)
+			st, _, d := call(fmt.Sprintf("/api/v1/events/%d", id))
+			if st != 200 && st != 404 {
+				log.Fatalf("event %d: %d", id, st)
+			}
+			eds = append(eds, d)
+		}
+	}
 	p95 := pct(ds, 0.95)
 	if p95 >= *dlimit {
 		fails++
@@ -201,6 +237,14 @@ func main() {
 	fmt.Printf("\n### Log detail (P1)\n\n| query | runs | p50 | p95 | max | ok |\n|---|---|---|---|---|---|\n")
 	fmt.Printf("| random log detail | %d | %v | %v | %v | %s |\n", len(ds), pct(ds, 0.5).Round(time.Millisecond),
 		p95.Round(time.Millisecond), pct(ds, 1).Round(time.Millisecond), map[bool]string{true: "✅", false: "❌"}[p95 < *dlimit])
+	if len(eds) > 0 {
+		ep := pct(eds, 0.95)
+		if ep >= *dlimit {
+			fails++
+		}
+		fmt.Printf("| random event detail | %d | %v | %v | %v | %s |\n", len(eds), pct(eds, 0.5).Round(time.Millisecond),
+			ep.Round(time.Millisecond), pct(eds, 1).Round(time.Millisecond), map[bool]string{true: "✅", false: "❌"}[ep < *dlimit])
+	}
 	_ = url.QueryEscape
 	_ = strings.Contains
 	fmt.Printf("\n%d queries over the limit\n", fails)

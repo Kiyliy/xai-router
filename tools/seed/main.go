@@ -27,6 +27,7 @@ func main() {
 	tokens := flag.Int("tokens", 30, "number of client tokens")
 	bigPct := flag.Float64("big", 1, "percent of logs with a 100-200 KB response body")
 	batch := flag.Int("batch", 1000, "logs per transaction")
+	events := flag.Int("events", 0, "only add this many audit and system events to an existing database (no logs)")
 	flag.Parse()
 
 	ctx := context.Background()
@@ -35,6 +36,10 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
+	if *events > 0 {
+		seedEvents(ctx, db, *events, *days)
+		return
+	}
 	if err := billing.SeedBuiltin(ctx, db); err != nil {
 		log.Fatal(err)
 	}
@@ -151,4 +156,71 @@ func main() {
 			}
 		}
 	}
+}
+
+// seedEvents adds n audit and system events spread over the last days,
+// about the database's existing keys and tokens.
+func seedEvents(ctx context.Context, db *store.DB, n, days int) {
+	keys, _, err := db.ListKeys(ctx, store.KeyFilter{Limit: 1000})
+	if err != nil {
+		log.Fatal(err)
+	}
+	toks, _, err := db.ListTokens(ctx, "", 1000, 0)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if len(keys) == 0 || len(toks) == 0 {
+		log.Fatal("seed logs (keys and tokens) first")
+	}
+	r := rand.New(rand.NewPCG(3, 4))
+	end := time.Now().UnixMilli()
+	start := end - int64(days)*86400_000
+	step := float64(end-start) / float64(n)
+	buf := make([]*store.Event, 0, 1000)
+	for i := 0; i < n; i++ {
+		e := &store.Event{CreatedAt: start + int64(float64(i)*step), Level: store.LevelInfo, IP: "198.51.100.7",
+			Actor: "password", ActorName: "admin", Kind: store.EventAudit}
+		k, t := keys[r.IntN(len(keys))], toks[r.IntN(len(toks))]
+		key := func() { e.TargetType, e.TargetID, e.TargetName = "key", fmt.Sprint(k.ID), k.Name }
+		tok := func() { e.TargetType, e.TargetID, e.TargetName = "token", fmt.Sprint(t.ID), t.Name }
+		switch p := r.IntN(100); {
+		case p < 30:
+			e.Action = "key.update"
+			key()
+			e.Detail = map[string]any{"changes": map[string]any{"priority": map[string]any{"before": r.IntN(5), "after": r.IntN(5)}}}
+		case p < 45:
+			e.Action = "token.quota_increase"
+			tok()
+			e.Detail = map[string]any{"amount_ticks": 10_000_000_000, "reason": "top-up"}
+		case p < 55:
+			e.Action = "key.test"
+			key()
+			e.Detail = map[string]any{"result": map[string]any{"ok": true, "status": "ok"}}
+		case p < 60:
+			e.Action, e.Level = "auth.login_failed", store.LevelWarn
+			e.Actor, e.ActorName = "anonymous", ""
+		case p < 80:
+			e.Kind, e.Actor, e.ActorName, e.Action, e.Level = store.EventSystem, "system", "system", "key.cooldown", store.LevelWarn
+			key()
+			e.RequestID = secret.Random(24)
+			e.Detail = map[string]any{"reason": "rate limited", "seconds": 60}
+		case p < 85:
+			e.Kind, e.Actor, e.ActorName, e.Action, e.Level = store.EventSystem, "system", "system", "key.auto_disable", store.LevelError
+			key()
+			e.RequestID = secret.Random(24)
+			e.Detail = map[string]any{"reason": "invalid API key"}
+		default:
+			e.Kind, e.Actor, e.ActorName, e.Action = store.EventSystem, "system", "system", "model.sync"
+			e.TargetType = "model"
+			e.Detail = map[string]any{"scheduled": true, "result": map[string]any{"ok": true, "total": 40}}
+		}
+		buf = append(buf, e)
+		if len(buf) == cap(buf) || i == n-1 {
+			if err := db.AddEvents(ctx, buf); err != nil {
+				log.Fatal(err)
+			}
+			buf = buf[:0]
+		}
+	}
+	log.Printf("added %d events", n)
 }

@@ -47,6 +47,21 @@ func (db *DB) AddEvent(ctx context.Context, e *Event) error {
 	return insertEvent(ctx, db.W, e)
 }
 
+// AddEvents appends events in one transaction (seeding and imports).
+func (db *DB) AddEvents(ctx context.Context, es []*Event) error {
+	tx, err := db.W.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, e := range es {
+		if err := insertEvent(ctx, tx, e); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
