@@ -265,6 +265,7 @@ func (p *Pool) Report(id int64, o Outcome) Verdict {
 	}
 	now := p.now()
 	var persist func()
+	var disabledEvent func()
 	switch v.Action {
 	case ActionSuccess, ActionReturn:
 		e.consecFails = 0
@@ -285,6 +286,10 @@ func (p *Pool) Report(id int64, o Outcome) Verdict {
 			}
 		}
 	case ActionDisable:
+		if !e.key.AutoDisabled {
+			k := *e.key
+			disabledEvent = func() { p.disabledEvent(&k, v.Reason) }
+		}
 		e.key.AutoDisabled = true
 		e.key.StatusReason = v.Reason
 		persist = p.persistState(e)
@@ -320,7 +325,22 @@ func (p *Pool) Report(id int64, o Outcome) Verdict {
 	if persist != nil {
 		persist()
 	}
+	if disabledEvent != nil {
+		disabledEvent()
+	}
 	return v
+}
+
+// disabledEvent records that the gateway took a key out of the pool.
+func (p *Pool) disabledEvent(k *store.Key, reason string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	e := &store.Event{Kind: store.EventSystem, Action: "key.auto_disable", Actor: "system", ActorName: "system",
+		TargetType: "key", TargetID: strconv.FormatInt(k.ID, 10), TargetName: k.Name,
+		Detail: map[string]any{"reason": reason}}
+	if err := p.db.AddEvent(ctx, e); err != nil {
+		p.log.Error("record key disable", "key_id", k.ID, "err", err)
+	}
 }
 
 func (p *Pool) verify(k *store.Key) {
@@ -543,11 +563,22 @@ func (p *Pool) ResetKey(ctx context.Context, id int64) error {
 // Disable marks a key auto-disabled (used by health checks).
 func (p *Pool) Disable(ctx context.Context, id int64, reason string) error {
 	p.mu.Lock()
+	var was *store.Key
 	if e := p.entries[id]; e != nil {
+		if !e.key.AutoDisabled {
+			k := *e.key
+			was = &k
+		}
 		e.key.AutoDisabled, e.key.StatusReason = true, reason
 	}
 	p.mu.Unlock()
-	return p.db.SetKeyState(ctx, id, true, reason, 0)
+	if err := p.db.SetKeyState(ctx, id, true, reason, 0); err != nil {
+		return err
+	}
+	if was != nil {
+		p.disabledEvent(was, reason)
+	}
+	return nil
 }
 
 // AnyKey returns an enabled key for internal calls (model sync), preferring

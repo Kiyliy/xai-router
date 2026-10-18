@@ -2,6 +2,7 @@ package admin
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -81,9 +82,6 @@ func (in *tokenInput) apply(t *store.Token) string {
 	if in.Notes != nil {
 		t.Notes = *in.Notes
 	}
-	if in.ResetUsage {
-		t.UsedTicks = 0
-	}
 	if t.Name == "" {
 		return "name is required"
 	}
@@ -152,6 +150,19 @@ func (s *Server) updateToken(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
+	// The quota is set when a token is created and afterwards only adjusted
+	// (POST /tokens/{id}/quota), which keeps a record of every change; usage
+	// is never reset.
+	if in.QuotaUSD != nil {
+		writeErr(w, http.StatusBadRequest, "quota_not_editable",
+			"quota_usd can only be set when creating a token; adjust it with POST /api/v1/tokens/{id}/quota")
+		return
+	}
+	if in.ResetUsage {
+		writeErr(w, http.StatusBadRequest, "reset_removed",
+			"resetting usage was removed; raise the quota with POST /api/v1/tokens/{id}/quota instead")
+		return
+	}
 	t, err := s.DB.GetToken(r.Context(), id)
 	if err != nil {
 		s.storeErr(w, err, "token")
@@ -165,17 +176,62 @@ func (s *Server) updateToken(w http.ResponseWriter, r *http.Request) {
 		s.storeErr(w, err, "token")
 		return
 	}
-	if in.ResetUsage {
-		if err := s.DB.ResetTokenUsage(r.Context(), t.ID); err != nil {
-			s.internalErr(w, err)
-			return
-		}
-		s.Quota.Reset(t.ID)
-	}
 	if fresh, err := s.DB.GetToken(r.Context(), t.ID); err == nil {
 		t = fresh
 	}
 	writeJSON(w, http.StatusOK, tokenJSON(t))
+}
+
+// adjustQuota raises or lowers a token's quota (or makes it unlimited) and
+// records the change atomically as an operation event.
+func (s *Server) adjustQuota(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		DeltaUSD  *float64 `json:"delta_usd"`
+		Unlimited bool     `json:"unlimited"`
+		Note      string   `json:"note"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if (in.DeltaUSD == nil) == !in.Unlimited {
+		writeErr(w, http.StatusBadRequest, "invalid_quota", "send either delta_usd (positive to add, negative to subtract) or unlimited: true")
+		return
+	}
+	var delta int64
+	if in.DeltaUSD != nil {
+		delta = billing.USDToTicks(*in.DeltaUSD)
+	}
+	if len(in.Note) > 500 {
+		in.Note = in.Note[:500]
+	}
+	a, an := actor(credFrom(r))
+	e := &store.Event{Kind: store.EventOperation, Action: "token.quota_adjust", Actor: a, ActorName: an, IP: s.clientIP(r),
+		Detail: map[string]any{"note": in.Note, "unlimited": in.Unlimited}}
+	qc, err := s.DB.AdjustTokenQuota(r.Context(), id, delta, in.Unlimited, e)
+	switch {
+	case errors.Is(err, store.ErrQuotaInvalid):
+		writeErr(w, http.StatusBadRequest, "invalid_quota",
+			"the quota must stay above zero (subtract less, or make the token unlimited); an unlimited token can only be given a positive limit")
+		return
+	case err != nil:
+		s.storeErr(w, err, "token")
+		return
+	}
+	if o := opFrom(r); o != nil {
+		o.Recorded = true
+	}
+	t, err := s.DB.GetToken(r.Context(), id)
+	if err != nil {
+		s.storeErr(w, err, "token")
+		return
+	}
+	out := tokenJSON(t)
+	out["quota_change"] = map[string]any{"before_usd": usd(qc.Before), "after_usd": usd(qc.After), "event_id": e.ID}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) deleteToken(w http.ResponseWriter, r *http.Request) {

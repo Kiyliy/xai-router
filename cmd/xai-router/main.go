@@ -103,6 +103,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	lifecycle := func(action string) {
+		_ = a.DB.AddEvent(context.Background(), &store.Event{Kind: store.EventSystem, Action: action, Actor: "system",
+			ActorName: "system", Detail: map[string]any{"version": version, "commit": commit}})
+	}
+	lifecycle("system.start")
 	if a.GeneratedPassword != "" {
 		banner := "\n" +
 			"  ┌──────────────────────────────────────────────────────────┐\n" +
@@ -151,6 +156,7 @@ func run() error {
 	// WebSocket sessions are hijacked connections that Shutdown does not
 	// track: close them and wait for their logs.
 	a.Proxy.CloseWebSockets(shutCtx)
+	lifecycle("system.stop")
 	if err := a.Close(); err != nil {
 		return err
 	}

@@ -275,8 +275,15 @@ func (a *App) syncLoop(ctx context.Context) {
 		}
 		a.Quota.ExpireHolds(time.Now())
 		if h := a.Settings.Get().ModelSyncIntervalHours; h > 0 && a.syncDue(ctx, time.Duration(h)*time.Hour) {
-			if _, err := a.Admin.RunSync(ctx, false); err != nil {
+			res, err := a.Admin.RunSync(ctx, false)
+			switch {
+			case err != nil:
 				a.Log.Debug("scheduled model sync skipped", "reason", err)
+			case !res.OK || len(res.Added) > 0 || len(res.Updated) > 0:
+				// Only syncs that changed prices or failed are worth a permanent record.
+				_ = a.DB.AddEvent(ctx, &store.Event{Kind: store.EventSystem, Action: "model.sync", Actor: "system",
+					ActorName: "system", TargetType: "model", Detail: map[string]any{"ok": res.OK, "error": res.Error,
+						"added": res.Added, "updated": res.Updated}})
 			}
 		}
 		t.Reset(10 * time.Minute)

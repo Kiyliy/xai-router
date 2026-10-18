@@ -325,6 +325,28 @@ paths:
       summary: Replace the secret of a client token
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TokenWithSecret" } } } }
+  /api/v1/tokens/{id}/quota:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    post:
+      tags: [Tokens]
+      summary: Adjust a client token's quota
+      description: "The quota is set when a token is created and afterwards only adjusted here; usage is never reset. Each adjustment is recorded atomically as an operation event (token.quota_adjust) with the amounts before and after. Send either delta_usd (positive adds, negative subtracts; the quota must stay above zero; an unlimited token given a positive delta becomes limited to it) or unlimited: true."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                delta_usd: { type: number, example: 5 }
+                unlimited: { type: boolean }
+                note: { type: string, description: "Recorded with the event (max 500 characters)" }
+      responses:
+        "200":
+          description: The token, plus quota_change { before_usd, after_usd, event_id }
+          content: { application/json: { schema: { $ref: "#/components/schemas/Token" } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
 
   /api/v1/admin-tokens:
     get:
@@ -601,6 +623,33 @@ paths:
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/events:
+    get:
+      tags: [System]
+      summary: Event log (operations and system events)
+      description: "Append-only and kept forever. operation = an administrator changed something (actor password or admin_token:<id>; request fields with secrets redacted); system = the gateway acted on its own (key.auto_disable, logs.retention, model.sync, system.start/stop/migrate, auth.login_blocked, disk.low). Request traffic is in /api/v1/logs."
+      parameters:
+        - { name: kind, in: query, schema: { type: string, enum: [operation, system] } }
+        - { name: action, in: query, description: "Exact action, or a prefix ending in a dot (token.)", schema: { type: string } }
+        - { name: target_type, in: query, schema: { type: string, example: token } }
+        - { name: target_id, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string } }
+        - { name: to, in: query, schema: { type: string } }
+        - { name: q, in: query, schema: { type: string } }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Event" } }
+                  total: { type: integer }
+                  page: { type: integer }
+                  page_size: { type: integer }
   /api/v1/system/info:
     get:
       tags: [System]
@@ -669,6 +718,20 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
   schemas:
+    Event:
+      type: object
+      properties:
+        id: { type: integer }
+        created_at: { type: string, format: date-time }
+        kind: { type: string, enum: [operation, system] }
+        action: { type: string, example: token.quota_adjust }
+        actor: { type: string, example: "admin_token:3" }
+        actor_name: { type: string }
+        target_type: { type: string, example: token }
+        target_id: { type: string }
+        target_name: { type: string }
+        ip: { type: string }
+        detail: { type: object, additionalProperties: true }
     Job:
       type: object
       properties:
@@ -796,11 +859,10 @@ components:
       properties:
         name: { type: string }
         enabled: { type: boolean }
-        quota_usd: { type: number }
+        quota_usd: { type: number, description: "Create only (0 = unlimited). Afterwards adjust it with POST /api/v1/tokens/{id}/quota; PATCH with quota_usd returns 400 quota_not_editable" }
         expires_at: { type: string, format: date-time, nullable: true, description: null or empty = never }
         allowed_models: { type: array, items: { type: string } }
         notes: { type: string }
-        reset_usage: { type: boolean, description: PATCH only — set used_usd back to 0 }
     TokenWithSecret:
       allOf:
         - $ref: "#/components/schemas/Token"

@@ -386,6 +386,31 @@ ALTER TABLE models RENAME COLUMN image_input_ticks TO image_token_ticks;
 ALTER TABLE request_logs ADD COLUMN token_prefix TEXT NOT NULL DEFAULT '';
 DROP TABLE stats_hourly;
 `,
+	// v9 (v0.4.1): the event log: what administrators did (operation) and
+	// what the gateway decided on its own (system). Kept forever and
+	// append-only: the triggers refuse any UPDATE or DELETE.
+	`
+CREATE TABLE events (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at  INTEGER NOT NULL,
+  kind        TEXT    NOT NULL,
+  action      TEXT    NOT NULL,
+  actor       TEXT    NOT NULL DEFAULT '',
+  actor_name  TEXT    NOT NULL DEFAULT '',
+  target_type TEXT    NOT NULL DEFAULT '',
+  target_id   TEXT    NOT NULL DEFAULT '',
+  target_name TEXT    NOT NULL DEFAULT '',
+  ip          TEXT    NOT NULL DEFAULT '',
+  detail      TEXT    NOT NULL DEFAULT '{}'
+);
+CREATE INDEX idx_events_created ON events(created_at);
+CREATE INDEX idx_events_kind ON events(kind, created_at);
+CREATE INDEX idx_events_target ON events(target_type, target_id, created_at);
+CREATE TRIGGER events_append_only_update BEFORE UPDATE ON events
+BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
+CREATE TRIGGER events_append_only_delete BEFORE DELETE ON events
+BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
+`,
 }
 
 func (db *DB) migrate(ctx context.Context) error {
@@ -423,6 +448,10 @@ func (db *DB) migrate(ctx context.Context) error {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
+	}
+	if v < len(migrations) && len(migrations) >= 9 { // the events table exists from v9
+		_ = db.AddEvent(ctx, &Event{Kind: EventSystem, Action: "system.migrate", Actor: "system", ActorName: "system",
+			TargetType: "database", Detail: map[string]any{"from_version": v, "to_version": len(migrations)}})
 	}
 	return nil
 }

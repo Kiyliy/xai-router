@@ -610,14 +610,14 @@ func TestTokenPolicies(t *testing.T) {
 	// Strict quota: the request's worst-case cost is reserved up front and a
 	// $0.0001 quota cannot cover it.
 	e.do("POST", "/v1/chat/completions", lim.Token, map[string]any{"model": "grok-4.3", "messages": []any{}}, 429, nil)
-	e.api("PATCH", fmt.Sprintf("/api/v1/tokens/%d", lim.ID), map[string]any{"quota_usd": 1}, 200, nil)
+	e.api("POST", fmt.Sprintf("/api/v1/tokens/%d/quota", lim.ID), map[string]any{"delta_usd": 1}, 200, nil)
 	req := map[string]any{"model": "grok-build-0.1", "messages": []any{}}
 	e.do("POST", "/v1/chat/completions", lim.Token, req, 403, nil)
 	// Aliases resolve to the canonical id; wildcard allows grok-4.3.
 	e.do("POST", "/v1/chat/completions", lim.Token, map[string]any{"model": "grok-4.3-latest", "messages": []any{}}, 200, nil)
 	e.waitLogs(3)
 	// Disable and expire.
-	e.api("PATCH", fmt.Sprintf("/api/v1/tokens/%d", lim.ID), map[string]any{"reset_usage": true, "enabled": false}, 200, nil)
+	e.api("PATCH", fmt.Sprintf("/api/v1/tokens/%d", lim.ID), map[string]any{"enabled": false}, 200, nil)
 	e.do("POST", "/v1/chat/completions", lim.Token, map[string]any{"model": "grok-4.3"}, 403, nil)
 	e.api("PATCH", fmt.Sprintf("/api/v1/tokens/%d", lim.ID), map[string]any{"enabled": true,
 		"expires_at": time.Now().Add(-time.Minute).Format(time.RFC3339)}, 200, nil)

@@ -384,6 +384,8 @@ func (j *Janitor) RunOnce(ctx context.Context) {
 			j.Log.Error("log retention", "err", err)
 		} else if n > 0 {
 			j.Log.Info("deleted old request logs", "count", n, "retention_days", days)
+			_ = j.DB.AddEvent(ctx, &store.Event{Kind: store.EventSystem, Action: "logs.retention", Actor: "system",
+				ActorName: "system", TargetType: "logs", Detail: map[string]any{"deleted": n, "retention_days": days}})
 			_ = j.DB.Vacuum(ctx)
 		}
 	}

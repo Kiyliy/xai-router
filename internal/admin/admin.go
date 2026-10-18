@@ -76,6 +76,7 @@ const credKey ctxKey = 0
 
 type credential struct {
 	Type      string // session, admin_token
+	ID        string // admin token id
 	Name      string
 	Hash      string
 	ExpiresAt int64
@@ -91,7 +92,7 @@ func (s *Server) Handler() http.Handler {
 	}
 	priv := func(pattern string, h http.HandlerFunc) {
 		s.routes = append(s.routes, Route{Pattern: pattern})
-		mux.Handle(pattern, s.requireAuth(h))
+		mux.Handle(pattern, s.requireAuth(s.audit(pattern, h)))
 	}
 
 	pub("POST /api/v1/auth/login", s.login)
@@ -115,6 +116,7 @@ func (s *Server) Handler() http.Handler {
 	priv("PATCH /api/v1/tokens/{id}", s.updateToken)
 	priv("DELETE /api/v1/tokens/{id}", s.deleteToken)
 	priv("POST /api/v1/tokens/{id}/regenerate", s.regenerateToken)
+	priv("POST /api/v1/tokens/{id}/quota", s.adjustQuota)
 
 	priv("GET /api/v1/admin-tokens", s.listAdminTokens)
 	priv("POST /api/v1/admin-tokens", s.createAdminToken)
@@ -141,6 +143,7 @@ func (s *Server) Handler() http.Handler {
 	priv("POST /api/v1/system/compact", s.compact)
 	priv("GET /api/v1/jobs", s.listJobs)
 	priv("GET /api/v1/jobs/{id}", s.getJob)
+	priv("GET /api/v1/events", s.listEvents)
 
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", "no such endpoint: "+r.Method+" "+r.URL.Path)
@@ -162,7 +165,7 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		var cred *credential
 		if strings.HasPrefix(raw, "xra-") {
 			if t, err := s.DB.GetAdminTokenByHash(r.Context(), hash); err == nil && secret.Equal(t.Hash, hash) {
-				cred = &credential{Type: "admin_token", Name: t.Name, Hash: hash}
+				cred = &credential{Type: "admin_token", ID: strconv.FormatInt(t.ID, 10), Name: t.Name, Hash: hash}
 			}
 		} else if exp, err := s.DB.GetSession(r.Context(), hash, sessionTTL.Milliseconds()); err == nil {
 			cred = &credential{Type: "session", Name: "admin", Hash: hash, ExpiresAt: exp}
@@ -242,6 +245,11 @@ func decode(w http.ResponseWriter, r *http.Request, dst any) bool {
 		return false
 	}
 	return true
+}
+
+func parseID(s string) (int64, bool) {
+	id, err := strconv.ParseInt(s, 10, 64)
+	return id, err == nil && id > 0
 }
 
 func pathID(w http.ResponseWriter, r *http.Request) (int64, bool) {

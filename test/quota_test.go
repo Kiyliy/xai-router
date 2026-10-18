@@ -94,8 +94,9 @@ func TestQuotaStrictUnderConcurrency(t *testing.T) {
 	}
 }
 
-// Reset usage frees the quota immediately.
-func TestQuotaReset(t *testing.T) {
+// Raising the quota (a recorded adjustment; usage is never reset) lets
+// the token spend again immediately.
+func TestQuotaRaise(t *testing.T) {
 	e := newEnv(t, "xai-ok")
 	var tok struct {
 		ID    int64
@@ -109,8 +110,8 @@ func TestQuotaReset(t *testing.T) {
 		t.Fatalf("over-quota request: %d", st)
 	}
 	e.waitUsed(tok.ID)
-	e.api("PATCH", fmt.Sprintf("/api/v1/tokens/%d", tok.ID), map[string]any{"reset_usage": true}, 200, nil)
+	e.api("POST", fmt.Sprintf("/api/v1/tokens/%d/quota", tok.ID), map[string]any{"delta_usd": 0.05, "note": "top-up"}, 200, nil)
 	if st := e.sendChat(tok.Token, 100, 0, 1); st != 200 {
-		t.Fatalf("after reset: %d", st)
+		t.Fatalf("after raising the quota: %d", st)
 	}
 }

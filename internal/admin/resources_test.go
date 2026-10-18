@@ -243,9 +243,15 @@ func TestTokensCRUD(t *testing.T) {
 	if got := h.must(h.call(http.MethodGet, "/api/v1/tokens/"+itoa(id), ""), 200); got["remaining_usd"] != 0.0 {
 		t.Fatalf("over quota remaining: %v", got["remaining_usd"])
 	}
-	got := h.must(h.call(http.MethodPatch, "/api/v1/tokens/"+itoa(id), `{"expires_at":null,"reset_usage":true,"enabled":false}`), 200)
-	if got["expires_at"] != nil || got["used_usd"] != 0.0 || got["enabled"] != false {
+	got := h.must(h.call(http.MethodPatch, "/api/v1/tokens/"+itoa(id), `{"expires_at":null,"enabled":false}`), 200)
+	if got["expires_at"] != nil || got["used_usd"] != 3.0 || got["enabled"] != false {
 		t.Fatalf("patched: %v", got)
+	}
+	// Usage is never reset, and the quota is only adjusted (with a record).
+	for body, code := range map[string]string{`{"reset_usage":true}`: "reset_removed", `{"quota_usd":9}`: "quota_not_editable"} {
+		if r := h.call(http.MethodPatch, "/api/v1/tokens/"+itoa(id), body); r.status != 400 || r.code(t) != code {
+			t.Fatalf("%s: %d %s", body, r.status, r.body)
+		}
 	}
 	if r := h.call(http.MethodPatch, "/api/v1/tokens/"+itoa(id), `{"name":""}`); r.status != 400 {
 		t.Fatalf("invalid patch: %d", r.status)

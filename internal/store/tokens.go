@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -408,4 +409,61 @@ func (db *DB) DeleteSessionsExcept(ctx context.Context, keep string) error {
 func (db *DB) PurgeExpiredSessions(ctx context.Context) error {
 	_, err := db.W.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at < ?`, NowMs())
 	return err
+}
+
+// ErrQuotaInvalid is returned when an adjustment would leave a token
+// without a positive quota (0 means unlimited; use unlimited for that).
+var ErrQuotaInvalid = errors.New("invalid quota adjustment")
+
+// QuotaChange is the result of AdjustTokenQuota.
+type QuotaChange struct {
+	Before, After int64 // ticks; 0 = unlimited
+}
+
+// AdjustTokenQuota changes a token's quota by delta ticks, or makes it
+// unlimited, and appends the operation event e in the same transaction, so
+// a quota never changes without a record. An unlimited token given a
+// positive delta becomes limited to that amount. The quota can never be set
+// directly and never goes to zero or below through an adjustment.
+func (db *DB) AdjustTokenQuota(ctx context.Context, id, delta int64, unlimited bool, e *Event) (QuotaChange, error) {
+	defer db.toks.clear()
+	var qc QuotaChange
+	tx, err := db.W.BeginTx(ctx, nil)
+	if err != nil {
+		return qc, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	var name string
+	err = tx.QueryRowContext(ctx, `SELECT quota_ticks, name FROM tokens WHERE id = ? AND deleted_at = 0`, id).Scan(&qc.Before, &name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return qc, ErrNotFound
+	}
+	if err != nil {
+		return qc, err
+	}
+	switch {
+	case unlimited:
+		qc.After = 0
+	case delta == 0:
+		return qc, ErrQuotaInvalid
+	case qc.Before == 0 && delta < 0:
+		return qc, ErrQuotaInvalid
+	default:
+		qc.After = qc.Before + delta
+		if qc.After <= 0 {
+			return qc, ErrQuotaInvalid
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE tokens SET quota_ticks = ?, updated_at = ? WHERE id = ?`, qc.After, NowMs(), id); err != nil {
+		return qc, err
+	}
+	e.TargetType, e.TargetID, e.TargetName = "token", strconv.FormatInt(id, 10), name
+	if e.Detail == nil {
+		e.Detail = map[string]any{}
+	}
+	e.Detail["before_ticks"], e.Detail["after_ticks"], e.Detail["delta_ticks"] = qc.Before, qc.After, qc.After-qc.Before
+	if err := insertEvent(ctx, tx, e); err != nil {
+		return qc, err
+	}
+	return qc, tx.Commit()
 }

@@ -65,6 +65,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if in.Password == "" || !s.checkPassword(r.Context(), in.Password, hash) {
 		s.limiter.fail(ip)
 		s.Log.Warn("failed admin login", "ip", ip)
+		if s.limiter.blocked(ip) { // recorded once per lockout, not per attempt
+			_ = s.DB.AddEvent(r.Context(), &store.Event{Kind: store.EventSystem, Action: "auth.login_blocked", Actor: "system",
+				ActorName: "system", IP: ip, Detail: map[string]any{"reason": "too many failed password attempts"}})
+		}
 		writeErr(w, http.StatusUnauthorized, "invalid_password", "wrong password")
 		return
 	}
@@ -76,6 +80,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Log.Info("admin login", "ip", ip)
+	if err := s.DB.AddEvent(r.Context(), &store.Event{Kind: store.EventOperation, Action: "auth.login", Actor: "password",
+		ActorName: "admin", IP: ip}); err != nil {
+		s.Log.Error("record login", "err", err)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"token": tok, "expires_at": exp.UTC()})
 }
 
