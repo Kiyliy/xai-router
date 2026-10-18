@@ -162,12 +162,22 @@ export function openMenu(anchor, items) {
   pop.style.left = `${left}px`; pop.style.top = `${top}px`;
   const onDoc = (e) => { if (!pop.contains(e.target)) closeMenus(); };
   const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); closeMenus(); } };
+  const onScroll = () => closeMenus();
+  // Registered after the current click has finished bubbling. If the menu
+  // was closed in the meantime (timers are throttled in background tabs),
+  // registering would leave a document listener that closes every later
+  // menu on mousedown.
   setTimeout(() => {
+    if (!pop.isConnected) return;
     document.addEventListener('mousedown', onDoc);
     document.addEventListener('keydown', onKey, true);
-    window.addEventListener('scroll', closeMenus, { once: true, capture: true });
+    window.addEventListener('scroll', onScroll, { once: true, capture: true });
   });
-  pop._cleanup = () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey, true); };
+  pop._cleanup = () => {
+    document.removeEventListener('mousedown', onDoc);
+    document.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('scroll', onScroll, true);
+  };
   pop.querySelector('.menu-item')?.focus();
 }
 export function closeMenus() {

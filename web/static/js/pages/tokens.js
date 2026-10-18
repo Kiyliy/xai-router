@@ -157,10 +157,17 @@ export function render(el, ctx) {
   function quotaCell(tk) {
     const unlimited = !tk.quota_usd;
     return h('td', { class: 'col-quota m-full' },
-      h('div', { class: 'quota-line' },
-        h('span', { class: 'mono' }, fmtUSD(tk.used_usd)),
-        h('span', { class: 'muted' }, ' / '),
-        h('span', { class: 'mono muted' }, unlimited ? t('tokens.unlimited') : fmtUSD(tk.quota_usd))),
+      // Without a quota there is nothing to compare against: show the total
+      // spend (which a usage reset does not clear) instead of quota used.
+      unlimited
+        ? h('div', { class: 'quota-line', title: t('td.spentHint') },
+          h('span', { class: 'mono' }, fmtUSD(tk.spent_usd ?? tk.used_usd)),
+          h('span', { class: 'muted' }, ' · '), h('span', { class: 'muted' }, t('td.spent')))
+        : h('div', { class: 'quota-line' },
+          h('span', { class: 'mono' }, fmtUSD(tk.used_usd)),
+          h('span', { class: 'muted' }, ' / '),
+          h('span', { class: 'mono muted' }, fmtUSD(tk.quota_usd))),
+      unlimited ? h('div', { class: 'cell-sub' }, t('tl.noQuota')) : null,
       unlimited ? null : progress(tk.used_usd / tk.quota_usd),
       unlimited ? null : h('div', { class: 'cell-sub' }, t('tokens.remaining', { v: fmtUSD(tk.remaining_usd ?? Math.max(0, tk.quota_usd - tk.used_usd)) })));
   }

@@ -25,7 +25,7 @@ export const en = {
   'kt.bulkTitle': 'Check {n} selected key(s)?',
   'kt.fullCheckOpt': 'Full check', 'kt.fullCheckOptHint': ' — also sends one minimal request per key (uses credit, ≈ $0.0001 each)',
   'kt.noFullCheck': 'No full check — a quick check sends no request',
-  'kt.untested': 'Not tested', 'kt.autoTest': 'Test after saving (no cost)',
+  'kt.untested': 'Not tested', 'kt.autoTest': 'Quick check after saving (no cost)', 'tl.noQuota': 'No quota',
 
   // client token list
   'tl.guide': 'Integration guide', 'tl.statusFilter': 'Filter by status',
@@ -79,7 +79,7 @@ export const zh = {
   'kt.bulkTitle': '检测选中的 {n} 个上游密钥？',
   'kt.fullCheckOpt': '完整检测', 'kt.fullCheckOptHint': ' —— 每个密钥额外发一条最小请求（消耗额度，约 $0.0001/个）',
   'kt.noFullCheck': '未做完整检测（快速检测不发送请求）',
-  'kt.untested': '未测试', 'kt.autoTest': '保存后立即测试（不消耗额度）',
+  'kt.untested': '未测试', 'kt.autoTest': '保存后立即快速检测（不消耗额度）', 'tl.noQuota': '不限额度',
 
   'tl.guide': '接入指南', 'tl.statusFilter': '按状态筛选',
   'tl.status.all': '全部', 'tl.status.enabled': '启用', 'tl.status.disabled': '已禁用', 'tl.status.expired': '已过期', 'tl.status.exhausted': '额度用尽',

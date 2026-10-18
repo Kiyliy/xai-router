@@ -801,8 +801,14 @@ input[type="datetime-local"].input { min-width: 0; }
 .table .col-actions { position: sticky; right: 0; z-index: 1; background: var(--surface); box-shadow: -10px 0 10px -10px rgba(0, 0, 0, .18); }
 .table thead .col-actions { z-index: 3; background: var(--surface-2); }
 .table tbody tr:hover td.col-actions { background: var(--surface); background-image: linear-gradient(var(--hover), var(--hover)); }
-.table tr.row-warn td.col-actions { background: color-mix(in srgb, var(--warning-soft) 60%, var(--surface)); }
+.table tr.row-warn td.col-actions { background: var(--surface); background-image: linear-gradient(color-mix(in srgb, var(--warning-soft) 60%, transparent), color-mix(in srgb, var(--warning-soft) 60%, transparent)); }
 .table tr.row-selected td.col-actions { background: var(--surface); background-image: linear-gradient(var(--accent-soft), var(--accent-soft)); }
+/* Tinted rows: the sticky cell needs an opaque version of the tint, or the
+   columns scrolling underneath show through (narrow windows). */
+.table tr.row-danger td.col-actions { background: var(--surface); background-image: linear-gradient(color-mix(in srgb, var(--danger-soft) 55%, transparent), color-mix(in srgb, var(--danger-soft) 55%, transparent)); }
+.table tr.row-active td.col-actions { background: var(--surface) !important; background-image: linear-gradient(var(--accent-soft), var(--accent-soft)) !important; }
+.table tbody tr.row-danger:hover td.col-actions { background-image: linear-gradient(var(--hover), var(--hover)), linear-gradient(color-mix(in srgb, var(--danger-soft) 55%, transparent), color-mix(in srgb, var(--danger-soft) 55%, transparent)); }
+.table tbody tr.row-warn:hover td.col-actions { background-image: linear-gradient(var(--hover), var(--hover)), linear-gradient(color-mix(in srgb, var(--warning-soft) 60%, transparent), color-mix(in srgb, var(--warning-soft) 60%, transparent)); }
 
 /* bulk bar */
 .bulk-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 16px; background: var(--accent-soft); border-bottom: 1px solid var(--border); font-size: 13px; animation: fadeIn .12s ease-out; }
