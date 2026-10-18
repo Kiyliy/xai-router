@@ -5,6 +5,8 @@ import { get } from '../api.js';
 import { segmented, card, toastError, tabs, tableWrap, skeletonRows, tableEmptyRow, button, progress } from '../ui.js';
 import { openPasswordDialog } from './access.js';
 import { timeChart, shareBar, colorFor, isSparse, sparkline } from '../charts.js';
+import { eventSentence, levelDot } from '../events.js';
+import { listTime } from '../detail-drawer.js';
 
 const RANGES = ['1h', '24h', '7d', '30d', '90d'];
 const ONBOARD_KEY = 'xr.onboard.dismissed';
@@ -96,9 +98,34 @@ export function render(el, ctx) {
   });
 
   const onboard = onboarding(ctx);
+  // "Events needing attention" (pm-spec 9.6): warning / error operation and system records of the last 24 hours.
+  const ATTN_HASH = '#/logs?type=audit,system&problems=1';
+  const attnBody = h('div', { class: 'mini-list attn-list' }, h('div', { class: 'mini-empty' }, h('span', { class: 'skeleton', style: { width: '60%' } })));
+  const attnCard = card({
+    title: t('ov.attnTitle'), body: attnBody, cls: 'card-attn',
+    actions: h('a', { class: 'link', href: ATTN_HASH, onclick: (e) => { e.preventDefault(); ctx.navigate(ATTN_HASH); } }, t('ov.attnAll')),
+  });
+  async function loadAttention() {
+    try {
+      const res = await get('/api/v1/logs', { type: 'audit,system', problems: 1, from: new Date(Date.now() - 86400e3).toISOString(), page_size: 5 }, { signal: ctx.signal });
+      const rows = (res.data || []).slice(0, 5);
+      if (!rows.length) { attnBody.replaceChildren(h('div', { class: 'mini-empty attn-ok' }, icon('checkCircle', 16), h('span', null, t('ov.attnNone')))); return; }
+      attnBody.replaceChildren(...rows.map((e) => {
+        const line = eventSentence(e);
+        return h('button', { type: 'button', class: 'mini-row', title: t('ov.attnOpen'), onclick: () => ctx.navigate(`${ATTN_HASH}&event=${e.id}`) },
+          levelDot(e.level),
+          h('span', { class: 'what' }, h('span', { class: 'ev-line', title: line }, line)),
+          h('span', { class: 'when', title: fmtDateTime(e.created_at) }, listTime(e.created_at)),
+          icon('chevronRight', 14));
+      }));
+    } catch (e) {
+      if (e.name !== 'AbortError') attnBody.replaceChildren(h('div', { class: 'mini-empty mini-error' }, icon('alert', 15), h('span', null, t('common.loadFailed'))));
+    }
+  }
   el.append(
     onboard.el,
     kpis,
+    attnCard,
     h('div', { class: 'grid-2' },
       card({ title: t('ov.requestsOverTime'), subtitle: t('ov.requestsOverTimeSub'), body: reqChartBody }),
       card({ title: t('ov.costOverTime'), subtitle: t('ov.costOverTimeSub'), body: costChartBody })),
@@ -166,7 +193,7 @@ ${t('tok.reasoning')}: ${fmtInt(o.reasoning_tokens)}`;
     kpis.replaceChildren(
       kpi({ ic: 'activity', label: t('ov.requests'), spark: 'requests', value: fmtInt(o.requests), sub: [h('span', { class: 'text-success' }, `${fmtInt(o.success)} ${t('ov.ok')}`), ' · ', h('span', { class: o.errors ? 'text-danger' : '' }, `${fmtInt(o.errors)} ${t('ov.errors')}`)] }),
       kpi({ ic: 'checkCircle', label: t('ov.successRate'), spark: 'success', value: o.requests ? fmtPct(sr) : '—', tone: !o.requests ? '' : sr >= 0.98 ? 'success' : sr >= 0.9 ? 'warning' : 'danger', sub: t('ov.inRange', { r: t(`range.${range}`) }) }),
-      kpi({ ic: 'hash', label: t('ov.tokens'), spark: 'tokens', value: fmtCompact(o.total_tokens), tip: tokTip, sub: `${t('ov.in')} ${fmtCompact(o.prompt_tokens)} · ${t('ov.out')} ${fmtCompact(o.completion_tokens)}`, sub2: o.cached_tokens ? `${t('ov.cachedShort')} ${fmtCompact(o.cached_tokens)}` : null }),
+      kpi({ ic: 'hash', label: t('ov.tokens'), spark: 'tokens', value: fmtCompact(o.total_tokens), tip: tokTip, sub: t('ov.tokSub', { i: fmtCompact(Math.max(0, (o.prompt_tokens || 0) - (o.cached_tokens || 0))), c: fmtCompact(o.cached_tokens || 0), o: fmtCompact((o.completion_tokens || 0) + (o.reasoning_tokens || 0)) }) }),
       kpi({ ic: 'dollar', label: t('ov.cost'), spark: 'cost', value: fmtUSD(o.cost_usd), sub: o.requests ? t('ov.perRequest', { v: fmtUSD(o.cost_usd / o.requests) }) : '—' }),
       kpi({ ic: 'timer', label: t('ov.avgLatency'), spark: 'latency', value: o.requests ? fmtMs(o.avg_latency_ms) : '—', sub: t('ov.endToEnd') }),
       kpi({
@@ -298,6 +325,7 @@ ${t('status.disabled')}: ${fmtInt(k.disabled)}` },
     const pMain = get('/api/v1/stats/timeseries', { range, interval: interval(), group: 'none', tz_offset_minutes: tzOffset() }, opts).then(drawMain);
     const pModel = get('/api/v1/stats/timeseries', { range, interval: interval(), group: 'model', limit: 6, tz_offset_minutes: tzOffset() }, opts).then((r) => { modelSeries = r; drawModelChart(); });
     loadBreakdown();
+    loadAttention();
     onboard.refresh();
     const results = await Promise.allSettled([pOverview, pMain, pModel]);
     const failed = results.find((r) => r.status === 'rejected' && r.reason && r.reason.name !== 'AbortError');

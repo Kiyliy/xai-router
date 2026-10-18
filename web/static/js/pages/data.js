@@ -104,7 +104,7 @@ export function render(el, ctx) {
     title: title('trash', t('data.purge')), subtitle: t('data.purgeSub'),
     body: h('div', { class: 'stack' }, policy, field(t('settings.deleteBefore'), before), estimate, purgeJob),
   });
-  purgeCard.append(h('div', { class: 'card-foot-actions' }, h('span', { class: 'muted small foot-note' }, t('settings.purgeBg')), purgeBtn));
+  purgeCard.append(h('div', { class: 'card-foot-actions' }, h('span', { class: 'muted small foot-note' }, t('data.purgeKeeps')), purgeBtn));
 
   const approx = (kind) => kind && kind !== 'exact';
   const countText = (e) => (approx(e.kind) ? fmtCompactLong(e.total) : fmtInt(e.total));
@@ -163,6 +163,7 @@ export function render(el, ctx) {
       title: t('settings.purgeTitle'),
       message: t(approx(est.kind) ? 'data.purgeMsgApprox' : 'data.purgeMsg', { n: countText(est), d: fmtDateTime(iso, { seconds: false }) }),
       confirmText: label, danger: true,
+      extra: h('p', { class: 'muted small' }, t('data.purgeKeeps')),
     });
     if (!ok) return;
     await busy(purgeBtn, async () => {

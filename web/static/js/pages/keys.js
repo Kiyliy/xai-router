@@ -7,7 +7,7 @@ import {
   card, toast, toastError, openModal, confirmDialog, menuButton, badge, switchEl, searchInput, select, pager as pagerEl, setTableLoading,
   skeletonRows, tableEmptyRow, tableWrap, field, input, checkbox, button, busy, kv, spinner, passwordInput, tapToMenu, errorMessage,
 } from '../ui.js';
-import { drawerState, section, usageBlock, failuresBlock, allLogsLink, goneBody } from '../detail-drawer.js';
+import { drawerState, section, usageBlock, failuresBlock, allLogsLink, goneBody, recentEventsBlock, allEventsLink } from '../detail-drawer.js';
 
 const TEST_VARIANT = { ok: 'success', rate_limited: 'warning', invalid: 'danger', blocked: 'danger', no_credits: 'danger', error: 'danger' };
 
@@ -652,7 +652,8 @@ ${t('kd.openHint')}`, onclick: (e) => { e.stopPropagation(); drawer.open(k.id, {
       actionsEl, reasonEl,
       section(t('kd.usage'), usageBlock('key', id, signal)),
       h('div', { class: 'entity-cols' }, section(t('kd.lastCheck'), testEl), section(t('kd.config'), configEl)),
-      section(t('kd.recentFailures'), failuresBlock({ param: 'key_id', id, signal, navigate: ctx.navigate }), allLogsLink(`#/logs?key_id=${id}`, ctx.navigate))));
+      section(t('kd.recentFailures'), failuresBlock({ param: 'key_id', id, signal, navigate: ctx.navigate }), allLogsLink(`#/logs?key_id=${id}`, ctx.navigate)),
+      section(t('kd.recentEvents'), recentEventsBlock({ keyId: id, signal, navigate: ctx.navigate }), allEventsLink(id, ctx.navigate))));
     if (k) { paint(); mountBody(); }
     fetchKey();
     return fetchKey;

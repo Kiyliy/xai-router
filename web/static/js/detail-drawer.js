@@ -3,9 +3,10 @@
 // and the "name · prefix" credential label.
 import { h, fmtInt, fmtUSD, fmtCompact, fmtDateTime, fmtTimeShort, statusClass } from './util.js';
 import { icon } from './icons.js';
-import { t } from './i18n.js';
+import { t, getLang } from './i18n.js';
 import { get } from './api.js';
 import { openModal, badge, spinner, errorMessage } from './ui.js';
+import { eventSentence, levelDot } from './events.js';
 
 export const USAGE_RANGES = ['24h', '7d', '30d'];
 
@@ -164,4 +165,50 @@ export function goneBody(d, { by, param, id, signal, navigate, message }) {
 /** "View all logs →" link for a section label. */
 export function allLogsLink(hash, navigate) {
   return h('a', { href: hash, class: 'link', onclick: (e) => { e.preventDefault(); navigate(hash); } }, t('kd.allLogs'));
+}
+
+/**
+ * Short time for list rows (pm-spec 10.3): "刚刚" / "N 分钟前" / "N 小时前" within 24 hours,
+ * otherwise "10月18日 14:02" (year added when it differs).
+ */
+export function listTime(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return '—';
+  const s = (Date.now() - d.getTime()) / 1000;
+  if (s >= 0 && s < 60) return t('misc.justNow');
+  if (s >= 0 && s < 3600) return t('misc.minAgo', { n: Math.floor(s / 60) });
+  if (s >= 0 && s < 86400) return t('misc.hrAgo', { n: Math.floor(s / 3600) });
+  const opts = { month: getLang() === 'zh' ? 'numeric' : 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false };
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+  return new Intl.DateTimeFormat(getLang() === 'zh' ? 'zh-CN' : 'en-US', opts).format(d);
+}
+
+/**
+ * Last 5 operation / system records about an upstream key (auto-disable, edits, checks …), one
+ * sentence each; a row opens that record on the logs page.
+ */
+export function recentEventsBlock({ keyId, signal, navigate }) {
+  const box = h('div', { class: 'mini-list ev-mini' }, loadingLine());
+  const base = `#/logs?type=audit,system&key_id=${keyId}&range=all`;
+  get('/api/v1/logs', { type: 'audit,system', key_id: keyId, page_size: 5 }, { signal })
+    .then((res) => {
+      const rows = (res.data || []).slice(0, 5);
+      if (!rows.length) { box.replaceChildren(h('div', { class: 'mini-empty' }, icon('checkCircle', 15), h('span', null, t('kd.noEvents')))); return; }
+      box.replaceChildren(...rows.map((e) => {
+        const line = eventSentence(e);
+        return h('button', { type: 'button', class: 'mini-row', title: t('kd.openEvent'), onclick: () => navigate(`${base}&event=${e.id}`) },
+          levelDot(e.level),
+          h('span', { class: 'when', title: fmtDateTime(e.created_at) }, listTime(e.created_at)),
+          h('span', { class: 'what' }, h('span', { class: 'ev-line', title: line }, line)),
+          icon('chevronRight', 14));
+      }));
+    })
+    .catch((e) => { if (e.name !== 'AbortError') box.replaceChildren(failLine(e)); });
+  return box;
+}
+
+/** "View all →" for the key drawer's recent events: the mixed operation / system list for this key. */
+export function allEventsLink(keyId, navigate) {
+  const hash = `#/logs?type=audit,system&key_id=${keyId}&range=all`;
+  return h('a', { href: hash, class: 'link', onclick: (e) => { e.preventDefault(); navigate(hash); } }, t('kd.allEvents'));
 }
