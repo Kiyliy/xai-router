@@ -759,3 +759,9 @@ func (db *DB) Vacuum(ctx context.Context) error {
 	_, err := db.W.ExecContext(ctx, `PRAGMA wal_checkpoint(PASSIVE)`)
 	return err
 }
+
+// HasLogsBefore reports whether any request log is older than t.
+func (db *DB) HasLogsBefore(ctx context.Context, t int64) bool {
+	var one int
+	return db.R.QueryRowContext(ctx, `SELECT 1 FROM request_logs WHERE created_at < ? LIMIT 1`, t).Scan(&one) == nil
+}
