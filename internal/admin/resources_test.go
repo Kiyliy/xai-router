@@ -418,3 +418,53 @@ func TestTokenStatusFilterAndHints(t *testing.T) {
 		t.Fatalf("detail %v", d["token_prefix"])
 	}
 }
+
+// Inline edits in the key list send one field at a time: only that field
+// changes, the pool's runtime state survives, and the new priority takes
+// effect immediately.
+func TestKeyPatchSingleField(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	a := h.must(h.call(http.MethodPost, "/api/v1/keys", `{"name":"a","key":"xai-patch-a","priority":0,"weight":3,"notes":"keep"}`), 201)
+	b := h.must(h.call(http.MethodPost, "/api/v1/keys", `{"name":"b","key":"xai-patch-b","priority":1}`), 201)
+	cands := func() []int64 {
+		var ids []int64
+		for _, k := range h.s.Pool.Candidates(0) {
+			ids = append(ids, k.ID)
+		}
+		return ids
+	}
+	if c := cands(); len(c) != 2 || c[0] != num(a["id"]) {
+		t.Fatalf("initial order %v", c)
+	}
+	// Runtime state owned by the pool (cooldown) must not be overwritten.
+	until := store.NowMs() + 3_600_000
+	if err := h.db.SetKeyState(ctx, num(b["id"]), false, "rate limited", until); err != nil {
+		t.Fatal(err)
+	}
+	k := h.must(h.call(http.MethodPatch, "/api/v1/keys/"+itoa(num(a["id"])), `{"priority":5}`), 200)
+	if num(k["priority"]) != 5 || num(k["weight"]) != 3 || k["notes"] != "keep" || k["name"] != "a" {
+		t.Fatalf("patch changed other fields: %v", k)
+	}
+	h.must(h.call(http.MethodPatch, "/api/v1/keys/"+itoa(num(b["id"])), `{"weight":7}`), 200)
+	got, _ := h.db.GetKey(ctx, num(b["id"]))
+	if got.Weight != 7 || got.CooldownUntil != until || got.StatusReason != "rate limited" {
+		t.Fatalf("runtime state overwritten: %+v", got)
+	}
+	// b is cooling down, so only a is a candidate; once b recovers it comes
+	// first (priority 1 < 5).
+	if err := h.db.SetKeyState(ctx, num(b["id"]), false, "", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.Pool.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if c := cands(); len(c) != 2 || c[0] != num(b["id"]) {
+		t.Fatalf("priority change not in effect: %v", c)
+	}
+	for _, body := range []string{`{"priority":"x"}`, `{"weight":0}`, `{"weight":-1}`} {
+		if r := h.call(http.MethodPatch, "/api/v1/keys/"+itoa(num(a["id"])), body); r.status != 400 {
+			t.Errorf("%s: %d", body, r.status)
+		}
+	}
+}

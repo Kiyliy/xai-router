@@ -3,6 +3,7 @@
 // Prefixes: kd. key drawer (and shared drawer parts), td. token drawer, tl. token list,
 // ll. log list, kt. key tests.
 export const en = {
+  'kl.intRequired': 'Enter a whole number.',
   // shared drawer parts + upstream key drawer
   'kd.range.24h': 'Last 24 hours', 'kd.range.7d': 'Last 7 days', 'kd.range.30d': 'Last 30 days',
   'kd.requests': 'Requests', 'kd.errors': 'Errors', 'kd.cost': 'Cost', 'kd.tokens': 'Tokens',
@@ -58,6 +59,7 @@ export const en = {
 };
 
 export const zh = {
+  'kl.intRequired': '请输入整数。',
   'kd.range.24h': '最近 24 小时', 'kd.range.7d': '最近 7 天', 'kd.range.30d': '最近 30 天',
   'kd.requests': '请求', 'kd.errors': '错误', 'kd.cost': '花费', 'kd.tokens': 'Token 数',
   'kd.usage': '用量', 'kd.lastCheck': '最近检测', 'kd.config': '配置', 'kd.recentFailures': '最近失败',

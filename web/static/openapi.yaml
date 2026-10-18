@@ -220,6 +220,7 @@ paths:
     patch:
       tags: [Keys]
       summary: Update a key (partial)
+      description: "Only the fields present are changed (for example {\"priority\": 2}); the pool picks up the change immediately. Runtime state (auto-disable, cooldown) is never written by this call; use POST /api/v1/keys/{id}/reset to clear it."
       requestBody:
         required: true
         content:

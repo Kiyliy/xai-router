@@ -243,6 +243,46 @@ export function render(el, ctx) {
     catch (e) { toastError(e); return false; }
   }
 
+  // Inline number editor for priority / weight: saves on blur or Enter with
+  // PATCH {field}, keeps the row where it is, ticks on success, restores the
+  // old value and explains on failure. Esc cancels.
+  function inlineNum(k, field, min, label) {
+    const tick = h('span', { class: 'inline-ok', 'aria-hidden': 'true' }, icon('check', 13));
+    const inp = h('input', { type: 'number', class: 'inline-num', step: 1, value: k[field] ?? (field === 'weight' ? 1 : 0), 'aria-label': `${label} · ${k.name || '#' + k.id}` });
+    if (min != null) inp.min = String(min);
+    let saving = false;
+    const restore = () => { inp.value = String(k[field] ?? (field === 'weight' ? 1 : 0)); inp.classList.remove('invalid'); };
+    const save = async () => {
+      if (saving) return;
+      const raw = inp.value.trim();
+      const v = Number(raw);
+      if (raw === '' || !Number.isInteger(v) || (min != null && v < min)) {
+        restore(); toast(field === 'weight' ? t('keys.weightMin') : t('kl.intRequired'), 'warning'); return;
+      }
+      if (v === (k[field] ?? null)) return;
+      saving = true; inp.disabled = true;
+      try {
+        const res = await patch(`/api/v1/keys/${k.id}`, { [field]: v });
+        k[field] = res && res[field] != null ? res[field] : v;
+        inp.value = String(k[field]);
+        tick.classList.remove('show'); void tick.offsetWidth; tick.classList.add('show');
+        if (drawer.id === k.id) drawer.refresh();
+      } catch (e) {
+        restore(); toastError(e);
+      } finally {
+        saving = false; inp.disabled = false;
+      }
+    };
+    inp.addEventListener('click', (e) => e.stopPropagation());
+    inp.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); inp.blur(); }
+      else if (e.key === 'Escape') { restore(); inp.blur(); }
+    });
+    inp.addEventListener('blur', save);
+    return h('span', { class: 'inline-num-wrap' }, inp, tick);
+  }
+
   function row(k) {
     // Upstream attempts made with this key (one client request can try several keys).
     const att = k.attempts ?? k.requests, attErr = k.attempt_errors ?? k.errors;
@@ -270,7 +310,9 @@ ${t('kd.openHint')}`, onclick: (e) => { e.stopPropagation(); drawer.open(k.id, {
         subline),
       statusCell(k),
       h('td', { class: 'mono m-meta', title: `${t('keys.priority')}: ${k.priority ?? 0} · ${t('keys.weight')}: ${k.weight ?? 1}\n${t('keys.maxConcurrency')}: ${lim(k.max_concurrency)}\n${t('keys.rpmLimit')}: ${lim(k.rpm_limit)}\n${t('keys.inflight')}: ${k.inflight || 0}` },
-        h('div', { class: 'nowrap' }, `P${k.priority ?? 0}`, h('span', { class: 'muted' }, ` · W${k.weight ?? 1}`)),
+        h('div', { class: 'nowrap inline-pw' },
+          h('label', { class: 'inline-field', title: t('keys.priorityHint') }, h('span', { class: 'inline-tag' }, 'P'), inlineNum(k, 'priority', null, t('keys.priority'))),
+          h('label', { class: 'inline-field', title: t('keys.weightHint') }, h('span', { class: 'inline-tag' }, 'W'), inlineNum(k, 'weight', 1, t('keys.weight')))),
         h('div', { class: `cell-sub nowrap ${k.inflight ? 'text-accent' : ''}` }, `${lim(k.max_concurrency)} / ${lim(k.rpm_limit)}`, k.inflight ? ` · ${t('keys.inflightN', { n: k.inflight })}` : '')),
       h('td', { class: 'num mono m-meta', title: `${t('kt.attempts')}: ${fmtInt(att)}\n${t('kt.attemptErrors')}: ${fmtInt(attErr)}\n${t('kt.attemptsHint')}\n${t('common.cost')}: ${fmtUSD(k.cost_usd)}\n${t('common.lastUsed')}: ${k.last_used_at ? fmtDateTime(k.last_used_at) : '—'}` },
         h('div', { class: 'nowrap' }, fmtCompact(att), h('span', { class: 'muted' }, ` ${t('kt.attShort')}`), attErr ? h('span', { class: errRate > 0.1 ? 'text-danger' : 'muted' }, ` · ${fmtCompact(attErr)} ${t('kt.failShort')}`) : null),
@@ -293,7 +335,14 @@ ${t('kd.openHint')}`, onclick: (e) => { e.stopPropagation(); drawer.open(k.id, {
     try {
       const res = await get('/api/v1/keys', { q: st.q, status: st.status, page: st.page, page_size: st.pageSize }, { signal });
       if (signal.aborted) return;
-      st.rows = res.data || []; st.total = res.total || 0; st.totalKind = res.total_kind || 'exact'; st.loaded = true;
+      let rows = res.data || [];
+      if (silent && rows.length === st.rows.length) {
+        // Same keys as on screen: keep their current order, so an inline
+        // priority edit does not make rows jump on the next refresh.
+        const pos = new Map(st.rows.map((k, i) => [k.id, i]));
+        if (rows.every((k) => pos.has(k.id))) rows = rows.slice().sort((x, y) => pos.get(x.id) - pos.get(y.id));
+      }
+      st.rows = rows; st.total = res.total || 0; st.totalKind = res.total_kind || 'exact'; st.loaded = true;
       if (!st.rows.length && st.page > 1 && st.total && st.totalKind === 'exact') { st.page = Math.ceil(st.total / st.pageSize); syncParams(); return load({ silent }); }
       countEl.textContent = t('common.totalN', { n: fmtTotal(st.total, st.totalKind) });
       tbody.replaceChildren(...(st.rows.length ? st.rows.map(row) : [tableEmptyRow(COLS, st.q || st.status ? { icon: 'search', title: t('common.noMatches') } : { icon: 'key', title: t('keys.empty'), desc: t('keys.emptyDesc'), action: button(t('keys.add'), { icon: 'plus', variant: 'primary', onClick: () => openForm() }) })]));
@@ -614,6 +663,7 @@ ${t('kd.openHint')}`, onclick: (e) => { e.stopPropagation(); drawer.open(k.id, {
   load();
   if (ctx.params.open) drawer.open(ctx.params.open);
   testJob.resume();
-  const timer = setInterval(() => { if (!document.hidden && !document.querySelector('.overlay')) load({ silent: true }); }, 15000);
+  // Background refresh, skipped while an inline priority / weight is being edited.
+  const timer = setInterval(() => { if (!document.hidden && !document.querySelector('.overlay') && !(document.activeElement && document.activeElement.classList.contains('inline-num'))) load({ silent: true }); }, 15000);
   return () => clearInterval(timer);
 }

@@ -120,3 +120,22 @@ a.link .cred-name { color: inherit; }
 .table-logs .m-who .cred-name { flex: 0 1 auto; }
 .table-logs .m-who .cred-prefix { flex: 0 100 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 1360px) { .table-logs .truncate-cell { max-width: 160px; } }
+/* ---------- inline priority / weight editing in the upstream key list ---------- */
+.inline-pw { display: flex; align-items: center; gap: 6px; }
+.inline-field { display: inline-flex; align-items: center; gap: 2px; cursor: text; }
+.inline-tag { color: var(--text-3); font-family: var(--font-mono); font-size: 12px; }
+.inline-num-wrap { position: relative; display: inline-flex; align-items: center; }
+.inline-num {
+  width: 44px; height: 24px; padding: 0 4px; border: 1px solid transparent; border-radius: var(--radius-xs);
+  background: transparent; color: var(--text); font-family: var(--font-mono); font-size: 12.5px;
+  font-variant-numeric: tabular-nums; -moz-appearance: textfield; appearance: textfield;
+}
+.inline-num::-webkit-outer-spin-button, .inline-num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+tr:hover .inline-num, .inline-num:hover { border-color: var(--border); background: var(--surface); }
+.inline-num:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); background: var(--surface); }
+.inline-num:disabled { opacity: .6; }
+.inline-num.invalid { border-color: var(--danger); }
+.inline-ok { position: absolute; right: -14px; color: var(--success); opacity: 0; pointer-events: none; }
+.inline-ok.show { animation: inline-ok 1.4s ease-out; }
+@keyframes inline-ok { 0%, 60% { opacity: 1; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .inline-ok.show { animation-duration: .01s; } }
