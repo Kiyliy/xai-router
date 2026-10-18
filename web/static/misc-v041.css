@@ -1,6 +1,6 @@
 /* v0.4.1: key drawer "Recent events" and overview "Events needing attention" (agent C). */
 .ev-mini .mini-row { grid-template-columns: auto 92px minmax(0, 1fr) auto; }
-.attn-list .mini-row { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+.attn-list .mini-row { grid-template-columns: auto minmax(0, 1fr) 104px auto; }
 .ev-mini .ev-line, .attn-list .ev-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attn-list .mini-row .when { text-align: right; }
 .mini-row .lv { display: inline-flex; align-items: center; }
