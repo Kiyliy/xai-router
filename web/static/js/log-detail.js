@@ -15,7 +15,12 @@ import {
   fieldLabel, fmtChangeValue,
 } from './events.js';
 
-const ACTION_VARIANT = { success: 'success', retry: 'warning', return: 'neutral', cooldown: 'warning', disable: 'danger', verify: 'warning' };
+// Styles of the log page and drawers; linked here too in case index.html does not link them yet.
+if (!document.querySelector('link[href$="logs-v041.css"]')) {
+  document.head.appendChild(h('link', { rel: 'stylesheet', href: new URL('../logs-v041.css', import.meta.url).href }));
+}
+
+const ACTION_VARIANT ={ success: 'success', retry: 'warning', return: 'neutral', cooldown: 'warning', disable: 'danger', verify: 'warning' };
 
 export function statusBadge(code) {
   return badge(code ? String(code) : 'ERR', statusClass(code), { class: 'badge-status mono' });

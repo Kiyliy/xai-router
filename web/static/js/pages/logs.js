@@ -7,7 +7,7 @@ import {
   fmtTotal, latestSignal,
 } from '../util.js';
 import { icon } from '../icons.js';
-import { t } from '../i18n.js';
+import { t, hasT } from '../i18n.js';
 import { get } from '../api.js';
 import {
   card, toast, toastError, openModal, badge, select, input, pager as pagerEl, setTableLoading, skeletonRows, tableEmptyRow, tableWrap,
@@ -204,7 +204,7 @@ export function render(el, ctx) {
     const th = (label, cls, title) => h('th', { class: cls || null, title: title || null }, label);
     let cells;
     if (m === 'request') {
-      cells = [th(t('logs.time'), 'col-time'), th(t('logs.request')), th(t('common.status'), 'col-status'), th(t('lg.col.tokenKey')),
+      cells = [th(t('logs.time'), 'col-time'), th(t('logs.request')), th(t('common.status'), 'col-status'), th(t('lg.col.tokenKey'), 'col-who'),
         th(h('span', { class: 'tok4 tok4-head' }, h('span', null, t('lg.tok.input')), h('span', { title: t('lg.tok.cacheWriteTip') }, t('lg.tok.cacheWrite')), h('span', null, t('lg.tok.cacheRead')), h('span', null, t('lg.tok.output'))), 'num col-tok'),
         th(t('common.cost'), 'num col-cost'), th(t('common.latency'), 'num col-lat', t('logs.ttfbClientHint'))];
     } else if (m === 'mixed') {
@@ -295,7 +295,12 @@ export function render(el, ctx) {
   const tries = (r) => ((r.attempts || 0) > 1 ? badge(`×${r.attempts}`, 'warning', { class: 'badge-tries', title: t('logs.retriedN', { n: r.attempts }) }) : null);
   function targetCell(e) {
     const name = targetText(e), hint = targetHint(e);
-    const node = h('span', null, h('span', { class: 'muted small' }, `${targetTypeLabel(e.target_type)} `), e.target_type && !['settings', 'logs', 'database', 'disk'].includes(e.target_type) ? cred(name, hint) : null);
+    // No object (sign-in, start-up) or a whole-catalogue action (price sync): name the area instead.
+    if (!e.target_type || (e.target_type === 'model' && !e.target_id)) {
+      const g = (e.action || '').split('.')[0];
+      return h('span', null, hasT(`lg.ag.${g}`) ? t(`lg.ag.${g}`) : targetTypeLabel(e.target_type));
+    }
+    const node =h('span', null, h('span', { class: 'muted small' }, `${targetTypeLabel(e.target_type)} `), e.target_type && !['settings', 'logs', 'database', 'disk'].includes(e.target_type) ? cred(name, hint) : null);
     if ((e.target_type === 'key' || e.target_type === 'token') && e.target_id) {
       return h('a', { class: 'link cell-link', href: `#/${e.target_type === 'key' ? 'keys' : 'tokens'}?open=${e.target_id}`, onclick: stop, title: t(e.target_type === 'key' ? 'lg.openKey' : 'lg.openToken') }, node);
     }

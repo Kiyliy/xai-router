@@ -1,7 +1,7 @@
 // Shared formatting for the unified log (v0.4.1, pm-spec 9 and 10): audit / system event labels
 // and one-sentence descriptions, readable request error reasons, type / level tags. Used by the
 // logs page, the key drawer's "recent events" and the overview's "events needing attention".
-import { h, fmtUSD, fmtBytes, fmtInt, fmtMs, fmtDateTime, readableReason } from './util.js';
+import { h, fmtUSD, fmtBytes, fmtInt, fmtMs, fmtDateTime } from './util.js';
 import { t, hasT } from './i18n.js';
 import { badge } from './ui.js';
 
@@ -79,12 +79,17 @@ export function upstreamWhy(reason) {
   const m = /HTTP (\d{3})/.exec(raw);
   if (m) {
     const c = Number(m[1]);
-    const k = c === 401 || c === 403 ? 'ev.why.auth' : c === 429 ? 'ev.why.rate' : c === 402 ? 'ev.why.credit' : c >= 500 ? 'ev.why.server' : 'ev.why.other';
+    const badKey = /invalid api key|incorrect api key/i.test(raw);
+    const k = c === 401 || c === 403 || badKey ? 'ev.why.auth' : c === 429 ? 'ev.why.rate' : c === 402 ? 'ev.why.credit' : c >= 500 ? 'ev.why.server' : 'ev.why.other';
     return t(k, { c });
   }
-  if (/timeout|timed out/i.test(raw)) return t('ev.why.timeout');
+  if (/timeout|timed out|deadline/i.test(raw)) return t('ev.why.timeout');
+  if (/invalid api key|incorrect api key|unauthori[sz]ed|forbidden/i.test(raw)) return t('ev.why.authNoCode');
+  if (/rate.?limit|too many requests/i.test(raw)) return t('ev.why.rateNoCode');
   if (/blocked|disabled|credit|balance/i.test(raw)) return t('ev.why.blocked');
-  return readableReason(raw).short || t('ev.why.unknown');
+  if (/dial|connect|no such host|eof|reset by peer|tls/i.test(raw)) return t('ev.why.network');
+  // Raw upstream text stays in the detail view (pm-spec 10.4).
+  return raw ? t('ev.why.other0') : t('ev.why.unknown');
 }
 
 function changesText(e) {
@@ -134,25 +139,28 @@ export function eventSentence(e) {
     case 'key.cooldown': return /429|rate/i.test(d.reason || '') ? t('ev.s.cooldownRate', { name, n: d.seconds ?? '—' }) : t('ev.s.cooldown', { name, n: d.seconds ?? '—', why: upstreamWhy(d.reason) });
     case 'key.circuit_open': { const m = /after (\d+) consecutive/.exec(d.reason || ''); return t('ev.s.circuit', { name, k: m ? m[1] : '—', n: d.seconds ?? '—' }); }
     case 'model.sync':
-      if (res.ok === false || d.error) return t(e.type === 'system' ? 'ev.s.syncFailAuto' : 'ev.s.syncFail', { why: readableReason(res.error || d.error || '').short });
+      if (res.ok === false || res.error || d.error) return t(e.type === 'system' ? 'ev.s.syncFailAuto' : 'ev.s.syncFail', { why: upstreamWhy(res.error || d.error || '') });
       return t(e.type === 'system' ? 'ev.s.syncAuto' : 'ev.s.sync', { a: (res.added || []).length, u: (res.updated || []).length });
     case 'disk.low': return t('ev.s.disk', { p: Math.floor(d.used_percent || 0), f: fmtBytes(d.free_bytes || 0) });
     case 'logs.retention_start': return t('ev.s.retStart', { n: d.retention_days ?? '—' });
-    case 'logs.retention_end': return d.error ? t('ev.s.retFail', { why: d.error }) : t('ev.s.retEnd', { n: fmtInt(d.deleted ?? 0), d: d.retention_days ?? '—', ms: fmtMs(d.duration_ms || 0) });
+    case 'logs.retention_end': return d.error ? t('ev.s.retFail') : t('ev.s.retEnd', { n: fmtInt(d.deleted ?? 0), d: d.retention_days ?? '—', ms: fmtMs(d.duration_ms || 0) });
     case 'logs.purge': {
       const before = d.request && d.request.before ? fmtDateTime(d.request.before, { seconds: false }) : '—';
-      return d.error ? t('ev.s.purgeFail', { why: d.error }) : t('ev.s.purge', { before, n: fmtInt(res.deleted ?? 0), f: fmtBytes(res.freed_bytes || 0) });
+      return d.error ? t('ev.s.purgeFail') : t('ev.s.purge', { before, n: fmtInt(res.deleted ?? 0), f: fmtBytes(res.freed_bytes || 0) });
     }
-    case 'system.compact': return d.error ? t('ev.s.compactFail', { why: d.error }) : t('ev.s.compact', { f: fmtBytes(res.freed_bytes || 0) });
+    case 'system.compact': return d.error ? t('ev.s.compactFail') : t('ev.s.compact', { f: fmtBytes(res.freed_bytes || 0) });
     case 'system.start': return t('ev.s.start', { v: d.version || '—', s: d.schema_version ?? '—' });
     case 'system.migrate': return t('ev.s.migrate', { a: d.from_version ?? '—', b: d.to_version ?? '—' });
     case 'auth.login': return t('ev.s.login');
-    case 'auth.login_failed': return t('ev.s.loginFailed', { why: LOGIN_REASONS[d.reason] ? t(LOGIN_REASONS[d.reason]) : (d.reason || '—') });
+    case 'auth.login_failed': {
+      const why = LOGIN_REASONS[d.reason] ? t(LOGIN_REASONS[d.reason]) : d.reason;
+      return why ? t('ev.s.loginFailed', { why }) : t('ev.s.loginFailedBare');
+    }
     case 'auth.logout': return t('ev.s.logout');
     case 'auth.password_change': return t('ev.s.password') + (d.request && d.request.revoke_admin_tokens ? t('ev.s.passwordRevoked') : '');
     case 'key.import': return t('ev.s.import', { a: res.created ?? 0, s: res.skipped ?? 0 });
     case 'key.test': return t('ev.s.test', { name, r: res.ok ? t('ev.testOk') : (hasT(`test.${res.status}`) ? t(`test.${res.status}`) : res.status || '—') });
-    case 'key.test_many': return d.error ? t('ev.s.testManyFail', { why: d.error }) : t('ev.s.testMany', { n: res.total ?? 0, ok: (res.by_status || {}).ok ?? 0 });
+    case 'key.test_many': return d.error ? t('ev.s.testManyFail') : t('ev.s.testMany', { n: res.total ?? 0, ok: (res.by_status || {}).ok ?? 0 });
     case 'token.regenerate': return t('ev.s.regenerate', { name });
     case 'settings.update': return t('ev.s.settings', { c: changesText(e) || '—' });
     default: break;
@@ -188,6 +196,8 @@ export function requestReason(r) {
   if (s === 401 || s === 403) return k('upstreamAuth');
   if (s === 429) return k('upstreamRate');
   if (s >= 500) return k('upstream5xx');
+  if (s === 400 || s === 422) return k('badRequest');
+  if (s === 404) return k('notFound');
   if (!s && raw) return k('network');
   if (raw) return { text: raw.length > 120 ? `${raw.slice(0, 120)}…` : raw, raw, key: 'raw' };
   if (s >= 400) return { text: `HTTP ${s}`, raw: '', key: 'raw' };
