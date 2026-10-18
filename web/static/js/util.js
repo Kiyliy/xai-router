@@ -1,6 +1,6 @@
 // DOM + formatting helpers. All DOM construction goes through h()/s(), which only ever
 // set text via text nodes / setAttribute, so server data can never become markup.
-import { getLang } from './i18n.js';
+import { getLang, t } from './i18n.js';
 
 const PROPS = new Set(['value', 'checked', 'disabled', 'selected', 'indeterminate', 'readOnly', 'multiple', 'open']);
 
@@ -58,24 +58,33 @@ export function fmtCompact(n) {
   if (getLang() === 'zh') {
     // 中文界面：小于 1 万写完整数字，1 万起用“万”（1 位小数），1 亿起用“亿”（2 位小数）。
     const a = Math.abs(n);
+    // 例：8,612；1.2 万；5,210 万；1.86 亿（整数位加千分位，“万”的 .0 省略）。
     if (a < 1e4) return Number.isInteger(n) ? fmtInt(n) : String(Math.round(n * 100) / 100);
-    if (a < 1e8) return `${(n / 1e4).toFixed(1)} 万`;
-    return `${(n / 1e8).toFixed(2)} 亿`;
+    if (a < 1e8) {
+      const v = Math.round(n / 1e3) / 10;
+      return `${v.toLocaleString('en-US', { maximumFractionDigits: 1 })} 万`;
+    }
+    return `${(n / 1e8).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} 亿`;
   }
   if (Math.abs(n) < 1000) return String(Math.round(n * 100) / 100);
   return new Intl.NumberFormat(locale(), { notation: 'compact', maximumFractionDigits: 1 }).format(n);
 }
 
-/** USD with adaptive precision: $1,234.50 · $0.4213 · $0.000449 */
-export function fmtUSD(v, { zero = '$0' } = {}) {
+/**
+ * USD (pm-spec 10.3): $1,234.50 · $0.0056 · $0.00045 · $0 · −$1.20 (minus sign U+2212).
+ * Below $1: the first non-zero digit plus one more ($0.0017), at most 6 decimals.
+ * { precise: true } keeps up to 6 decimals, for itemized cost tables (pm-spec 10.8 batch 3 #76).
+ */
+export function fmtUSD(v, { zero = '$0', precise = false } = {}) {
   if (!isNum(v)) return '—';
   if (v === 0) return zero;
-  const a = Math.abs(v), sign = v < 0 ? '-' : '';
+  const a = Math.abs(v), sign = v < 0 ? '−' : '';
+  if (a < 0.000001) return '<$0.000001';
   let str;
   if (a >= 1000) str = a.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   else if (a >= 1) str = a.toFixed(2);
   else {
-    const digits = Math.min(10, Math.max(2, 2 - Math.floor(Math.log10(a))));
+    const digits = Math.min(6, Math.max(2, (precise ? 5 : 1) - Math.floor(Math.log10(a))));
     str = a.toFixed(digits).replace(/(\.\d*?[1-9])0+$/, '$1').replace(/\.0+$/, '');
     if (!str.includes('.')) str += '.00';
     else if (str.split('.')[1].length < 2) str += '0';
@@ -84,7 +93,7 @@ export function fmtUSD(v, { zero = '$0' } = {}) {
 }
 
 /** Price per 1M tokens etc. Empty when not applicable. */
-export function fmtPrice(v) { return isNum(v) && v > 0 ? fmtUSD(v) : '—'; }
+export function fmtPrice(v) { return isNum(v) && v > 0 ? fmtUSD(v, { precise: true }) : "—"; }
 
 export function fmtMs(ms) {
   if (!isNum(ms)) return '—';
@@ -94,7 +103,7 @@ export function fmtMs(ms) {
     return `${Math.floor(ms / 60000)} 分 ${Math.round((ms % 60000) / 1000)} 秒`;
   }
   if (ms < 1000) return `${Math.round(ms)} ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(ms < 10000 ? 2 : 1)} s`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)} s`;
   const m = Math.floor(ms / 60000), sec = Math.round((ms % 60000) / 1000);
   return `${m}m ${sec}s`;
 }
@@ -102,7 +111,10 @@ export function fmtMs(ms) {
 export function fmtPct(v, digits = 1) {
   if (!isNum(v)) return '—';
   const p = v * 100;
-  return `${p >= 99.95 && p < 100 ? '99.9' : p.toFixed(p === 100 || p === 0 ? 0 : digits)}%`;
+  if (p === 100 || p === 0) return `${p}%`;
+  // ≥ 99% (success rates): 2 decimals, rounded down so 99.996% never shows as 100.00%.
+  if (p >= 99 && p < 100) return `${(Math.floor(p * 100) / 100).toFixed(2)}%`;
+  return `${p.toFixed(digits)}%`;
 }
 
 export function fmtBytes(b) {
@@ -116,6 +128,13 @@ export function fmtDuration(sec) {
   if (!isNum(sec)) return '—';
   sec = Math.max(0, Math.floor(sec));
   const d = Math.floor(sec / 86400), hh = Math.floor((sec % 86400) / 3600), mm = Math.floor((sec % 3600) / 60), ss = sec % 60;
+  if (getLang() === 'zh') {
+    // 例：41 秒；1 分 42 秒；3 小时 5 分；2 天 4 小时
+    if (d) return `${d} 天 ${hh} 小时`;
+    if (hh) return `${hh} 小时 ${mm} 分`;
+    if (mm) return `${mm} 分 ${ss} 秒`;
+    return `${ss} 秒`;
+  }
   if (d) return `${d}d ${hh}h`;
   if (hh) return `${hh}h ${mm}m`;
   if (mm) return `${mm}m ${ss}s`;
@@ -123,11 +142,34 @@ export function fmtDuration(sec) {
 }
 
 const pad = (n) => String(n).padStart(2, '0');
+/**
+ * Detail timestamp: 2026-10-18 14:02:33. With { seconds: false } this is the list form
+ * (pm-spec 10.3): zh “10月18日 14:02” (year added when it is not this year), en “Oct 18, 14:02”.
+ */
 export function fmtDateTime(iso, { seconds = true } = {}) {
   if (!iso) return '—';
   const d = new Date(iso);
   if (isNaN(d)) return String(iso);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}${seconds ? ':' + pad(d.getSeconds()) : ''}`;
+  if (!seconds) return fmtDateList(d);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+const EN_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** List date only: zh “9月12日” / “2027年1月1日”, en “Sep 12” / “Jan 1, 2027”. */
+export function fmtDate(iso) {
+  if (!iso) return '—';
+  const d = iso instanceof Date ? iso : new Date(iso);
+  if (isNaN(d)) return String(iso);
+  const otherYear = d.getFullYear() !== new Date().getFullYear();
+  if (getLang() === 'zh') return `${otherYear ? d.getFullYear() + '年' : ''}${d.getMonth() + 1}月${d.getDate()}日`;
+  return `${EN_MONTHS[d.getMonth()]} ${d.getDate()}${otherYear ? ', ' + d.getFullYear() : ''}`;
+}
+/** List date and time: zh “10月18日 14:02”, en “Oct 18, 14:02”. */
+export function fmtDateList(iso) {
+  if (!iso) return '—';
+  const d = iso instanceof Date ? iso : new Date(iso);
+  if (isNaN(d)) return String(iso);
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return getLang() === 'zh' ? `${fmtDate(d)} ${hm}` : `${fmtDate(d)}, ${hm}`;
 }
 export function fmtTimeShort(iso) {
   const d = new Date(iso);
@@ -140,13 +182,22 @@ export function relTime(iso) {
   if (isNaN(d)) return String(iso);
   const diff = (d.getTime() - Date.now()) / 1000;
   const a = Math.abs(diff);
+  // Past (pm-spec 10.3): 刚刚 / N 分钟前 / N 小时前, older than a day → the absolute list time.
+  if (diff <= 5) {
+    const zh = getLang() === 'zh';
+    if (a < 60) return zh ? '刚刚' : 'just now';
+    if (a < 3600) { const n = Math.floor(a / 60); return zh ? `${n} 分钟前` : `${n} min ago`; }
+    if (a < 86400) { const n = Math.floor(a / 3600); return zh ? `${n} 小时前` : `${n} hr ago`; }
+    return fmtDateList(d);
+  }
   const rtf = new Intl.RelativeTimeFormat(locale(), { numeric: 'auto' });
-  if (a < 45) return rtf.format(Math.round(diff), 'second');
-  if (a < 2700) return rtf.format(Math.round(diff / 60), 'minute');
-  if (a < 79200) return rtf.format(Math.round(diff / 3600), 'hour');
-  if (a < 2592000) return rtf.format(Math.round(diff / 86400), 'day');
-  if (a < 31536000) return rtf.format(Math.round(diff / 2592000), 'month');
-  return rtf.format(Math.round(diff / 31536000), 'year');
+  const fmt = (n, unit) => { const out = rtf.format(n, unit); return getLang() === 'zh' ? out.replace(/(\d)([^\d\s])/, '$1 $2') : out; };
+  if (a < 45) return fmt(Math.round(diff), 'second');
+  if (a < 2700) return fmt(Math.round(diff / 60), 'minute');
+  if (a < 79200) return fmt(Math.round(diff / 3600), 'hour');
+  if (a < 2592000) return fmt(Math.round(diff / 86400), 'day');
+  if (a < 31536000) return fmt(Math.round(diff / 2592000), 'month');
+  return fmt(Math.round(diff / 31536000), 'year');
 }
 
 /** <time> showing relative time with the absolute timestamp on hover. */
