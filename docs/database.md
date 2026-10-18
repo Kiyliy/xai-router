@@ -21,9 +21,9 @@ xai-router 把全部状态存在一个 SQLite 文件里（`$XR_DATA_DIR/xai-rout
 | `keys.attempts` / `attempt_errors` | 尝试次数 / 失败次数 | Attempts / failed | `attempts` / `attempt_errors`（旧名 `requests` / `errors` 保留） |
 | `tokens` | 客户端令牌 | Client token | `/api/v1/tokens`，日志里的 `token_id` / `token_name` |
 | `tokens.token_hash` / `prefix` | 令牌值（只存 hash）/ 令牌前缀 | token value / prefix | `prefix`（令牌值只在创建或重新生成时返回一次） |
-| `tokens.quota_ticks` / `used_ticks` | 额度 / 额度已用 | Quota / quota used | `quota_usd` / `used_usd` |
-| `tokens.used_ticks + reset_ticks` | 累计花费 | Total spend | `spent_usd` |
-| `events` | 事件日志（操作 / 系统） | Event log (operation / system) | `/api/v1/events` |
+| `tokens.quota_ticks` / `used_ticks` | 额度 / 已用 | Quota / used | `quota_usd` / `used_usd`（`spent_usd` 是旧名，值相同） |
+| `tokens.unlimited` | 不限额度 | Unlimited | `unlimited` |
+| `events` | 日志里的操作记录 / 系统记录 | Audit / system records | `/api/v1/logs?type=audit,system`、`/api/v1/events/{id}` |
 | `admin_tokens` | 管理 API 令牌 | Admin API token | `/api/v1/admin-tokens` |
 | `sessions` | 控制台登录会话 | Console session | — |
 | `request_logs` | 请求日志 | Request logs | `/api/v1/logs` |
@@ -61,7 +61,7 @@ xai-router 把全部状态存在一个 SQLite 文件里（`$XR_DATA_DIR/xai-rout
 | `log_attempts` | 每次上游尝试（一个请求可能换上游密钥重试多次） | 约等于日志条数 |
 | `bindings` | 上游资源与创建它的上游密钥、客户端令牌之间的绑定。资源包括异步视频/图片任务、已存的 response、文件、批处理等 | 随异步任务量 |
 | `stats_dim` | 按小时预聚合的统计，分 4 个维度：全部 / 模型 / 上游密钥 / 客户端令牌 | 每小时最多 1 + 模型数 + 上游密钥数 + 客户端令牌数 行 |
-| `events` | 事件日志：管理员做了什么（operation）、网关自己做了什么（system）。只能追加，永久保留 | 每天几十到几百行 |
+| `events` | 操作记录（管理员做了什么，`audit`）和系统记录（网关自己做了什么，`system`）。只能追加，永久保留 | 每天几十到几百行 |
 
 ## 4. 关系图
 
@@ -123,10 +123,9 @@ erDiagram
 | token_hash | TEXT | NOT NULL UNIQUE | 令牌值的 SHA-256（hex）。**不存明文**，令牌值只在创建或重新生成时返回一次。软删除后改写为 `deleted:<id>`，令牌立即失效 |
 | prefix | TEXT | NOT NULL | 令牌值的前几位（`sk-xr-xxxx`） |
 | enabled | INTEGER | 1 | |
-| quota_ticks | INTEGER | 0 | 额度，0 = 不限 |
-| used_ticks | INTEGER | 0 | **额度已用**，用来判断额度够不够。从 v0.4.1 起不再提供"重置用量"，额度只能通过调整（见 5.9）增减 |
-| reset_ticks | INTEGER | 0 | v0.4.0 时"重置用量"清掉的金额之和（v8，之后不再写入）。`used_ticks + reset_ticks` = 累计花费 |
-| used_reset_at | INTEGER | 0 | v0.4.0 时最近一次重置用量的时间（v8，之后不再写入） |
+| unlimited | INTEGER | 0 | 1 = 不限额度（v9）。不限额是独立状态：限额令牌的额度为 0 时请求被拦截，不会当成不限额 |
+| quota_ticks | INTEGER | 0 | 额度（限额时生效）。创建时设定，之后只能通过调整（见 5.9）增减，每次调整都有记录 |
+| used_ticks | INTEGER | 0 | **已用** = 这个令牌的累计花费，用来判断额度够不够。v0.4.1 起不能重置；v0.4.0 时被"重置用量"清掉的金额在迁移时加回（见第 9 节），所以已用 = 日志费用之和 |
 | expires_at | INTEGER | 0 | 0 = 永不过期 |
 | allowed_models | TEXT | '[]' | 模型白名单（JSON 数组，支持别名和 `grok-4*` 通配），空 = 全部 |
 | requests / last_used_at | INTEGER | 0 | 计数器 |
@@ -186,6 +185,8 @@ erDiagram
 | attempts | INTEGER | 0 | 上游尝试次数（详情在 `log_attempts`） |
 | ttfb_ms / latency_ms | INTEGER | 0 | 首包耗时、总耗时 |
 | prompt_tokens, completion_tokens, cached_tokens, reasoning_tokens, image_tokens, total_tokens | INTEGER | 0 | 统一口径后的 Token 数 |
+| cache_write_tokens | INTEGER NULL | NULL | 缓存写入的 Token 数（v9）。NULL = 上游没有报告（chat、responses），界面显示"—"；messages 接口报告 0 或实际值 |
+| price_snapshot | TEXT | '' | 计费时用的单价（JSON，v9）：输入、缓存输入、输出、图片输入、长上下文、优先级，或图片 / 视频单价。改价后旧请求的单价不变；v0.4.1 之前的行为空 |
 | images / video_seconds | INTEGER / REAL | 0 | 媒体用量。视频秒数可能有小数，它只是用量，不是金额 |
 | cost_ticks | INTEGER | 0 | 本请求的费用 |
 | cost_source | TEXT | 'none' | upstream（上游返回）/ computed（按价格表算）/ estimated（响应被截断时估算）/ none |
@@ -235,23 +236,27 @@ erDiagram
 
 每批日志写入时，在**同一个事务**里对 4 个维度做 upsert。关闭"记录日志"、或者某条日志写入失败只能记账时，统计照样累加，所以统计是计费的权威来源；日志会过期删除，统计不会。
 
-### 5.9 `events`（事件日志，v9）
+### 5.9 `events`（操作记录和系统记录，v9）
 
 | 字段 | 类型 | 含义 |
 |---|---|---|
 | id | INTEGER PK 自增 | |
 | created_at | INTEGER | 发生时间（Unix 毫秒） |
-| kind | TEXT | `operation`（管理员操作）/ `system`（网关自动行为） |
-| action | TEXT | 例如 `key.update`、`token.quota_adjust`、`key.auto_disable`、`logs.retention`、`disk.low` |
+| kind | TEXT | `audit`（管理员操作）/ `system`（网关自动行为）；API 里叫 `type` |
+| level | TEXT | `info` / `warn` / `error`。"只看警告和错误"按它筛选 |
+| action | TEXT | 例如 `key.update`、`key.disable`、`token.quota_increase`、`auth.login_failed`、`key.auto_disable`、`key.cooldown`、`logs.retention_end`、`model.sync`、`disk.low` |
 | actor / actor_name | TEXT | `password` / admin；`admin_token:<id>` / 令牌名；`system` |
-| target_type / target_id / target_name | TEXT | 被操作对象；名称在操作当时解析（删除前） |
+| target_type / target_id / target_name / target_hint | TEXT | 被操作对象；名称和提示（令牌前缀或掩码后的 key）在操作当时解析（删除前） |
 | ip | TEXT | 管理员的客户端 IP |
-| detail | TEXT | JSON：请求字段（`key`、`password`、`token` 等密文一律写成 `[redacted]`），或该事件特有的数据（额度调整的前后金额、清理的条数等） |
+| request_id | TEXT | 引起这条记录的请求（例如让 key 被自动禁用的那个请求），界面可以跳过去 |
+| detail | TEXT | JSON：`changes`（更新时每个变化字段的 before / after）、`request`（创建时的请求字段；`key`、`password`、`token` 等密文一律写成 `[redacted]`）、`result`（检测、导入、同步、清理、压缩的结果），或额度记录的金额 |
 
 - **只能追加**：两个触发器拒绝任何 `UPDATE` 和 `DELETE`，所以连网关自己也改不了历史；**永久保留**，不受日志保留天数和手动清理影响。
-- **记录什么**：管理 API 每一次成功的写操作（由中间件统一记录）和登录；系统事件只记状态变化，不记高频事件。例如上游密钥只在"变成自动禁用"的那一刻记一条，冷却不记；模型同步只在价格变化或失败时记；磁盘告警每越过一次阈值记一条。
-- **额度调整**：客户端令牌的额度在创建时设定，之后只能用 `POST /api/v1/tokens/{id}/quota` 增减（或改为不限额度）。额度的修改和对应的 `token.quota_adjust` 事件在**同一个事务**里写入，事件 detail 里有调整前后的 tick 数和备注，所以额度不可能"没有记录地改变"。
-- 索引：`(created_at)`、`(kind, created_at)`、`(target_type, target_id, created_at)`，分别服务全量列表、按类型筛选、某个对象的历史（例如令牌的额度记录）。
+- **记录什么**：管理 API 每一次成功的写操作（由中间件统一记录，含变更前后值），登录成功和失败（失败只记原因，不记输入）；后台任务（清理、压缩、批量检测）在结束时记一条带结果的记录。系统记录只记状态变化，不记高频事件：上游密钥变成自动禁用（error）、进入冷却（warn，延长冷却不记）、熔断（warn），都带触发请求的 id；定时清理记开始和结束；模型同步成功（info）和失败（error）；磁盘每越过一次阈值记一条；进程启动（带版本和 schema 版本）、停止和迁移。
+- **额度记录**：客户端令牌的额度在创建时设定（`token.quota_initial`），之后只能用 `POST /api/v1/tokens/{id}/quota` 增加、减少（不能低于已用）、切换为不限额或限额（`token.quota_increase` / `_decrease` / `_set_unlimited` / `_set_limited`）。额度的修改和记录在**同一个事务**里写入，并持有额度模块的锁，所以额度不可能"没有记录地改变"，也不会有请求按旧额度放行。记录的 detail 里有金额、前后额度、当时的已用和原因；所有记录的金额之和 = 当前额度（`GET …/quota-history` 的 `granted_total_usd`）。
+- 索引：`(created_at)`、`(kind, created_at)`、`(target_type, target_id, created_at)`、`(created_at) WHERE level <> 'info'`，分别服务全量列表、按类型筛选、某个对象的历史（例如令牌的额度记录、key 的最近事件）、只看警告和错误。
+
+**统一的日志接口。** `GET /api/v1/logs?type=request,audit,system` 把请求和这两类记录按时间倒序混排。只看请求时照旧按页码分页；混排时每个来源各取一页（都走自己的 `created_at` 索引），在内存里合并，用游标 `<毫秒>.<0|1>.<id>` 翻下一页，所以深翻页的成本和第 1 页一样。同一毫秒内记录排在请求前面，再按 id 倒序。`key_id` / `token_id` 同时作用于请求和关于该对象的记录；只属于一个来源的筛选（模型、状态、动作等）会把另一个来源排除。300 万条请求加 10 万条记录时，各种混排查询的 p95 都在 200ms 以内（`notes/xai-router-evidence/bench-v041-u27.md`）。
 
 ## 6. 索引与它服务的查询
 
@@ -312,7 +317,7 @@ v0.4.0 之前硬删除的对象，在统计里显示为"#id（已删除）"。
 
 **花费和账单以 `stats_dim` 为准**。统计永久保留，并且包含没有记录日志的请求；日志只在保留期内可以对照。对账关系：
 
-- 统计费用之和 = 所有客户端令牌的 `used_ticks + reset_ticks` 之和（含已删除的令牌）+ 没有令牌的请求的费用；
+- 统计费用之和 = 所有客户端令牌的 `used_ticks` 之和（含已删除的令牌）+ 没有令牌的请求的费用；
 - 统计中"按上游密钥"的费用之和 = 统计总费用。各上游密钥的 `cost_ticks` 按上游尝试记账，用于显示该密钥自己的花费。
 
 `tokens.used_ticks` 同时是额度判断的依据。启动时从库里加载，运行时由额度模块在内存中预扣和结算。
@@ -321,7 +326,7 @@ v0.4.0 之前硬删除的对象，在统计里显示为"#id（已删除）"。
 
 | 数据 | 保留多久 | 由谁清理 |
 |---|---|---|
-| 请求日志（含正文、尝试记录） | 默认 30 天（`log_retention_days`，0 = 永久） | 后台清理在启动 1 分钟后执行第一次，之后每小时一次；按小步删除（每步持写锁约 10ms），每次执行都记一条 `logs.retention` 事件。也可以在"数据与存储"页按日期手动清理（后台任务，有进度和预估条数） |
+| 请求日志（含正文、尝试记录） | 默认 30 天（`log_retention_days`，0 = 永久） | 后台清理在启动 1 分钟后执行第一次，之后每小时一次；按小步删除（每步持写锁约 10ms），有要删的日志时记 `logs.retention_start` 和 `logs.retention_end`（带删除条数和耗时，出错时为 error）。也可以在"数据与存储"页按日期手动清理（后台任务；预估条数按 `created_at` 精确计数，进度用实际删除数；只删请求日志，操作和系统记录一条不少） |
 | 统计 `stats_dim` | **永久**。每小时最多几十行，一年约几十万行 | 不清理 |
 | 绑定 | 默认 720 小时（`task_binding_ttl_hours`） | 后台清理 |
 | 控制台会话 | 30 天滑动过期 | 后台清理 |
@@ -358,7 +363,7 @@ v0.4.0 之前硬删除的对象，在统计里显示为"#id（已删除）"。
 | v6 | v0.3.0 | 错误文本搜索的覆盖索引 `idx_logs_errsearch`，替换 v4 的索引 |
 | v7 | v0.3.0 | 模型、上游密钥、客户端令牌三个索引改为覆盖其他筛选列（`*_f`），替换旧的单列索引 |
 | v8 | v0.4.0 | 以下改动依据第 10 节的评审：上游密钥和客户端令牌加 `deleted_at`（软删除）；令牌加 `reset_ticks`、`used_reset_at`；`keys.requests/errors` 改名为 `attempts/attempt_errors`；`models.image_input_ticks` 改名为 `image_token_ticks`；日志加 `token_prefix`；删除空表 `stats_hourly` |
-| v9 | v0.4.1 | 事件日志表 `events`（只能追加的触发器）。同版本的代码改动：额度只能调整并留记录，去掉重置用量；请求体 / 响应体分别设上限 |
+| v9 | v0.4.1 | 操作和系统记录表 `events`（`kind`、`level`、`target_hint`、`request_id`，只能追加的触发器）；令牌加 `unlimited`（原来 `quota_ticks = 0` 的令牌迁移为不限额），v0.4.0 重置用量清掉的 `reset_ticks` 加回 `used_ticks`，然后删除 `reset_ticks`、`used_reset_at`；每个令牌写一条 `token.quota_migrate` 记录（`reason_code` 为 `pre_v0_4_1`，有重置历史的再写一条 `reset_folded`），使记录之和 = 当前额度、剩余不变；日志加 `cache_write_tokens`、`price_snapshot`。同版本的代码改动：额度只能调整并留记录，去掉重置用量（`PATCH /tokens/{id}` 带 `quota_usd` 或 `reset_usage` 返回 400 `quota_is_adjustment_only`）；请求体 / 响应体分别设上限 |
 
 升级测试：
 - `store.TestUpgradeFromV010Schema`：用 v0.1.0 的 schema 和数据升级到最新版本，核对数据，并验证重复启动不会出错；
@@ -367,7 +372,8 @@ v0.4.0 之前硬删除的对象，在统计里显示为"#id（已删除）"。
   - 软删除、重置用量和名称/前缀解析在旧数据上都正确；
   - 令牌累计花费仍等于日志费用；
   - 删除后可以重新添加同一个上游密钥；
-  - 数据库版本比程序新时拒绝启动。
+  - 数据库版本比程序新时拒绝启动；
+- `store.TestUpgradeFromV040ResetFolding`：用 v0.4.0（v8）的数据库升级，覆盖三种令牌（有重置历史的限额令牌、有重置历史的不限额令牌、无重置历史的令牌），核对剩余不变、已用 = 日志费用之和、记录之和 = 当前额度，并且每个令牌都有迁移记录。
 
 ## 10. 评审与决定
 

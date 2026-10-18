@@ -49,7 +49,7 @@ xai-router 位于你的应用和 `https://api.x.ai` 之间。把任意 OpenAI / 
   首包时间、总耗时、模型、各类 token、费用及其来源、key、令牌和客户端 IP。base64 大字段会被剔除，
   单条日志大小可配置上限，过期日志每天自动清理。可按时间、模型、状态、key、令牌、路径、请求 ID 搜索；
   打开任意一条可左右分栏查看请求和响应，或一键"复制为 curl"。
-- **事件日志**：管理员做的每一次修改（谁、从哪个 IP、改了什么，必要时记下前后的值，密文不落盘），以及网关自己做的事（自动禁用 key、定时清理日志、模型同步、磁盘告警），都记在一张只能追加、永久保留的表里。令牌额度不能重置，只能通过留有记录的调整来增减。
+- **请求、操作、系统记录在同一个日志里**：管理员做的每一次修改（谁、从哪个 IP、改了什么、前后的值，密文不落盘），以及网关自己做的事（自动禁用或冷却 key 并带上触发的请求、定时清理日志、模型同步、磁盘告警），都记在一张只能追加、永久保留的表里，和请求按时间倒序混排，可以只看警告和错误。令牌额度不能重置，只能通过留有记录的调整来增减，记录之和始终等于额度。
 - **按客户端请求口径统计**：请求数、成功率、token、费用、延迟的时间趋势，按模型、key、令牌拆分。日志被清理后统计数据仍保留。
 - **管理 API 全部开放**：后台的所有操作都通过带版本号的 REST API（`/api/v1`）完成，错误格式统一，
   提供 [OpenAPI 3 规范](web/static/openapi.yaml)，后台内也能直接浏览。
@@ -142,6 +142,11 @@ XR_ADMIN_PASSWORD='换成强密码' ./xai-router
 但会以"blocked by upstream policy"被跳过，直到你在 **设置 → 安全** 里放开对应的主机（`upstream_allowed_hosts`、
 `allow_insecure_upstreams`、`allow_private_upstreams`）。
 
+从 v0.4.1 开始，令牌额度只能通过 `POST /api/v1/tokens/{id}/quota` 调整（increase、decrease、set_limited、set_unlimited，必须填原因）；
+`PATCH /api/v1/tokens/{id}` 带 `quota_usd` 或 `reset_usage` 会返回 400 `quota_is_adjustment_only`，用这种方式改额度的脚本需要改写。
+不能再重置用量：升级时把 v0.4.0 重置清掉的金额加回已用，并写入对应的额度记录，所以每个令牌的剩余额度不变。
+通过 API 创建令牌时不传 `quota_usd` 仍然是不限额度。`GET /api/v1/events` 由 `GET /api/v1/logs?type=audit,system` 代替。
+
 ## 调用网关
 
 任何 OpenAI 兼容 SDK 都可以，只需改 base URL 和 key：
@@ -227,11 +232,11 @@ curl -s "${auth[@]}" -X POST $BASE/api/v1/models/sync
 |---|---|
 | 认证 | `POST /auth/login`、`POST /auth/logout`、`GET /auth/me`、`PUT /auth/password` |
 | Key | `GET/POST /keys`、`GET/PATCH/DELETE /keys/{id}`、`POST /keys/import`、`POST /keys/test`、`POST /keys/{id}/test`、`POST /keys/{id}/reset` |
-| 令牌 | `GET/POST /tokens`、`GET/PATCH/DELETE /tokens/{id}`、`POST /tokens/{id}/regenerate`、`POST /tokens/{id}/quota` |
-| 事件日志 | `GET /events`（操作和系统事件，只能追加） |
+| 令牌 | `GET/POST /tokens`、`GET/PATCH/DELETE /tokens/{id}`、`POST /tokens/{id}/regenerate`、`POST /tokens/{id}/quota`、`GET /tokens/{id}/quota-history` |
+| 操作和系统记录 | `GET /logs?type=audit,system`（只能追加）、`GET /events/{id}` |
 | 管理令牌 | `GET/POST /admin-tokens`、`DELETE /admin-tokens/{id}` |
 | 模型 | `GET/POST /models`、`PATCH/DELETE /models/{id}`、`POST /models/sync` |
-| 日志 | `GET/DELETE /logs`、`GET /logs/{id}`、`GET /logs/{id}/curl` |
+| 日志 | `GET/DELETE /logs`（`type=request,audit,system` 混排，用 `cursor` 翻页）、`GET /logs/{id}`、`GET /logs/{id}/curl` |
 | 统计 | `GET /stats/overview`、`GET /stats/timeseries`、`GET /stats/breakdown` |
 | 后台任务 | `GET /jobs`、`GET /jobs/{id}`（删除日志、`POST /keys/test` 带 `"async": true`、`POST /system/compact`） |
 | 设置与系统 | `GET/PUT /settings`、`GET /system/info`、`POST /system/compact`、`GET /healthz` |

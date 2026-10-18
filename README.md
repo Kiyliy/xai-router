@@ -67,10 +67,12 @@ external services.
   payloads are stripped, bodies are capped at a configurable size, and old logs are deleted
   daily. Search by time, model, status, key, token, path or request id; open any log to see
   request and response side by side, or copy it as a `curl` command.
-- **Event log** — every change an administrator makes (who, from which IP, what, before/after where it
-  matters, secrets redacted) and everything the gateway does on its own (keys disabled, retention runs,
-  model syncs, low disk) in one append-only table that is kept forever. Token quotas are never reset:
-  they are raised or lowered with a recorded adjustment.
+- **One log for requests, audit and system records** — every change an administrator makes (who, from
+  which IP, what, before/after, secrets redacted) and everything the gateway does on its own (keys
+  disabled or cooling down, with the request that caused it; retention runs, model syncs, low disk) are
+  kept forever in an append-only table and listed together with the requests, newest first, with a
+  "warnings and errors only" switch. Token quotas are never reset: they are raised or lowered with a
+  recorded adjustment, and the records always add up to the quota.
 - **Statistics per client request** — requests, success rate, tokens, cost and latency over time,
   broken down by model, key and token. Aggregates survive log retention.
 - **Open admin API** — everything the console does goes through a versioned REST API
@@ -175,6 +177,14 @@ protection). Keys that point elsewhere stay in the pool but are skipped with "bl
 policy" until you allow their host under **Settings → Security** (`upstream_allowed_hosts`,
 `allow_insecure_upstreams`, `allow_private_upstreams`).
 
+From v0.4.1 on, a token's quota only changes through `POST /api/v1/tokens/{id}/quota` (increase,
+decrease, set_limited, set_unlimited, with a reason); `PATCH /api/v1/tokens/{id}` with `quota_usd` or
+`reset_usage` now returns 400 `quota_is_adjustment_only`, so scripts that set quotas that way must switch.
+Usage can no longer be reset: amounts cleared by v0.4.0 resets are added back to the used amount
+on upgrade, with matching quota records, so every token's remaining balance stays the same. Tokens
+created through the API without `quota_usd` are unlimited (as before). `GET /api/v1/events` is
+replaced by `GET /api/v1/logs?type=audit,system`.
+
 ## Using the gateway
 
 Any OpenAI-compatible SDK works — just change the base URL and key.
@@ -266,11 +276,11 @@ curl -s "${auth[@]}" -X POST $BASE/api/v1/models/sync
 |---|---|
 | Auth | `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, `PUT /auth/password` |
 | Keys | `GET/POST /keys`, `GET/PATCH/DELETE /keys/{id}`, `POST /keys/import`, `POST /keys/test`, `POST /keys/{id}/test`, `POST /keys/{id}/reset` |
-| Tokens | `GET/POST /tokens`, `GET/PATCH/DELETE /tokens/{id}`, `POST /tokens/{id}/regenerate`, `POST /tokens/{id}/quota` |
-| Event log | `GET /events` (operation and system events, append-only) |
+| Tokens | `GET/POST /tokens`, `GET/PATCH/DELETE /tokens/{id}`, `POST /tokens/{id}/regenerate`, `POST /tokens/{id}/quota`, `GET /tokens/{id}/quota-history` |
+| Audit and system records | `GET /logs?type=audit,system` (append-only), `GET /events/{id}` |
 | Admin tokens | `GET/POST /admin-tokens`, `DELETE /admin-tokens/{id}` |
 | Models | `GET/POST /models`, `PATCH/DELETE /models/{id}`, `POST /models/sync` |
-| Logs | `GET/DELETE /logs`, `GET /logs/{id}`, `GET /logs/{id}/curl` |
+| Logs | `GET/DELETE /logs` (`type=request,audit,system` merges the sources; page with `cursor`), `GET /logs/{id}`, `GET /logs/{id}/curl` |
 | Stats | `GET /stats/overview`, `GET /stats/timeseries`, `GET /stats/breakdown` |
 | Background jobs | `GET /jobs`, `GET /jobs/{id}` (log purge, `POST /keys/test` with `"async": true`, `POST /system/compact`) |
 | Settings & system | `GET/PUT /settings`, `GET /system/info`, `POST /system/compact`, `GET /healthz` |
