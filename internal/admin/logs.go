@@ -316,6 +316,7 @@ func (s *Server) deleteLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	// Purging millions of rows takes minutes: run it in the background in
 	// small chunks (requests keep flowing) and report progress as a job.
+	finish := s.jobAudit(r, "logs.purge", "logs", map[string]any{"before": msTime(before)})
 	j, _ := s.jobs.start("purge_logs", func(ctx context.Context, j *Job) (any, error) {
 		total := s.DB.CountLogsBefore(ctx, before)
 		s.jobs.update(j, func(j *Job) { j.Phase, j.Total = "delete", total })
@@ -323,6 +324,7 @@ func (s *Server) deleteLogs(w http.ResponseWriter, r *http.Request) {
 			s.jobs.update(j, func(j *Job) { j.Progress = done })
 		})
 		if err != nil {
+			finish(map[string]any{"deleted": n}, err)
 			return map[string]any{"deleted": n}, err
 		}
 		// The freed pages are not returned to the disk here: new logs reuse
@@ -330,6 +332,7 @@ func (s *Server) deleteLogs(w http.ResponseWriter, r *http.Request) {
 		// by one (measured ~25 pages/s, a day for 13 GB). Returning space to
 		// the OS is the explicit, paced "compact" job.
 		_ = s.DB.Vacuum(ctx) // WAL checkpoint
+		finish(map[string]any{"deleted": n}, nil)
 		return map[string]any{"deleted": n}, nil
 	})
 	writeJSON(w, http.StatusAccepted, j)

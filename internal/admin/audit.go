@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Kiyliy/xai-router/internal/keytest"
 	"github.com/Kiyliy/xai-router/internal/netutil"
 	"github.com/Kiyliy/xai-router/internal/store"
 )
@@ -155,6 +156,33 @@ func (s *Server) audit(pattern string, next http.HandlerFunc) http.HandlerFunc {
 			o.TargetName, o.TargetHint, detail
 		s.recordEvent(r.Context(), e)
 	}
+}
+
+// jobAudit records an operation that runs as a background job when the
+// job ends (with its result), instead of when the request returns.
+func (s *Server) jobAudit(r *http.Request, action, targetType string, request map[string]any) func(result any, err error) {
+	e := s.newAudit(r, action)
+	e.TargetType = targetType
+	if o := opFrom(r); o != nil {
+		o.Recorded = true
+	}
+	return func(result any, err error) {
+		e.CreatedAt = 0 // the time the job finished
+		e.Detail = map[string]any{"request": request, "result": result}
+		if err != nil {
+			e.Level, e.Detail["error"] = store.LevelError, err.Error()
+		}
+		s.recordEvent(context.Background(), e)
+	}
+}
+
+// testSummary counts test results by status.
+func testSummary(res []keytest.Result) map[string]any {
+	by := map[string]int{}
+	for _, r := range res {
+		by[r.Status]++
+	}
+	return map[string]any{"total": len(res), "by_status": by}
 }
 
 // recordEvent appends an event, outliving the request's context.

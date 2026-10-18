@@ -114,12 +114,15 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
 
 // compact reclaims free pages of the database file in the background.
 func (s *Server) compact(w http.ResponseWriter, r *http.Request) {
+	finish := s.jobAudit(r, "system.compact", "database", nil)
 	j, _ := s.jobs.start("compact", func(ctx context.Context, j *Job) (any, error) {
 		before := s.DB.Size()
 		freed, err := s.DB.IncrementalVacuum(ctx, func(done, total int64) {
 			s.jobs.update(j, func(j *Job) { j.Progress, j.Total = done, total })
 		})
-		return map[string]any{"freed_bytes": freed, "size_before": before, "size_after": s.DB.Size()}, err
+		res := map[string]any{"freed_bytes": freed, "size_before": before, "size_after": s.DB.Size()}
+		finish(res, err)
+		return res, err
 	})
 	writeJSON(w, http.StatusAccepted, j)
 }

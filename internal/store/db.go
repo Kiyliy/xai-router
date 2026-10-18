@@ -522,3 +522,6 @@ func boolInt(b bool) int {
 func isUnique(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
+
+// SchemaVersion is the schema version this binary migrates to.
+func SchemaVersion() int { return len(migrations) }

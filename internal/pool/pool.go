@@ -243,6 +243,9 @@ type Outcome struct {
 	NetErr  error
 	Timeout bool
 	Echo    []string // client-supplied values the upstream may echo (model name…)
+	// RequestID of the client request, recorded with the key's state
+	// changes so the log can link them to the request that caused them.
+	RequestID string
 }
 
 // Verdict is what the proxy should do after an attempt.
@@ -265,7 +268,7 @@ func (p *Pool) Report(id int64, o Outcome) Verdict {
 	}
 	now := p.now()
 	var persist func()
-	var disabledEvent func()
+	var event func()
 	switch v.Action {
 	case ActionSuccess, ActionReturn:
 		e.consecFails = 0
@@ -288,7 +291,7 @@ func (p *Pool) Report(id int64, o Outcome) Verdict {
 	case ActionDisable:
 		if !e.key.AutoDisabled {
 			k := *e.key
-			disabledEvent = func() { p.disabledEvent(&k, v.Reason) }
+			event = func() { p.keyEvent(&k, "key.auto_disable", store.LevelError, v.Reason, o.RequestID, nil) }
 		}
 		e.key.AutoDisabled = true
 		e.key.StatusReason = v.Reason
@@ -298,6 +301,12 @@ func (p *Pool) Report(id int64, o Outcome) Verdict {
 		d := time.Duration(s.CooldownSeconds) * time.Second
 		if ra := retryAfter(o.Header); ra > 0 {
 			d = min(ra, 24*time.Hour)
+		}
+		if !e.cooldownUntil.After(now) { // entering a cooldown, not extending one
+			k := *e.key
+			event = func() {
+				p.keyEvent(&k, "key.cooldown", store.LevelWarn, v.Reason, o.RequestID, map[string]any{"seconds": int64(d.Seconds())})
+			}
 		}
 		e.cooldownUntil = now.Add(d)
 		e.key.StatusReason = v.Reason
@@ -318,6 +327,10 @@ func (p *Pool) Report(id int64, o Outcome) Verdict {
 			}
 			e.key.StatusReason = v.Reason
 			persist = p.persistState(e)
+			k, reason := *e.key, v.Reason
+			event = func() {
+				p.keyEvent(&k, "key.circuit_open", store.LevelWarn, reason, o.RequestID, map[string]any{"seconds": s.BreakerSeconds})
+			}
 			p.log.Info("key circuit open", "key_id", id, "key", e.key.Name, "reason", v.Reason)
 		}
 	}
@@ -325,22 +338,37 @@ func (p *Pool) Report(id int64, o Outcome) Verdict {
 	if persist != nil {
 		persist()
 	}
-	if disabledEvent != nil {
-		disabledEvent()
+	if event != nil {
+		event()
 	}
 	return v
 }
 
-// disabledEvent records that the gateway took a key out of the pool.
-func (p *Pool) disabledEvent(k *store.Key, reason string) {
+// keyEvent records a change of a key's state made by the gateway itself.
+func (p *Pool) keyEvent(k *store.Key, action, level, reason, requestID string, extra map[string]any) {
+	if p.db == nil {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	e := &store.Event{Kind: store.EventSystem, Action: "key.auto_disable", Actor: "system", ActorName: "system",
-		TargetType: "key", TargetID: strconv.FormatInt(k.ID, 10), TargetName: k.Name,
-		Detail: map[string]any{"reason": reason}}
-	if err := p.db.AddEvent(ctx, e); err != nil {
-		p.log.Error("record key disable", "key_id", k.ID, "err", err)
+	d := map[string]any{"reason": reason}
+	for key, v := range extra {
+		d[key] = v
 	}
+	e := &store.Event{Kind: store.EventSystem, Level: level, Action: action, Actor: "system", ActorName: "system",
+		TargetType: "key", TargetID: strconv.FormatInt(k.ID, 10), TargetName: k.Name, TargetHint: MaskKey(k.Key),
+		RequestID: requestID, Detail: d}
+	if err := p.db.AddEvent(ctx, e); err != nil {
+		p.log.Error("record key event", "key_id", k.ID, "action", action, "err", err)
+	}
+}
+
+// MaskKey shows the start and end of an upstream key.
+func MaskKey(k string) string {
+	if len(k) <= 10 {
+		return "…"
+	}
+	return k[:6] + "…" + k[len(k)-4:]
 }
 
 func (p *Pool) verify(k *store.Key) {
@@ -576,7 +604,7 @@ func (p *Pool) Disable(ctx context.Context, id int64, reason string) error {
 		return err
 	}
 	if was != nil {
-		p.disabledEvent(was, reason)
+		p.keyEvent(was, "key.auto_disable", store.LevelError, reason, "", nil)
 	}
 	return nil
 }

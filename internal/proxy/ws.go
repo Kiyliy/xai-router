@@ -223,7 +223,7 @@ func (st *state) wsDial(r *http.Request, k *store.Key, seq int) (*upstreamWS, *u
 		st.attempts = append(st.attempts, at)
 	}
 	fail := func(err error) (*upstreamWS, *upstreamError, bool) {
-		v := st.h.Pool.Report(k.ID, pool.Outcome{NetErr: err})
+		v := st.h.Pool.Report(k.ID, pool.Outcome{NetErr: err, RequestID: st.log.RequestID})
 		record(0, v.Reason, v.Action)
 		return nil, &upstreamError{status: http.StatusBadGateway, err: v.Reason}, true
 	}
@@ -303,7 +303,7 @@ func (st *state) wsDial(r *http.Request, k *store.Key, seq int) (*upstreamWS, *u
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	resp.Body.Close()
 	conn.Close()
-	v := st.h.Pool.Report(k.ID, pool.Outcome{Status: resp.StatusCode, Body: string(body), Header: resp.Header,
+	v := st.h.Pool.Report(k.ID, pool.Outcome{Status: resp.StatusCode, Body: string(body), Header: resp.Header, RequestID: st.log.RequestID,
 		Echo: st.echo()})
 	record(resp.StatusCode, v.Reason, v.Action)
 	return nil, &upstreamError{status: resp.StatusCode, header: resp.Header, body: body, err: v.Reason}, v.Retry

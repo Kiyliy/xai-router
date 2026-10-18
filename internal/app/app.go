@@ -281,11 +281,13 @@ func (a *App) syncLoop(ctx context.Context) {
 			switch {
 			case err != nil:
 				a.Log.Debug("scheduled model sync skipped", "reason", err)
-			case !res.OK || len(res.Added) > 0 || len(res.Updated) > 0:
-				// Only syncs that changed prices or failed are worth a permanent record.
-				_ = a.DB.AddEvent(ctx, &store.Event{Kind: store.EventSystem, Action: "model.sync", Actor: "system",
-					ActorName: "system", TargetType: "model", Detail: map[string]any{"ok": res.OK, "error": res.Error,
-						"added": res.Added, "updated": res.Updated}})
+			default:
+				lvl := store.LevelInfo
+				if !res.OK {
+					lvl = store.LevelError
+				}
+				_ = a.DB.AddEvent(ctx, &store.Event{Kind: store.EventSystem, Level: lvl, Action: "model.sync", Actor: "system",
+					ActorName: "system", TargetType: "model", Detail: map[string]any{"scheduled": true, "result": admin.SyncSummary(res)}})
 			}
 		}
 		t.Reset(10 * time.Minute)

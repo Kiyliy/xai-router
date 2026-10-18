@@ -59,6 +59,11 @@ func TestPurgeRunsAsJob(t *testing.T) {
 	if num(jobs["total"]) != 1 {
 		t.Fatalf("jobs %v", jobs)
 	}
+	// One audit event, written when the job ended, with what it deleted.
+	evs := list(logsOf(t, h, "?type=audit&action=logs.purge"))
+	if len(evs) != 1 || num(evs[0]["detail"].(map[string]any)["result"].(map[string]any)["deleted"]) != 2500 {
+		t.Fatalf("purge event %v", evs)
+	}
 	h.must(h.call(http.MethodGet, "/api/v1/jobs/999", ""), 404)
 	h.must(h.call(http.MethodGet, "/api/v1/jobs/x", ""), 400)
 }

@@ -105,7 +105,7 @@ func run() error {
 	}
 	lifecycle := func(action string) {
 		_ = a.DB.AddEvent(context.Background(), &store.Event{Kind: store.EventSystem, Action: action, Actor: "system",
-			ActorName: "system", Detail: map[string]any{"version": version, "commit": commit}})
+			ActorName: "system", Detail: map[string]any{"version": version, "commit": commit, "schema_version": store.SchemaVersion()}})
 	}
 	lifecycle("system.start")
 	if a.GeneratedPassword != "" {

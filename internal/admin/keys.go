@@ -268,8 +268,19 @@ func (s *Server) testKey(w http.ResponseWriter, r *http.Request) {
 		s.storeErr(w, err, "key")
 		return
 	}
-	res := s.Tester.Test(r.Context(), k, in.Probe == nil || *in.Probe)
+	full := in.Probe == nil || *in.Probe
+	res := s.Tester.Test(r.Context(), k, full)
 	s.reloadPool(r)
+	if o := opFrom(r); o != nil {
+		mode := "quick"
+		if full {
+			mode = "full"
+		}
+		o.Detail = map[string]any{"mode": mode, "result": map[string]any{"ok": res.OK, "status": res.Status, "message": res.Message}}
+		if !res.OK {
+			o.Level = store.LevelWarn
+		}
+	}
 	writeJSON(w, http.StatusOK, res)
 }
 
@@ -302,6 +313,7 @@ func (s *Server) testKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	probe := in.Probe == nil || *in.Probe
 	if in.Async {
+		done := s.jobAudit(r, "key.test_many", "key", map[string]any{"ids": in.IDs, "full": probe})
 		j, _ := s.jobs.start("test_keys", func(ctx context.Context, j *Job) (any, error) {
 			s.jobs.update(j, func(j *Job) { j.Total = int64(len(keys)) })
 			res := s.Tester.TestManyProgress(ctx, keys, probe, func(done int) {
@@ -310,6 +322,7 @@ func (s *Server) testKeys(w http.ResponseWriter, r *http.Request) {
 			if err := s.Pool.Reload(ctx); err != nil {
 				s.Log.Error("reload pool", "err", err)
 			}
+			done(testSummary(res), nil)
 			return map[string]any{"results": res}, nil
 		})
 		writeJSON(w, http.StatusAccepted, j)
@@ -317,6 +330,9 @@ func (s *Server) testKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	res := s.Tester.TestMany(r.Context(), keys, probe)
 	s.reloadPool(r)
+	if o := opFrom(r); o != nil {
+		o.Detail = map[string]any{"result": testSummary(res)}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"results": res})
 }
 
@@ -396,6 +412,9 @@ func (s *Server) importKeys(w http.ResponseWriter, r *http.Request) {
 			k = fresh
 		}
 		out = append(out, s.keyJSON(k))
+	}
+	if o := opFrom(r); o != nil { // one summary event for the whole import
+		o.Detail = map[string]any{"result": map[string]any{"created": len(out), "skipped": len(skips)}}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"created": out, "skipped": skips, "tests": tests})
 }

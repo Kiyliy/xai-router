@@ -336,7 +336,7 @@ func (st *state) attempt(w http.ResponseWriter, r *http.Request, lease *pool.Lea
 			return false, nil
 		}
 		timeout := errors.Is(context.Cause(ctx), errUpstreamTimeout)
-		v := st.h.Pool.Report(k.ID, pool.Outcome{NetErr: err, Timeout: timeout})
+		v := st.h.Pool.Report(k.ID, pool.Outcome{NetErr: err, Timeout: timeout, RequestID: st.log.RequestID})
 		record(0, v.Reason, v.Action)
 		status := http.StatusBadGateway
 		if timeout {
@@ -349,7 +349,7 @@ func (st *state) attempt(w http.ResponseWriter, r *http.Request, lease *pool.Lea
 
 	if resp.StatusCode >= 400 {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-		v := st.h.Pool.Report(k.ID, pool.Outcome{Status: resp.StatusCode, Body: string(errBody), Header: resp.Header,
+		v := st.h.Pool.Report(k.ID, pool.Outcome{Status: resp.StatusCode, Body: string(errBody), Header: resp.Header, RequestID: st.log.RequestID,
 			Echo: st.echo()})
 		// The same client-class error from two keys is the request's fault,
 		// not the keys': stop and return it.
@@ -418,7 +418,7 @@ func (st *state) attempt(w http.ResponseWriter, r *http.Request, lease *pool.Lea
 			return true, nil
 		}
 		// Headers are not sent yet, so another key can still be tried.
-		v := st.h.Pool.Report(k.ID, pool.Outcome{NetErr: rerr, Timeout: errors.Is(context.Cause(ctx), errUpstreamTimeout)})
+		v := st.h.Pool.Report(k.ID, pool.Outcome{NetErr: rerr, Timeout: errors.Is(context.Cause(ctx), errUpstreamTimeout), RequestID: st.log.RequestID})
 		record(resp.StatusCode, "reading upstream body: "+v.Reason, v.Action)
 		st.log.KeyID, st.log.KeyName, st.log.Status = 0, "", 0
 		return false, &upstreamError{status: http.StatusBadGateway, err: v.Reason}

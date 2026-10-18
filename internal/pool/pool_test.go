@@ -90,7 +90,7 @@ func TestCooldownDisableBreaker(t *testing.T) {
 	if v := p.Report(1, Outcome{Status: 429, Body: "slow down", Header: h}); v.Action != ActionCooldown || !v.Retry {
 		t.Fatalf("429 verdict %+v", v)
 	}
-	if v := p.Report(2, Outcome{Status: 401, Body: `{"error":"Incorrect API key provided"}`}); v.Action != ActionDisable {
+	if v := p.Report(2, Outcome{Status: 401, Body: `{"error":"Incorrect API key provided"}`, RequestID: "req-bad"}); v.Action != ActionDisable {
 		t.Fatalf("bad key verdict %+v", v)
 	}
 	got := ids(p.Candidates(0))
@@ -104,6 +104,18 @@ func TestCooldownDisableBreaker(t *testing.T) {
 	k2, _ := db.GetKey(context.Background(), 2)
 	if !k2.AutoDisabled || k2.StatusReason == "" {
 		t.Fatalf("auto-disable not persisted: %+v", k2)
+	}
+	// The state changes are system events linked to the request.
+	evs, _ := db.ListEvents(context.Background(), store.EventFilter{Kinds: []string{store.EventSystem}, Limit: 10})
+	by := map[string]*store.Event{}
+	for _, e := range evs {
+		by[e.Action] = e
+	}
+	if e := by["key.auto_disable"]; e == nil || e.RequestID != "req-bad" || e.Level != store.LevelError || e.TargetID != "2" {
+		t.Fatalf("auto-disable event %+v", e)
+	}
+	if e := by["key.cooldown"]; e == nil || e.Level != store.LevelWarn || e.TargetID != "1" {
+		t.Fatalf("cooldown event %+v", e)
 	}
 	k1, _ := db.GetKey(context.Background(), 1)
 	if k1.CooldownUntil == 0 {

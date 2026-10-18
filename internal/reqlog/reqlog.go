@@ -379,13 +379,21 @@ func (j *Janitor) RunOnce(ctx context.Context) {
 	s := j.Settings.Get()
 	if days := s.LogRetentionDays; days > 0 {
 		cut := time.Now().Add(-time.Duration(days) * 24 * time.Hour).UnixMilli()
+		start := time.Now()
 		n, err := j.DB.DeleteLogsBefore(ctx, cut)
+		d := map[string]any{"deleted": n, "retention_days": days, "before": time.UnixMilli(cut).UTC().Format(time.RFC3339),
+			"started_at": start.UTC().Format(time.RFC3339), "duration_ms": time.Since(start).Milliseconds()}
+		ev := &store.Event{Kind: store.EventSystem, Action: "logs.retention", Actor: "system", ActorName: "system",
+			TargetType: "logs", Detail: d}
 		if err != nil {
 			j.Log.Error("log retention", "err", err)
+			ev.Level, d["error"] = store.LevelError, err.Error()
+			if ctx.Err() == nil { // not when shutting down
+				_ = j.DB.AddEvent(ctx, ev)
+			}
 		} else if n > 0 {
 			j.Log.Info("deleted old request logs", "count", n, "retention_days", days)
-			_ = j.DB.AddEvent(ctx, &store.Event{Kind: store.EventSystem, Action: "logs.retention", Actor: "system",
-				ActorName: "system", TargetType: "logs", Detail: map[string]any{"deleted": n, "retention_days": days}})
+			_ = j.DB.AddEvent(ctx, ev)
 			_ = j.DB.Vacuum(ctx)
 		}
 	}

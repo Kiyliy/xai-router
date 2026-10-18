@@ -231,10 +231,31 @@ func (s *Server) syncModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !res.OK {
+		// A failed sync is worth a record too (the middleware only records
+		// successful writes).
+		e := s.newAudit(r, "model.sync")
+		e.Level, e.TargetType = store.LevelError, "model"
+		e.Detail = map[string]any{"result": SyncSummary(res)}
+		s.recordEvent(r.Context(), e)
+		if o := opFrom(r); o != nil {
+			o.Recorded = true
+		}
 		writeErr(w, http.StatusBadGateway, "sync_failed", res.Error)
 		return
 	}
+	if o := opFrom(r); o != nil {
+		o.Detail = map[string]any{"result": SyncSummary(res)}
+	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// SyncSummary is a model sync's result as recorded in the log.
+func SyncSummary(res billing.SyncResult) map[string]any {
+	m := map[string]any{"ok": res.OK, "added": res.Added, "updated": res.Updated, "total": res.Total}
+	if res.Error != "" {
+		m["error"] = res.Error
+	}
+	return m
 }
 
 // RunSync syncs models using a pool key and records the result.
