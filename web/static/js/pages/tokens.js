@@ -556,7 +556,7 @@ export function render(el, ctx) {
               h('td', null, h('div', null, actor(r)), r.ip ? h('div', { class: 'cell-sub mono' }, r.ip) : null),
               h('td', { class: 'q-reason' }, reasonOf(r) || h('span', { class: 'muted' }, '—'))))))) : h('div', { class: 'mini-empty' }, t('q.noRecords')),
           h('div', { class: `q-total ${equal ? '' : 'text-warning'}` }, icon(equal ? 'checkCircle' : 'alert', 14),
-            h('span', null, tok && isUnlimited(tok) ? t('q.totalUnlimited', { g: usd2(granted || 0) }) : t('q.total', { g: usd2(granted || 0), q: cur != null ? usd2(cur) : '—' }))),
+            h('span', null, tok && isUnlimited(tok) ? t('q.totalUnlimited', { g: usd2(granted || 0) }) : t(equal ? 'q.total' : 'q.totalMismatch', { g: usd2(granted || 0), q: cur != null ? usd2(cur) : '—' }))),
           h('div', { class: 'row-sm' }, h('span', { class: 'toolbar-spacer' }),
             h('a', { class: 'link', href: `#/logs?type=audit&token_id=${id}&range=all` }, t('q.viewInLogs'))));
       } catch (e) {
