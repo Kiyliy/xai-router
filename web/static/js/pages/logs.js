@@ -275,7 +275,7 @@ export function render(el, ctx) {
     const c = tokenCats(r);
     return h('div', null,
       h('span', { class: 'tok4' },
-        h('span', { title: t('lg.tok.input') }, fmtCompact(c.input)),
+        h('span', { title: t('lg.tok.input') }, fmtCompact(c.input + c.image)),
         h('span', { title: t('lg.tok.cacheWriteTip'), class: c.cacheWrite == null ? 'muted' : '' }, c.cacheWrite == null ? '—' : fmtCompact(c.cacheWrite)),
         h('span', { title: t('lg.tok.cacheRead') }, fmtCompact(c.cacheRead)),
         h('span', { title: t('lg.tok.output') }, fmtCompact(c.output))),
@@ -296,6 +296,7 @@ export function render(el, ctx) {
   function targetCell(e) {
     const name = targetText(e), hint = targetHint(e);
     // No object (sign-in, start-up) or a whole-catalogue action (price sync): name the area instead.
+    if (['settings', 'logs', 'database', 'disk'].includes(e.target_type)) return h('span', null, targetTypeLabel(e.target_type));
     if (!e.target_type || (e.target_type === 'model' && !e.target_id)) {
       const g = (e.action || '').split('.')[0];
       return h('span', null, hasT(`lg.ag.${g}`) ? t(`lg.ag.${g}`) : targetTypeLabel(e.target_type));
@@ -349,7 +350,7 @@ export function render(el, ctx) {
   }
   function tokCompact(r) {
     const c = tokenCats(r);
-    return `${t('lg.tok.input')} ${fmtCompact(c.input)}，${t('lg.tok.cacheRead')} ${fmtCompact(c.cacheRead)}，${t('lg.tok.output')} ${fmtCompact(c.output)}`;
+    return [`${t('lg.tok.input')} ${fmtCompact(c.input + c.image)}`, `${t('lg.tok.cacheRead')} ${fmtCompact(c.cacheRead)}`, `${t('lg.tok.output')} ${fmtCompact(c.output)}`].join(t('lg.sep'));
   }
 
   function query() {

@@ -2,7 +2,7 @@
 // i18n.js; keys here override i18n.js and i18n-lists.js. Keep en and zh complete.
 export const en = {
   // page & overrides of older log strings
-  'nav.logs': 'Logs',
+  'nav.logs': 'Logs', 'lg.sep': ', ',
   'logs.body': 'Body', 'logs.headers': 'Headers', 'logs.raw': 'Raw',
   'logs.matchN': '{n} records', 'logs.noMatch': 'No records match these filters', 'logs.noMatchDesc': 'Try a wider time range or clear the filters.',
   'logs.empty': 'No logs yet', 'logs.emptyDesc': 'Requests to /v1/*, admin operations and system events show up here.',
@@ -35,8 +35,8 @@ export const en = {
   'lg.event': 'Record', 'lg.summary': 'Summary', 'lg.more': 'More', 'lg.rawError': 'Original error', 'lg.rawTab': 'Raw',
   'lg.copyText': 'Copy response text', 'lg.copyUpstreamId': 'Copy upstream ID',
   'lg.ok': 'Succeeded', 'lg.failed': 'Failed',
-  'lg.okAfterRetry': 'Succeeded after retrying with another upstream key ({n} retries)',
-  'lg.okAfterDisable': 'Succeeded: a failing upstream key was disabled automatically and the request was retried ({n} retries)',
+  'lg.okAfterRetry': 'Succeeded after retrying on another upstream key (retries: {n})',
+  'lg.okAfterDisable': 'Succeeded: a failing upstream key was disabled automatically and the request was retried (retries: {n})',
   'lg.costTitle': 'Tokens & cost',
   'lg.cost.cat': 'Category', 'lg.cost.qty': 'Quantity', 'lg.cost.tokens': 'Tokens', 'lg.cost.unit': 'Unit price',
   'lg.cost.unitM': 'Price per million', 'lg.cost.cost': 'Cost', 'lg.cost.total': 'Total', 'lg.cost.totalCost': 'Total cost',
@@ -129,7 +129,7 @@ export const en = {
 };
 
 export const zh = {
-  'nav.logs': '日志',
+  'nav.logs': '日志', 'lg.sep': '，',
   'logs.body': '正文', 'logs.headers': '头部', 'logs.raw': '原文',
   'logs.matchN': '{n} 条记录', 'logs.noMatch': '没有符合条件的记录', 'logs.noMatchDesc': '可以扩大时间范围，或清除筛选。',
   'logs.empty': '还没有日志', 'logs.emptyDesc': '对 /v1/* 的请求、管理员的操作和系统事件都会显示在这里。',
