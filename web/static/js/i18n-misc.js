@@ -76,6 +76,14 @@ export const en = {
   'access.lastLogin': "Last sign-in: {at}",
   'access.lastLoginIp': "Last sign-in: {at}, from {ip}",
   'access.neverUsed': "Never",
+  'settings.unsavedDetail': "{n} unsaved change(s): {d}",
+  'settings.andMore': "{names} and more",
+  'settings.on': "On",
+  'settings.off': "Off",
+  'settings.unitTimes': "",
+  'settings.unitItems': "",
+  'settings.s.routing': "Routing & retry",
+  'settings.h.key_test_model': "Model used for the test request of a full check (empty = the cheapest chat model)",
 };
 
 export const zh = {
@@ -149,4 +157,12 @@ export const zh = {
   'access.lastLogin': "上次登录：{at}",
   'access.lastLoginIp': "上次登录：{at}，来自 {ip}",
   'access.neverUsed': "从未使用",
+  'settings.unsavedDetail': "{n} 项未保存的修改：{d}",
+  'settings.andMore': "{names} 等",
+  'settings.on': "开启",
+  'settings.off': "关闭",
+  'settings.unitTimes': "次",
+  'settings.unitItems': "条",
+  'settings.s.routing': "路由与重试",
+  'settings.h.key_test_model': "完整检测发送测试请求时使用的模型（留空 = 最便宜的对话模型）",
 };

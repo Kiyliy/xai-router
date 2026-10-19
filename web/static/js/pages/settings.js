@@ -2,7 +2,7 @@ import { h } from '../util.js';
 import { icon } from '../icons.js';
 import { t } from '../i18n.js';
 import { get, put } from '../api.js';
-import { card, toast, toastError, switchEl, field, input, select, busy, tagInput, spinner, errorMessage } from '../ui.js';
+import { toast, toastError, switchEl, field, input, select, busy, tagInput, spinner, errorMessage } from '../ui.js';
 
 // Password and admin API tokens moved to #/access, storage / purge / compact / system to #/data (v0.4.0).
 // Re-exported so older imports keep working.
@@ -14,12 +14,12 @@ const SECTIONS = [
   { id: 'routing', icon: 'layers', fields: [
     { k: 'upstream_base_url', type: 'text', mono: true },
     { k: 'selection_strategy', type: 'select', options: ['weighted', 'random', 'round_robin'] },
-    { k: 'max_attempts', type: 'int', min: 1, max: 50 },
+    { k: 'max_attempts', type: 'int', unit: 'times', min: 1, max: 50 },
     { k: 'retry_status_codes', type: 'intlist', full: true },
     { k: 'retry_keywords', type: 'strlist', full: true },
     { k: 'disable_keywords', type: 'strlist', full: true },
     { k: 'cooldown_seconds', type: 'int', unit: 's', min: 1, max: 86400 },
-    { k: 'breaker_threshold', type: 'int', min: 1, max: 100 },
+    { k: 'breaker_threshold', type: 'int', unit: 'times', min: 1, max: 100 },
     { k: 'breaker_seconds', type: 'int', unit: 's', min: 1, max: 86400 },
     { k: 'task_binding_ttl_hours', type: 'int', unit: 'h', min: 1, max: 8760 },
   ] },
@@ -34,7 +34,7 @@ const SECTIONS = [
     { k: 'log_bodies', type: 'bool' },
     { k: 'log_request_body_max_kb', type: 'int', unit: 'KB', min: 1, max: 65536 },
     { k: 'log_response_body_max_kb', type: 'int', unit: 'KB', min: 1, max: 65536 },
-    { k: 'ws_log_messages', type: 'int', min: 0, max: 10000 },
+    { k: 'ws_log_messages', type: 'int', unit: 'items', min: 0, max: 10000 },
   ] },
   { id: 'models', icon: 'cpu', fields: [
     { k: 'model_sync_interval_hours', type: 'int', unit: 'h', min: 0, max: 8760 },
@@ -64,8 +64,8 @@ export function render(el, ctx) {
     onclick: (e) => { e.preventDefault(); jump(id); },
   }, t(`settings.s.${id}`)));
   const snav = h('nav', { class: 'settings-nav', 'aria-label': t('settings.sections') }, navLinks);
-  el.classList.add('page-narrow');
-  el.append(snav, formCol);
+  el.classList.add('pg-settings');
+  el.append(h('div', { class: 'settings-layout' }, snav, formCol));
   let spyLock = 0;
   function markNav(id) { navLinks.forEach((a) => a.classList.toggle('active', a.dataset.sec === id)); const cur = navLinks.find((a) => a.dataset.sec === id); if (cur && cur.scrollIntoView && snav.scrollWidth > snav.clientWidth) snav.scrollLeft = cur.offsetLeft - 16; }
   function jump(id) {
@@ -95,7 +95,7 @@ export function render(el, ctx) {
   const dirtyText = h('span');
   const saveBtn = h('button', { class: 'btn btn-primary', onclick: () => save() }, h('span', null, t('common.saveChanges')));
   const discardBtn = h('button', { class: 'btn', onclick: () => fill(orig) }, t('common.discard'));
-  const saveBar = h('div', { class: 'save-bar', hidden: true }, icon('info', 16), dirtyText, h('div', { class: 'toolbar-spacer' }), discardBtn, saveBtn);
+  const saveBar = h('div', { class: 'save-bar', hidden: true }, h('span', { class: 'save-dot' }), dirtyText, h('div', { class: 'toolbar-spacer' }), discardBtn, saveBtn);
 
   function readValue(f) {
     const c = controls[f.k];
@@ -119,11 +119,29 @@ export function render(el, ctx) {
     }
     return out;
   }
+  const FIELDS = SECTIONS.flatMap((sec) => sec.fields);
+  const showVal = (f, v) => {
+    if (f.type === 'bool') return v ? t('settings.on') : t('settings.off');
+    if (f.type === 'select') return v ? t(`settings.opt.${v}`) : '—';
+    if (Array.isArray(v)) return v.length ? v.join(t('models.listSep')) : '—';
+    return v === '' || v == null ? '—' : String(v);
+  };
+  function describe(d) {
+    const keys = Object.keys(d);
+    if (keys.length === 1) {
+      const f = FIELDS.find((x) => x.k === keys[0]);
+      const before = showVal(f, orig[f.k] ?? f.def), after = showVal(f, d[f.k]);
+      const short = before.length + after.length < 40;
+      return short ? `${t(`settings.f.${f.k}`)} ${before} → ${after}` : t(`settings.f.${f.k}`);
+    }
+    const names = keys.slice(0, 3).map((k) => t(`settings.f.${k}`)).join(t('models.listSep'));
+    return keys.length > 3 ? t('settings.andMore', { names }) : names;
+  }
   function refreshDirty() {
     const d = diff();
     const n = Object.keys(d).length;
     saveBar.hidden = !n;
-    dirtyText.textContent = t('settings.unsaved', { n });
+    dirtyText.textContent = n ? t('settings.unsavedDetail', { n, d: describe(d) }) : '';
     for (const s of SECTIONS) for (const f of s.fields) {
       const wrap = controls[f.k] && controls[f.k].closest('.field');
       if (wrap) wrap.classList.toggle('field-dirty', f.k in d);
@@ -145,13 +163,13 @@ export function render(el, ctx) {
     }
     controls[f.k] = c;
     let node = c;
-    if (f.unit) node = h('div', { class: 'input-affix input-affix-end' }, c, h('span', { class: 'affix' }, ['s', 'h', 'd'].includes(f.unit) ? t(`unit.${f.unit}`) : f.unit));
-    if (f.type === 'bool') {
-      return h('div', { class: `field field-bool ${f.full ? 'field-full' : ''} ${f.warn ? 'field-bool-warn' : ''}` },
-        h('div', { class: 'field-bool-text' }, h('div', { class: 'field-label' }, t(`settings.f.${f.k}`)),
-          h('div', { class: 'field-hint' }, f.warn ? icon('alert', 12) : null, f.warn ? ' ' : null, t(`settings.h.${f.k}`))), c);
-    }
-    return field(t(`settings.f.${f.k}`), node, { hint: t(`settings.h.${f.k}`), full: f.full });
+    const unitText = f.unit === 'times' ? t('settings.unitTimes') : f.unit === 'items' ? t('settings.unitItems') : ['s', 'h', 'd'].includes(f.unit) ? t(`unit.${f.unit}`) : f.unit;
+    if (f.unit) node = h('div', { class: 'set-num' }, c, unitText ? h('span', { class: 'set-unit' }, unitText) : null);
+    const hint = t(`settings.h.${f.k}`);
+    const text = h('div', { class: 'set-text' }, h('div', { class: 'field-label' }, t(`settings.f.${f.k}`)),
+      hint ? h('div', { class: 'field-hint' }, f.warn ? icon('alert', 12) : null, f.warn ? ' ' : null, hint) : null);
+    const kind = f.type === 'bool' ? 'bool' : f.type === 'int' ? 'int' : f.type === 'select' ? 'select' : 'wide';
+    return h('div', { class: `field set-row set-${kind} ${f.warn ? 'field-bool-warn' : ''}` }, text, h('div', { class: 'set-ctl' }, node));
   }
 
   function fill(s) {
@@ -172,16 +190,11 @@ export function render(el, ctx) {
 
   const dlModels = h('datalist', { id: 'dl-settings-models' });
   const form = h('form', { class: 'settings-form', onsubmit: (e) => { e.preventDefault(); save(); }, oninput: scheduleDirty, onchange: scheduleDirty, onclick: scheduleDirty, onkeyup: scheduleDirty },
-    SECTIONS.map((sec) => {
-      const c = card({
-        title: h('span', { class: 'card-title-ic' }, icon(sec.icon, 16), t(`settings.s.${sec.id}`)), subtitle: t(`settings.sd.${sec.id}`),
-        body: h('div', { class: 'form-grid' }, sec.fields.map((f) => control(f))), cls: 'settings-anchor',
-      });
-      c.id = `sec-${sec.id}`;
-      return c;
-    }),
+    SECTIONS.map((sec) => h('section', { class: 'set-sec settings-anchor', id: `sec-${sec.id}` },
+      h('h2', { class: 'set-sec-title' }, t(`settings.s.${sec.id}`)),
+      sec.fields.map((f) => control(f)))),
     dlModels, saveBar);
-  const loadingEl = h('div', { class: 'card card-loading' }, spinner(20), h('span', { class: 'muted' }, t('common.loading')));
+  const loadingEl = h('div', { class: 'set-loading' }, spinner(20), h('span', { class: 'muted' }, t('common.loading')));
   formCol.append(loadingEl);
 
   function rangeError() {
