@@ -171,6 +171,14 @@
 .lg5 .lg-chipctl .input::placeholder { color: var(--text-2); }
 .lg5 .lg-chipctl .is-set { color: var(--text); border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong)); background-color: var(--accent-soft); }
 .lg5 .lg-chipctl .input-status { width: 72px; }
+.lg5 .lg-chipctl .input-path { min-width: 150px; font-family: var(--font-mono); }
+/* the object filter is a button styled as the same chip; its text input lives in a popover */
+.lg5 .lg-chipctl .lg-chipbtn { display: inline-block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 26px; text-align: left; }
+.lg5 .lg-chipctl .lg-chipbtn[aria-expanded="true"] { border-color: var(--accent); }
+.lg-filter-pop { width: 260px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.lg-filter-pop-title { font-size: 12px; color: var(--text-3); }
+.lg-filter-pop .input { height: 30px; font-size: 13px; }
+.lg-filter-pop-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .lg5 .lg-grid .filter-reset { margin-left: 4px; }
 .lg5 .filters-hint { padding: 0; }
 

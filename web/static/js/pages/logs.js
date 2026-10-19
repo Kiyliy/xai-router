@@ -27,7 +27,9 @@ const PRESETS = ['1h', '24h', '7d', '30d', 'custom'];
 const URL_PRESETS = [...PRESETS, '15m', 'all'];
 const PRESET_MS = { '15m': 15 * 60e3, '1h': 3600e3, '24h': 86400e3, '7d': 7 * 86400e3, '30d': 30 * 86400e3 };
 const STATUS_OPTS = ['', 'success', 'error', '2xx', '4xx', '5xx', '429', 'custom'];
-const PATHS = ['/v1/chat/completions', '/v1/responses', '/v1/messages', '/v1/realtime', '/v1/tts', '/v1/stt', '/v1/completions', '/v1/embeddings', '/v1/images/generations', '/v1/images/edits', '/v1/videos/generations', '/v1/models'];
+// Common gateway paths for the path dropdown; anything else is typed under "Other…" (prefix match).
+const PATHS = ['/v1/chat/completions', '/v1/responses', '/v1/messages', '/v1/images/generations', '/v1/images/edits', '/v1/videos/generations', '/v1/models'];
+const PATH_OTHER = '__other';
 const TARGET_TYPES = ['key', 'token', 'admin_token', 'model', 'settings', 'logs', 'database', 'disk'];
 // Action filter: groups (prefix) and their actions.
 const ACTION_GROUPS = [
@@ -113,8 +115,13 @@ export function render(el, ctx) {
 
   // --- row 2: per-type filters ---
   const lbl = (text, ctl) => h('label', { class: 'filter lg-chipctl', title: text }, h('span', { class: 'sr-only' }, text), ctl);
-  const dlModels = h('datalist', { id: 'dl-log-models' });
-  const modelIn = input({ placeholder: t('common.model'), list: 'dl-log-models', class: 'input mono', oninput: debounce((e) => { st.model = e.target.value.trim(); changed(false); }, 400) });
+  // Model: the known models from /api/v1/models (filled by loadFilterData); a model typed into the URL is kept as an option.
+  const modelSel = select([{ value: '', label: t('common.model') }], '', { onchange: (e) => { st.model = e.target.value; changed(); } });
+  const fillModels = () => {
+    const ids = modelList.includes(st.model) || !st.model ? modelList : [...modelList, st.model];
+    modelSel.replaceChildren(h('option', { value: '' }, t('common.model')), ...ids.map((m) => h('option', { value: m }, m)));
+    modelSel.value = st.model;
+  };
   const customStatus = input({ type: 'number', min: 100, max: 599, placeholder: '503', class: 'input input-status',
     oninput: debounce((e) => { st.status = e.target.value.trim(); changed(false); }, 400) });
   const statusSel = select(STATUS_OPTS.map((v) => ({ value: v, label: v ? t(`logs.status.${v}`) : t('common.status') })), '', {
@@ -127,13 +134,60 @@ export function render(el, ctx) {
   });
   const keySel = select([{ value: '', label: t('common.key') }], '', { onchange: (e) => { st.key_id = e.target.value; changed(); } });
   const tokenSel = select([{ value: '', label: t('common.token') }], '', { onchange: (e) => { st.token_id = e.target.value; changed(); } });
-  const dlPaths = h('datalist', { id: 'dl-log-paths' }, PATHS.map((x) => h('option', { value: x })));
-  const pathIn = input({ placeholder: t('logs.path'), list: 'dl-log-paths', class: 'input mono', oninput: debounce((e) => { st.path = e.target.value.trim(); changed(false); }, 400) });
+  // Path: common gateway paths, or "Other…" to type a prefix (kept open while typing, even if it matches a listed path).
+  let pathOther = false;
+  const customPath = input({ placeholder: t('lg5.pathPrefixPh'), class: 'input mono input-path', hidden: true, 'aria-label': t('lg5.pathPrefix'),
+    oninput: debounce((e) => { st.path = e.target.value.trim(); changed(false); }, 400) });
+  const pathSel = select([{ value: '', label: t('logs.path') }, ...PATHS.map((x) => ({ value: x, label: x })), { value: PATH_OTHER, label: t('lg5.pathOther') }], '', {
+    onchange: (e) => {
+      const v = e.target.value;
+      pathOther = v === PATH_OTHER;
+      customPath.hidden = !pathOther;
+      if (pathOther) { customPath.focus(); st.path = customPath.value.trim(); if (!st.path) return; } else st.path = v;
+      changed();
+    },
+  });
   const ttSel = select([{ value: '', label: t('lg.col.targetType') }, ...TARGET_TYPES.map((x) => ({ value: x, label: targetTypeLabel(x) }))], '', {
     onchange: (e) => { st.target_type = e.target.value; st.target_id = ''; fillTargetList(); changed(); },
   });
   const dlTargets = h('datalist', { id: 'dl-log-targets' });
-  const targetIn = input({ placeholder: t('lg.col.target'), list: 'dl-log-targets', class: 'input', oninput: debounce((e) => { st.target_id = e.target.value.trim(); changed(false); }, 400) });
+  // Object: free text, edited in a small popover under a chip that looks like the dropdowns.
+  const targetIn = input({ placeholder: t('lg5.targetPh'), list: 'dl-log-targets', class: 'input', 'aria-label': t('lg.col.target'),
+    oninput: debounce((e) => { st.target_id = e.target.value.trim(); changed(false); }, 400),
+    onkeydown: (e) => { if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeTargetPop(true); } } });
+  const targetClear = button(t('lg5.clear'), { variant: 'ghost', size: 'sm', onClick: () => { targetIn.value = ''; if (st.target_id) { st.target_id = ''; changed(); } closeTargetPop(true); } });
+  const targetPop = h('div', { class: 'menu-pop lg-filter-pop', role: 'dialog', 'aria-label': t('lg.col.target') },
+    h('div', { class: 'lg-filter-pop-title' }, t('lg.col.target')), targetIn, h('div', { class: 'lg-filter-pop-foot' }, h('span', { class: 'muted small' }, t('lg5.targetHint')), targetClear));
+  const targetBtn = h('button', { type: 'button', class: 'input select lg-chipbtn', 'aria-haspopup': 'dialog', 'aria-expanded': 'false',
+    onclick: (e) => { e.preventDefault(); if (targetPop.isConnected) closeTargetPop(); else openTargetPop(); } });
+  const onTargetDoc = (e) => { if (!targetPop.contains(e.target) && !targetBtn.contains(e.target)) closeTargetPop(); };
+  const onTargetScroll = (e) => { if (!targetPop.contains(e.target)) closeTargetPop(); };
+  function openTargetPop() {
+    document.body.appendChild(targetPop);
+    const r = targetBtn.getBoundingClientRect();
+    const pw = targetPop.offsetWidth;
+    targetPop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - pw - 8))}px`;
+    targetPop.style.top = `${r.bottom + 4}px`;
+    targetBtn.setAttribute('aria-expanded', 'true');
+    targetIn.value = st.target_id;
+    targetIn.focus();
+    document.addEventListener('mousedown', onTargetDoc);
+    window.addEventListener('scroll', onTargetScroll, true);
+  }
+  function closeTargetPop(refocus = false) {
+    if (!targetPop.isConnected) return;
+    targetPop.remove();
+    targetBtn.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('mousedown', onTargetDoc);
+    window.removeEventListener('scroll', onTargetScroll, true);
+    if (refocus) targetBtn.focus();
+  }
+  ctx.signal.addEventListener('abort', () => closeTargetPop());
+  const targetLabel = () => {
+    if (!st.target_id) return t('lg.col.target');
+    const o = [...dlTargets.options].find((x) => x.value === st.target_id);
+    return o && o.textContent ? o.textContent : st.target_id;
+  };
   const actionSel = h('select', { class: 'input select', onchange: (e) => { st.action = e.target.value; changed(); } },
     h('option', { value: '' }, t('lg.col.action')),
     ACTION_GROUPS.map(([grp, acts]) => h('optgroup', { label: t(`lg.ag.${grp.slice(0, -1)}`) },
@@ -144,11 +198,13 @@ export function render(el, ctx) {
   });
   const resetBtn = button(t('logs.resetFilters'), { icon: 'x', variant: 'ghost', size: 'sm', onClick: () => {
     Object.assign(st, { preset: '24h', from: '', to: '', q: '', model: '', status: '', key_id: '', token_id: '', path: '', target_type: '', target_id: '', action: '', actor: '', problems: false });
+    pathOther = false; customPath.value = '';
     changed();
   } });
-  const fModel = lbl(t('common.model'), modelIn), fStatus = lbl(t('common.status'), h('div', { class: 'row-sm' }, statusSel, customStatus));
-  const fToken = lbl(t('common.token'), tokenSel), fKey = lbl(t('common.key'), keySel), fPath = lbl(t('logs.path'), pathIn);
-  const fTT = lbl(t('lg.col.targetType'), ttSel), fTarget = lbl(t('lg.col.target'), targetIn), fAction = lbl(t('lg.col.action'), actionSel), fActor = lbl(t('lg.col.actor'), actorSel);
+  const fModel = lbl(t('common.model'), modelSel), fStatus = lbl(t('common.status'), h('div', { class: 'row-sm' }, statusSel, customStatus));
+  const fToken = lbl(t('common.token'), tokenSel), fKey = lbl(t('common.key'), keySel), fPath = lbl(t('logs.path'), h('div', { class: 'row-sm' }, pathSel, customPath));
+  const fTT = lbl(t('lg.col.targetType'), ttSel), fAction = lbl(t('lg.col.action'), actionSel), fActor = lbl(t('lg.col.actor'), actorSel);
+  const fTarget = h('div', { class: 'filter lg-chipctl' }, targetBtn);
   const hintEl = h('div', { class: 'filters-hint', hidden: true }, icon('info', 13), h('span'));
 
   const filterToggle = h('button', { type: 'button', class: 'btn btn-sm filters-toggle', 'aria-expanded': 'false', onclick: () => {
@@ -160,7 +216,7 @@ export function render(el, ctx) {
   const filterBar = h('div', { class: 'filters lg-filters' },
     h('div', { class: 'filters-row lg-row1' }, presetSel, customRange, typeSel, problemsSw,
       h('div', { class: 'filters-q-row' }, h('div', { class: 'search-input filters-q' }, icon('search', 15), qIn), filterToggle)),
-    grid, hintEl, dlModels, dlPaths, dlTargets);
+    grid, hintEl, dlTargets);
 
   /** Ensure a <select> has an option for `v` (e.g. an id from the URL before the list loads). */
   const ensureOpt = (sel, v) => { if (v && ![...sel.options].some((o) => o.value === String(v))) sel.appendChild(h('option', { value: String(v) }, `#${v}`)); };
@@ -170,7 +226,17 @@ export function render(el, ctx) {
     fromIn.value = toLocalInput(st.from); toIn.value = toLocalInput(st.to);
     typeBtns.forEach((b) => { const on = has(b.dataset.type); b.classList.toggle('active', on); b.setAttribute('aria-pressed', on ? 'true' : 'false'); });
     problemsSw.input.checked = st.problems;
-    qIn.value = st.q; modelIn.value = st.model; pathIn.value = st.path; targetIn.value = st.target_id;
+    qIn.value = st.q;
+    if (st.model && ![...modelSel.options].some((o) => o.value === st.model)) modelSel.appendChild(h('option', { value: st.model }, st.model));
+    modelSel.value = st.model;
+    if (!st.path) pathOther = pathOther && !customPath.hidden && document.activeElement === customPath;
+    const otherPath = pathOther || (!!st.path && !PATHS.includes(st.path));
+    pathSel.value = otherPath ? PATH_OTHER : st.path;
+    customPath.hidden = !otherPath;
+    if (document.activeElement !== customPath) customPath.value = otherPath ? st.path : '';
+    if (document.activeElement !== targetIn) targetIn.value = st.target_id;
+    targetBtn.textContent = targetLabel();
+    targetBtn.title = st.target_id ? `${t('lg.col.target')}: ${st.target_id}` : t('lg.col.target');
     const custom = st.status && !STATUS_OPTS.includes(st.status);
     statusSel.value = custom ? 'custom' : st.status;
     customStatus.hidden = !custom;
@@ -195,7 +261,10 @@ export function render(el, ctx) {
     filterToggle.replaceChildren(icon('filter', 14), h('span', null, n ? t('logs.filtersN', { n }) : t('logs.filters')));
     filterToggle.classList.toggle('btn-active', n > 0);
     reset.hidden = n === 0;
-    [modelIn, pathIn, targetIn, statusSel, keySel, tokenSel, ttSel, actionSel, actorSel].forEach((x) => x.classList.toggle('is-set', !!x.value));
+    [modelSel, statusSel, keySel, tokenSel, ttSel, actionSel, actorSel].forEach((x) => x.classList.toggle('is-set', !!x.value));
+    pathSel.classList.toggle('is-set', !!st.path || otherPath);
+    customPath.classList.toggle('is-set', !!st.path);
+    targetBtn.classList.toggle('is-set', !!st.target_id);
     paintHead();
   }
 
@@ -475,13 +544,14 @@ export function render(el, ctx) {
     };
     if (ks.status === 'fulfilled') { keyList = ks.value.data || []; fill(keySel, keyList, t('common.key'), st.key_id, (x) => x.key_masked || ''); }
     if (ts.status === 'fulfilled') { tokenList = ts.value.data || []; fill(tokenSel, tokenList, t('common.token'), st.token_id, (x) => (x.prefix ? `${x.prefix}…` : '')); }
-    if (ms.status === 'fulfilled') { modelList = (ms.value.data || []).map((m) => m.id); dlModels.replaceChildren(...modelList.map((m) => h('option', { value: m }))); }
+    if (ms.status === 'fulfilled') { modelList = (ms.value.data || []).map((m) => m.id).filter(Boolean); fillModels(); }
     if (as.status === 'fulfilled') {
       const ats = Array.isArray(as.value) ? as.value : (as.value && as.value.data) || [];
       ats.forEach((a) => actorSel.appendChild(h('option', { value: `admin_token:${a.id}` }, `${t('ev.actor.adminToken')} · ${a.name}`)));
       actorSel.value = st.actor;
     }
     fillTargetList();
+    targetBtn.textContent = targetLabel();
   }
 
   // --- detail drawer (requests and events share one drawer; ↑ / ↓ step through the rows) ---
@@ -586,6 +656,8 @@ export function render(el, ctx) {
     const { openId, openEvent: openEv } = next;
     delete next.openId; delete next.openEvent;
     Object.assign(st, next, { cursors: [] });
+    pathOther = false; closeTargetPop();
+    fillTargetList();
     paintControls();
     load({ keepScroll: false });
     if (openId && openId !== st.openId) openDetail(openId);

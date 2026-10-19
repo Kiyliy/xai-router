@@ -252,12 +252,13 @@ export function render(el, ctx) {
   async function loadModels() {
     try {
       const res = await get('/api/v1/stats/breakdown', { range, by: 'model' }, { signal: ctx.signal });
-      const rows = (res.data || []).slice().sort((a, b) => (b.cost_usd || 0) - (a.cost_usd || 0) || (b.requests || 0) - (a.requests || 0));
+      // This ranks models: requests that name none (GET /v1/models and the like, never billed) are left out.
+      const rows = (res.data || []).filter((r) => r.id && r.id !== '(unknown)').sort((a, b) => (b.cost_usd || 0) - (a.cost_usd || 0) || (b.requests || 0) - (a.requests || 0));
       if (!rows.length) { modelsBody.replaceChildren(h('div', { class: 'ov-none' }, t('ov.noTraffic'))); return; }
       // Top 5; the rest folds into one row so the columns add up to the totals above.
       const top = rows.slice(0, rows.length > 6 ? 5 : 6);
       const rest = rows.slice(top.length);
-      const list = top.map((r) => ({ id: r.id, name: !r.id || r.id === '(unknown)' ? t('ov.noModel') : r.id === 'other' ? t('ov.other') : r.id, requests: r.requests || 0, cost: r.cost_usd || 0, link: r.id && r.id !== 'other' && r.id !== '(unknown)' }));
+      const list = top.map((r) => ({ id: r.id, name: r.id === 'other' ? t('ov.other') : r.id, requests: r.requests || 0, cost: r.cost_usd || 0, link: r.id !== 'other' }));
       if (rest.length) list.push({ name: t('ov5.otherModels', { n: rest.length }), requests: rest.reduce((a, r) => a + (r.requests || 0), 0), cost: rest.reduce((a, r) => a + (r.cost_usd || 0), 0), other: true });
       const maxCost = Math.max(...list.filter((x) => !x.other).map((x) => x.cost), 1e-12);
       modelsBody.replaceChildren(h('table', { class: 'ov-mtable' },
