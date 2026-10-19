@@ -1,1 +1,75 @@
-/* v0.5 page styles: keys-tokens (owned by one page agent). Uses the variables in style.css. */
+/* v0.5 page styles: upstream keys + client tokens (page agent G2). Uses the variables in style.css.
+   Frames: keys 24-180 / 127-8432, key drawer 123-3982, import 123-4639, tokens 42-959, token drawer 124-8167,
+   quota history 124-8450, adjust quota 124-8733 / 124-9016. */
+
+/* ---------- shared: toolbar above the table card ---------- */
+.kl-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.kl-toolbar .search-input { width: 280px; max-width: 100%; flex: none; }
+.kl-toolbar > .select { width: 200px; flex: none; }
+.kl-card .table-wrap { max-height: none; }
+.kl-summary { display: inline-flex; align-items: center; gap: 16px; font-size: 12.5px; }
+.kl-sum-item { color: var(--text-2); gap: 6px; }
+.kl-sum-item .mono { color: var(--text-2); font-size: 12px; }
+.kl-card .bulk-bar { border-radius: var(--radius) var(--radius) 0 0; }
+.kl-foot { padding: 12px 16px; border-top: 1px solid var(--border-subtle); color: var(--text-3); font-size: 12px; }
+.kl-card .table tbody tr:last-child td { border-bottom: 0; }
+
+/* ---------- upstream key list ---------- */
+.table-keys .col-name { width: 24%; }
+.table-keys .col-status { width: 15%; }
+.table-keys .col-prio, .table-keys .col-weight { width: 64px; }
+.table-keys .col-test { width: 15%; }
+.table-keys .title-line { gap: 10px; }
+.table-keys .name-link { font-weight: 400; color: var(--text); font-size: 13px; }
+.kl-mask { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
+.table-keys .status-line { display: flex; align-items: center; gap: 10px; }
+.table-keys .status-dot { color: var(--text-2); font-size: 12.5px; }
+.kl-left { color: var(--text-3); }
+.kl-left .mono { font-size: 12px; }
+.kl-restore { height: 22px; padding: 0 8px; font-size: 12px; }
+.table-keys td.num { font-family: var(--font-mono); font-size: 12.5px; color: var(--text); }
+.kl-sep, .kl-dim { color: var(--text-3); }
+.table-keys tr.row-muted td .name-link { color: var(--text-2); }
+
+.th-hint { cursor: help; border-bottom: 1px dashed transparent; }
+.th-hint:hover, .th-hint:focus-visible { color: var(--text-2); border-bottom-color: var(--border-strong); outline: none; }
+/* hints open below the header, so the table's scroll box does not clip them */
+.th-hint[data-tip]:hover::after, .th-hint[data-tip]:focus-visible::after {
+  content: attr(data-tip); position: absolute; left: 50%; top: calc(100% + 8px); bottom: auto; transform: translateX(-50%); z-index: 50;
+  background: var(--inverse); color: var(--text-inverse); padding: 5px 8px; border-radius: var(--radius-sm); font-size: 12px; line-height: 1.45;
+  white-space: nowrap; box-shadow: var(--shadow); pointer-events: none;
+}
+.table-keys th:has(.th-hint:hover), .table-keys th:has(.th-hint:focus-visible) { z-index: 4; }
+
+/* inline priority / weight editor: plain number, box + pencil on hover, accent ring while editing */
+.inline-edit { position: relative; display: inline-flex; align-items: center; justify-content: flex-end; gap: 2px; }
+.inline-edit .inline-num { width: 48px; height: 26px; padding: 0 6px; text-align: right; border-radius: var(--radius-xs); }
+.inline-pen { position: absolute; left: 6px; display: inline-flex; color: var(--text-3); opacity: 0; pointer-events: none; transition: opacity .1s; }
+.inline-edit:hover .inline-pen { opacity: 1; }
+.inline-edit:focus-within .inline-pen { opacity: 0; }
+.inline-edit:hover .inline-num { border-color: var(--border-strong); background: var(--surface); }
+tr:hover .inline-num { border-color: transparent; background: transparent; }
+tr:hover .inline-edit:hover .inline-num { border-color: var(--border-strong); background: var(--surface); }
+.inline-edit .inline-num:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); background: var(--surface); }
+.inline-edit .inline-ok { right: -16px; }
+.inline-hint {
+  display: none; position: absolute; left: calc(100% + 10px); top: 50%; transform: translateY(-50%); z-index: 5;
+  background: var(--inverse); color: var(--text-inverse); padding: 4px 8px; border-radius: var(--radius-sm);
+  font-family: var(--font-sans); font-size: 12px; white-space: nowrap; box-shadow: var(--shadow); pointer-events: none;
+}
+.inline-edit:focus-within .inline-hint { display: block; }
+
+/* last check: icon + "正常 · 312 毫秒" + time below */
+.kl-test { display: inline-flex; align-items: center; gap: 8px; background: none; border: 0; padding: 2px; margin: -2px; border-radius: var(--radius-xs); color: var(--text); font-size: 12.5px; text-align: left; cursor: pointer; }
+.kl-test > .icon { color: var(--text-3); }
+.kl-test-l { display: flex; flex-direction: column; line-height: 1.35; }
+.kl-test-t { color: var(--text-3); font-size: 11.5px; }
+.kl-test.is-bad { color: var(--danger); } .kl-test.is-bad > .icon { color: var(--danger); }
+.kl-test.is-warn > .icon { color: var(--warning); }
+.kl-test.is-none { color: var(--text-2); cursor: default; }
+button.kl-test:hover .kl-test-l > span:first-child { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--border-strong); }
+
+@media (max-width: 900px) {
+  .kl-toolbar .search-input { width: 100%; }
+  .kl-summary { width: 100%; flex-wrap: wrap; gap: 12px; }
+}

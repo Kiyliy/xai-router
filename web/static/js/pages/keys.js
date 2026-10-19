@@ -1,13 +1,13 @@
-import { h, fmtInt, fmtUSD, fmtMs, fmtCompact, timeEl, debounce, fmtDateTime, fmtDuration, readableReason, fmtTotal, latestSignal } from '../util.js';
+import { h, fmtInt, fmtUSD, fmtMs, timeEl, debounce, fmtDateTime, fmtDuration, readableReason, latestSignal } from '../util.js';
 import { jobPanel, asJob } from '../jobs.js';
 import { icon } from '../icons.js';
 import { t, hasT } from '../i18n.js';
 import { get, post, patch, del } from '../api.js';
 import {
-  card, toast, toastError, openModal, confirmDialog, menuButton, badge, switchEl, searchInput, select, pager as pagerEl, setTableLoading,
+  card, toast, toastError, openModal, confirmDialog, menuButton, badge, statusDot, switchEl, searchInput, select, pager as pagerEl, setTableLoading,
   skeletonRows, tableEmptyRow, tableWrap, field, input, checkbox, button, busy, kv, spinner, passwordInput, tapToMenu, errorMessage,
 } from '../ui.js';
-import { drawerState, section, usageBlock, failuresBlock, allLogsLink, goneBody, recentEventsBlock, allEventsLink } from '../detail-drawer.js';
+import { drawerState, section, usageBlock, failuresBlock, allLogsLink, goneBody, recentEventsBlock, allEventsLink, listTime } from '../detail-drawer.js';
 
 const TEST_VARIANT = { ok: 'success', rate_limited: 'warning', invalid: 'danger', blocked: 'danger', no_credits: 'danger', error: 'danger' };
 
@@ -148,18 +148,25 @@ export function render(el, ctx) {
   const search = searchInput({ value: st.q, placeholder: t('keys.searchPh'), onInput: debounce((v) => { st.q = v.trim(); st.page = 1; syncParams(); load(); }, 300) });
   const statusSel = select([{ value: '', label: t('keys.allStatuses') }, { value: 'active', label: t('status.active') }, { value: 'cooldown', label: t('status.cooldown') }, { value: 'disabled', label: t('status.disabled') }], st.status,
     { onchange: (e) => { st.status = e.target.value; st.page = 1; syncParams(true); load(); } });
-  const countEl = h('span', { class: 'toolbar-count' });
-  const COLS = 8;
+  // Pool status counts (可用 / 冷却中 / 自动禁用 / 已禁用) over every key, independent of the filter.
+  const poolSum = h('div', { class: 'kl-summary', 'aria-live': 'polite' });
+  const footEl = h('div', { class: 'kl-foot' });
+  const COLS = 9;
   const allBox = h('input', { type: 'checkbox', class: 'row-check', 'aria-label': t('common.selectAll'), title: t('common.selectAll'), onchange: () => { if (allBox.checked) st.rows.forEach((k) => sel.add(k.id)); else sel.clear(); syncSelection(); } });
   const tbody = h('tbody', null, skeletonRows(COLS));
+  // Column rules live in hover hints on the header (pm-spec 10.8 D8).
+  const thHint = (label, hint, cls) => h('th', { class: cls || null }, h('span', { class: 'th-hint', tabindex: 0, 'data-tip': hint }, label));
   const table = h('table', { class: 'table table-keys table-cards' },
     h('thead', null, h('tr', null,
       h('th', { class: 'col-check' }, allBox),
-      h('th', { class: 'col-switch' }, t('common.enabled')), h('th', null, t('common.name')), h('th', null, t('common.status')),
-      h('th', { title: `${t('keys.priorityHint')}\n${t('keys.maxConcurrency')} / ${t('keys.rpmLimit')}` }, t('keys.routing')),
-      h('th', { class: 'num', title: t('kt.attemptsHint') }, t('kt.attemptsCol')),
-      h('th', null, t('keys.lastTest')), h('th', { class: 'col-actions' }, h('span', { class: 'sr-only' }, t('common.actions'))))),
+      h('th', { class: 'col-name' }, t('common.name')), h('th', { class: 'col-status' }, t('common.status')),
+      thHint(t('keys.priority'), t('keys.priorityHint'), 'num col-prio'),
+      thHint(t('keys.weight'), t('keys.weightHint'), 'num col-weight'),
+      h('th', { class: 'num col-req' }, t('kl.req24')),
+      h('th', { class: 'num col-cost' }, t('kl.cost24')),
+      h('th', { class: 'col-test' }, t('keys.lastTest')), h('th', { class: 'col-actions' }, h('span', { class: 'sr-only' }, t('common.actions'))))),
     tbody);
+  let use24 = new Map();
   const pager = pagerEl({
     sizes: PAGE_SIZES,
     onChange: (p, ps) => {
@@ -182,9 +189,9 @@ export function render(el, ctx) {
     bulkCount, h('div', { class: 'bulk-actions' }, bulkBtns), bulkProgress, h('div', { class: 'toolbar-spacer' }), bulkClear);
 
   const region = h('div', { class: 'table-region' }, h('div', { class: 'loading-bar', 'aria-hidden': 'true' }), tableWrap(table));
-  el.append(testJob, card({
-    flush: true,
-    body: [h('div', { class: 'toolbar' }, search, statusSel, h('div', { class: 'toolbar-spacer' }), countEl), bulkBar, region, pager],
+  el.append(testJob, h('div', { class: 'kl-toolbar' }, search, statusSel, h('div', { class: 'toolbar-spacer' }), poolSum), card({
+    flush: true, cls: 'kl-card',
+    body: [bulkBar, region, footEl, pager],
   }));
 
   function syncSelection() {
@@ -202,25 +209,38 @@ export function render(el, ctx) {
     if (testJob.running()) bulkBtns[2].disabled = true;
   }
 
-  function statusBadgeFor(k) {
-    if (k.status === 'active') return badge(t('status.active'), 'success', { class: 'badge-dot' });
-    if (k.status === 'cooldown') return badge(t('status.cooldown'), 'warning', { class: 'badge-dot' });
-    if (k.auto_disabled) return badge(t('status.autoDisabled'), 'danger', { class: 'badge-dot' });
-    return badge(t('status.disabled'), 'neutral', { class: 'badge-dot' });
+  function statusBadgeFor(k, { countdown = false } = {}) {
+    if (k.status === 'active') return statusDot(t('status.active'), 'success');
+    if (k.status === 'cooldown') {
+      return statusDot([t('status.cooldown'), countdown && k.cooldown_until ? h('span', { class: 'kl-left' }, t('kl.leftPre'),
+        h('span', { class: 'mono', 'data-countdown': k.cooldown_until, title: fmtDateTime(k.cooldown_until) }, countdownText(k.cooldown_until)), t('kl.leftPost')) : null], 'warning');
+    }
+    if (k.auto_disabled) return statusDot(t('status.autoDisabled'), 'danger');
+    return statusDot(t('status.disabled'), 'neutral');
   }
 
+  const restoreBtn = (k) => h('button', { type: 'button', class: 'btn btn-sm kl-restore', title: t('keys.restoreHint'), onclick: (e) => { e.stopPropagation(); busy(e.currentTarget, () => reset(k)); } }, t('keys.restore'));
+
+  // Status dot + text; the reason stays in the hover hint and in the drawer (one line per row).
   function statusCell(k) {
-    const parts = [h('span', { class: 'hide-m' }, statusBadgeFor(k))];
-    if (k.status === 'cooldown' && k.cooldown_until) parts.push(h('span', { class: 'countdown mono', 'data-countdown': k.cooldown_until, title: fmtDateTime(k.cooldown_until) }, countdownText(k.cooldown_until)));
-    if (k.auto_disabled) {
-      parts.push(h('button', { class: 'btn btn-sm btn-warning-soft btn-restore', title: t('keys.restoreHint'), onclick: (e) => { e.stopPropagation(); busy(e.currentTarget, () => reset(k)); } }, icon('reset', 13), h('span', null, t('keys.restore'))));
-    }
-    const rr = readableReason(k.status !== 'active' ? k.status_reason : '');
-    const reason = rr.short ? h('div', { class: 'cell-sub reason', title: rr.full }, rr.short) : null;
-    const le = readableReason(k.status === 'active' ? k.last_error : '');
-    const lastErr = le.short ? h('div', { class: 'cell-sub reason text-warning', title: le.full }, le.short) : null;
-    const empty = parts.length === 1 && !reason && !lastErr;
-    return h('td', { class: `cell-status m-full ${empty ? 'm-hide' : ''}` }, h('div', { class: 'status-line' }, parts), reason, lastErr);
+    const rr = readableReason(k.status !== 'active' ? k.status_reason : k.last_error);
+    return h('td', { class: 'cell-status m-full', title: k.enabled ? rr.full || null : null },
+      h('div', { class: 'status-line' }, h('span', { class: 'hide-m' }, statusBadgeFor(k, { countdown: true })), k.auto_disabled ? restoreBtn(k) : null));
+  }
+
+  /** Last check: "正常 · 312 毫秒" / "无效（401）" with the time below; opens the full result. */
+  function lastTestCell(k) {
+    const r = k.last_test;
+    if (!r) return h('td', { class: 'col-test m-meta' }, h('div', { class: 'kl-test is-none', title: t('keys.neverTested') }, icon('clock', 15), h('span', { class: 'kl-test-l' }, t('kt.untested'))));
+    const code = (String(r.message || '').match(/\b([45]\d\d)\b/) || [])[1];
+    const name = t(`test.${r.status}`) || r.status;
+    const label = r.ok ? (r.latency_ms != null ? `${name} · ${fmtMs(r.latency_ms)}` : name) : code ? t('kl.withCode', { s: name, c: code }) : name;
+    const v = r.ok ? 'ok' : r.status === 'rate_limited' ? 'warn' : 'bad';
+    return h('td', { class: 'col-test m-meta' }, h('button', {
+      type: 'button', class: `kl-test is-${v}`, title: testMessage(r) || null,
+      onclick: (e) => { e.stopPropagation(); showTestResult({ ...r, key_name: k.name }); },
+    }, icon(r.ok ? 'checkCircle' : v === 'warn' ? 'alert' : 'xCircle', 15),
+    h('span', { class: 'kl-test-l' }, h('span', null, label), r.tested_at ? h('span', { class: 'kl-test-t', title: fmtDateTime(r.tested_at) }, listTime(r.tested_at)) : null)));
   }
 
   /** Row / drawer menu: view logs, edit | quick check, full check | restore, enable/disable, delete. */
@@ -248,7 +268,7 @@ export function render(el, ctx) {
   // old value and explains on failure. Esc cancels.
   function inlineNum(k, field, min, label) {
     const tick = h('span', { class: 'inline-ok', 'aria-hidden': 'true' }, icon('check', 13));
-    const inp = h('input', { type: 'number', class: 'inline-num', step: 1, value: k[field] ?? (field === 'weight' ? 1 : 0), 'aria-label': `${label} · ${k.name || '#' + k.id}` });
+    const inp = h('input', { type: 'number', class: 'inline-num', step: 1, value: k[field] ?? (field === 'weight' ? 1 : 0), 'aria-label': `${label} · ${k.name || '#' + k.id}`, title: t('kl.editHint') });
     if (min != null) inp.min = String(min);
     let saving = false;
     const restore = () => { inp.value = String(k[field] ?? (field === 'weight' ? 1 : 0)); inp.classList.remove('invalid'); };
@@ -280,46 +300,31 @@ export function render(el, ctx) {
       else if (e.key === 'Escape') { restore(); inp.blur(); }
     });
     inp.addEventListener('blur', save);
-    return h('span', { class: 'inline-num-wrap' }, inp, tick);
+    return h('span', { class: 'inline-edit' }, h('span', { class: 'inline-pen', 'aria-hidden': 'true' }, icon('edit', 12)), inp, tick,
+      h('span', { class: 'inline-hint', 'aria-hidden': 'true' }, t('kl.editHint')));
   }
 
   function row(k) {
-    // Upstream attempts made with this key (one client request can try several keys).
-    const att = k.attempts ?? k.requests, attErr = k.attempt_errors ?? k.errors;
-    const errRate = att ? attErr / att : 0;
-    const lim = (v) => (v ? fmtInt(v) : '∞');
-    const conflict = k.enabled && k.auto_disabled;
-    const sw = switchEl({
-      checked: k.enabled,
-      title: conflict ? t('keys.autoDisabledSwitch', { reason: readableReason(k.status_reason).short || '—' }) : k.enabled ? t('keys.disable') : t('keys.enable'),
-      onChange: (v) => setEnabled(k, v),
-    });
-    if (conflict) sw.classList.add('switch-warn');
+    // Requests / failures / cost over the last 24 hours (stats breakdown by key).
+    const u = use24.get(k.id) || {};
+    const req = u.requests || 0, err = u.errors || 0;
     const menu = menuButton(() => keyMenu(k));
     const check = h('input', { type: 'checkbox', class: 'row-check', checked: sel.has(k.id), 'aria-label': t('common.select'), onclick: (e) => e.stopPropagation(), onchange: (e) => { if (e.target.checked) sel.add(k.id); else sel.delete(k.id); syncSelection(); } });
-    const subline = k.notes ? h('div', { class: 'cell-sub truncate', title: k.notes }, k.notes) : (k.base_url && k.base_url !== 'https://api.x.ai' ? h('div', { class: 'cell-sub mono truncate', title: k.base_url }, k.base_url) : null);
-    const tr = h('tr', { 'data-id': k.id, class: `${k.auto_disabled ? 'row-warn' : !k.enabled ? 'row-muted' : ''} ${sel.has(k.id) ? 'row-selected' : ''}` },
+    const hint = [k.name, k.notes, k.base_url && k.base_url !== 'https://api.x.ai' ? k.base_url : '', t('kd.openHint')].filter(Boolean).join('\n');
+    const tr = h('tr', { 'data-id': k.id, class: `${k.auto_disabled ? 'row-err' : !k.enabled ? 'row-muted' : ''} ${sel.has(k.id) ? 'row-selected' : ''}` },
       h('td', { class: 'col-check m-check' }, check),
-      h('td', { class: 'col-switch m-meta m-switch' }, sw),
       h('td', { class: 'cell-keyname m-title' },
         h('div', { class: 'title-line' },
-          h('button', { type: 'button', class: 'name-link strong name-text', title: `${k.name || ''}
-${t('kd.openHint')}`, onclick: (e) => { e.stopPropagation(); drawer.open(k.id, { push: true }); } }, k.name || `#${k.id}`),
-          h('span', { class: 'm-only' }, statusBadgeFor(k))),
-        h('div', { class: 'cell-sub mono key-mask' }, k.key_masked || '—'),
-        subline),
+          h('button', { type: 'button', class: 'name-link name-text', title: hint, onclick: (e) => { e.stopPropagation(); drawer.open(k.id, { push: true }); } }, k.name || `#${k.id}`),
+          h('span', { class: 'kl-mask mono' }, k.key_masked || '—'),
+          h('span', { class: 'm-only' }, statusBadgeFor(k)))),
       statusCell(k),
-      h('td', { class: 'mono m-meta', title: `${t('keys.priority')}: ${k.priority ?? 0} · ${t('keys.weight')}: ${k.weight ?? 1}\n${t('keys.maxConcurrency')}: ${lim(k.max_concurrency)}\n${t('keys.rpmLimit')}: ${lim(k.rpm_limit)}\n${t('keys.inflight')}: ${k.inflight || 0}` },
-        h('div', { class: 'nowrap inline-pw' },
-          h('label', { class: 'inline-field', title: t('keys.priorityHint') }, h('span', { class: 'inline-tag' }, 'P'), inlineNum(k, 'priority', null, t('keys.priority'))),
-          h('label', { class: 'inline-field', title: t('keys.weightHint') }, h('span', { class: 'inline-tag' }, 'W'), inlineNum(k, 'weight', 1, t('keys.weight')))),
-        h('div', { class: `cell-sub nowrap ${k.inflight ? 'text-accent' : ''}` }, `${lim(k.max_concurrency)} / ${lim(k.rpm_limit)}`, k.inflight ? ` · ${t('keys.inflightN', { n: k.inflight })}` : '')),
-      h('td', { class: 'num mono m-meta', title: `${t('kt.attempts')}: ${fmtInt(att)}\n${t('kt.attemptErrors')}: ${fmtInt(attErr)}\n${t('kt.attemptsHint')}\n${t('common.cost')}: ${fmtUSD(k.cost_usd)}\n${t('common.lastUsed')}: ${k.last_used_at ? fmtDateTime(k.last_used_at) : '—'}` },
-        h('div', { class: 'nowrap' }, fmtCompact(att), h('span', { class: 'muted' }, ` ${t('kt.attShort')}`), attErr ? h('span', { class: errRate > 0.1 ? 'text-danger' : 'muted' }, ` · ${fmtCompact(attErr)} ${t('kt.failShort')}`) : null),
-        h('div', { class: 'cell-sub nowrap' }, fmtUSD(k.cost_usd), ' · ', timeEl(k.last_used_at))),
-      h('td', { class: 'm-meta' }, k.last_test
-        ? h('button', { class: 'link-cell', onclick: (e) => { e.stopPropagation(); showTestResult({ ...k.last_test, key_name: k.name }); }, title: testMessage(k.last_test) }, testBadge(k.last_test), k.last_test.latency_ms != null ? h('span', { class: 'mono muted small' }, fmtMs(k.last_test.latency_ms)) : null)
-        : badge(t('kt.untested'), 'neutral', { title: t('keys.neverTested') })),
+      h('td', { class: 'num col-prio m-meta' }, inlineNum(k, 'priority', null, t('keys.priority'))),
+      h('td', { class: 'num col-weight m-meta' }, inlineNum(k, 'weight', 1, t('keys.weight'))),
+      h('td', { class: 'num col-req mono m-meta', title: `${t('kd.requests')}: ${fmtInt(req)}\n${t('kd.errors')}: ${fmtInt(err)}` },
+        fmtInt(req), h('span', { class: 'kl-sep' }, ' / '), h('span', { class: err && err / Math.max(req, 1) >= 0.01 ? 'text-danger' : 'kl-dim' }, fmtInt(err))),
+      h('td', { class: `num col-cost mono m-meta ${u.cost_usd ? '' : 'kl-dim'}` }, fmtUSD(u.cost_usd || 0)),
+      lastTestCell(k),
       h('td', { class: 'col-actions m-menu' }, h('div', { class: 'row-actions' },
         h('button', { class: 'btn btn-ghost btn-icon btn-sm hide-m', title: t('kd.viewLogs'), 'aria-label': t('kd.viewLogs'), onclick: (e) => { e.stopPropagation(); ctx.navigate(`#/logs?key_id=${k.id}`); } }, icon('logs', 15)),
         h('button', { class: 'btn btn-ghost btn-icon btn-sm hide-m', title: t('kt.zapTip'), 'aria-label': t('kt.quickCheck'), onclick: (e) => { e.stopPropagation(); testOne(k, e.currentTarget, false); } }, icon('zap', 15)),
@@ -333,8 +338,16 @@ ${t('kd.openHint')}`, onclick: (e) => { e.stopPropagation(); drawer.open(k.id, {
     const signal = nextSignal();
     if (!silent && st.loaded) { setTableLoading(region, true); pager.setLoading(true); }
     try {
-      const res = await get('/api/v1/keys', { q: st.q, status: st.status, page: st.page, page_size: st.pageSize }, { signal });
+      const filtered = !!(st.q || st.status);
+      const [res, b24, all] = await Promise.all([
+        get('/api/v1/keys', { q: st.q, status: st.status, page: st.page, page_size: st.pageSize }, { signal }),
+        get('/api/v1/stats/breakdown', { range: '24h', by: 'key' }, { signal }).catch(() => null),
+        // Pool counts need every key; reuse the page when it already holds all of them.
+        filtered || st.page > 1 ? get('/api/v1/keys', { page_size: 200 }, { signal }).catch(() => null) : null,
+      ]);
       if (signal.aborted) return;
+      if (b24) use24 = new Map((b24.data || []).map((r) => [Number(r.id), r]));
+      paintSummary(all ? all.data || [] : res.total <= (res.data || []).length ? res.data || [] : null, all ? all.total : res.total);
       let rows = res.data || [];
       if (silent && rows.length === st.rows.length) {
         // Same keys as on screen: keep their current order, so an inline
@@ -344,9 +357,12 @@ ${t('kd.openHint')}`, onclick: (e) => { e.stopPropagation(); drawer.open(k.id, {
       }
       st.rows = rows; st.total = res.total || 0; st.totalKind = res.total_kind || 'exact'; st.loaded = true;
       if (!st.rows.length && st.page > 1 && st.total && st.totalKind === 'exact') { st.page = Math.ceil(st.total / st.pageSize); syncParams(); return load({ silent }); }
-      countEl.textContent = t('common.totalN', { n: fmtTotal(st.total, st.totalKind) });
-      tbody.replaceChildren(...(st.rows.length ? st.rows.map(row) : [tableEmptyRow(COLS, st.q || st.status ? { icon: 'search', title: t('common.noMatches') } : { icon: 'key', title: t('keys.empty'), desc: t('keys.emptyDesc'), action: button(t('keys.add'), { icon: 'plus', variant: 'primary', onClick: () => openForm() }) })]));
+      tbody.replaceChildren(...(st.rows.length ? st.rows.map(row) : [tableEmptyRow(COLS, filtered ? { icon: 'search', title: t('common.noMatches'), action: button(t('kl.clearFilters'), { onClick: clearFilters }) } : { icon: 'key', title: t('keys.empty'), desc: t('keys.emptyDesc'), action: button(t('keys.add'), { icon: 'plus', variant: 'primary', onClick: () => openForm() }) })]));
       pager.update({ page: st.page, pageSize: st.pageSize, total: st.total, totalKind: st.totalKind, hasMore: st.rows.length >= st.pageSize, rowCount: st.rows.length, loading: false });
+      // One page: a plain "共 14 个上游密钥" line; more: the pager.
+      const onePage = st.page === 1 && st.totalKind === 'exact' && st.total <= st.pageSize;
+      pager.hidden = onePage; footEl.hidden = !onePage || !st.total;
+      footEl.textContent = filtered ? t('kl.matchN', { n: fmtInt(st.total) }) : t('kl.totalN', { n: fmtInt(st.total) });
       syncSelection();
     } catch (e) {
       if (e.name === 'AbortError' || signal.aborted) return;
@@ -357,6 +373,25 @@ ${t('kd.openHint')}`, onclick: (e) => { e.stopPropagation(); drawer.open(k.id, {
     } finally {
       if (!signal.aborted) setTableLoading(region, false);
     }
+  }
+
+  function clearFilters() {
+    st.q = ''; st.status = ''; st.page = 1; search.input.value = ''; statusSel.value = '';
+    syncParams(true); load();
+  }
+
+  /** "● 可用 10  ● 冷却中 1  ● 自动禁用 2  ● 已禁用 1": the four always add up to the total. */
+  function paintSummary(all, total) {
+    if (!all || all.length < total) { poolSum.hidden = true; return; }
+    const n = { active: 0, cooldown: 0, auto: 0, disabled: 0 };
+    for (const k of all) n[k.status === 'active' ? 'active' : k.status === 'cooldown' ? 'cooldown' : k.auto_disabled ? 'auto' : 'disabled']++;
+    const item = (key, label, v) => h('span', { class: `kl-sum-item status-dot is-${v}`, 'data-k': key }, h('span', null, label), h('span', { class: 'mono' }, fmtInt(n[key])));
+    poolSum.hidden = false;
+    poolSum.replaceChildren(
+      item('active', t('status.active'), 'success'),
+      item('cooldown', t('status.cooldown'), 'warning'),
+      item('auto', t('status.autoDisabled'), 'danger'),
+      item('disabled', t('status.disabled'), 'neutral'));
   }
 
   ctx.onParams((p) => {

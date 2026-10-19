@@ -4,6 +4,11 @@
 // ll. log list, kt. key tests.
 export const en = {
   'kl.intRequired': 'Enter a whole number.',
+  // v0.5 upstream key list
+  'kl.req24': '24h requests / failed', 'kl.cost24': '24h cost',
+  'kl.leftPre': ' (', 'kl.leftPost': ' left)', 'kl.withCode': '{s} ({c})',
+  'kl.editHint': 'Press Enter to save, Esc to cancel', 'kl.clearFilters': 'Clear filters',
+  'kl.totalN': '{n} upstream keys', 'kl.matchN': '{n} matching upstream keys',
   // shared drawer parts + upstream key drawer
   'kd.range.24h': 'Last 24 hours', 'kd.range.7d': 'Last 7 days', 'kd.range.30d': 'Last 30 days',
   'kd.requests': 'Requests', 'kd.errors': 'Errors', 'kd.cost': 'Cost', 'kd.tokens': 'Tokens',
@@ -60,6 +65,10 @@ export const en = {
 
 export const zh = {
   'kl.intRequired': '请输入整数。',
+  'kl.req24': '24 小时请求数 / 失败数', 'kl.cost24': '24 小时费用',
+  'kl.leftPre': '（剩 ', 'kl.leftPost': '）', 'kl.withCode': '{s}（{c}）',
+  'kl.editHint': '按回车保存，按 Esc 取消', 'kl.clearFilters': '清除筛选',
+  'kl.totalN': '共 {n} 个上游密钥', 'kl.matchN': '{n} 个上游密钥符合条件',
   'kd.range.24h': '最近 24 小时', 'kd.range.7d': '最近 7 天', 'kd.range.30d': '最近 30 天',
   'kd.requests': '请求数', 'kd.errors': '失败数', 'kd.cost': '费用', 'kd.tokens': 'Token 数',
   'kd.usage': '用量', 'kd.lastCheck': '最近检测', 'kd.config': '配置', 'kd.recentFailures': '最近失败的请求',
