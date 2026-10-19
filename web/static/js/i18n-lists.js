@@ -3,6 +3,7 @@
 // Prefixes: kd. key drawer (and shared drawer parts), td. token drawer, tl. token list,
 // ll. log list, kt. key tests.
 export const en = {
+  'tl.dupInList': 'Another client token has the same name; logs tell them apart by prefix',
   'kl.intRequired': 'Enter a whole number.',
   // v0.5 upstream key list
   'kl.req24': '24h requests / failed', 'kl.cost24': '24h cost',
@@ -87,6 +88,7 @@ export const en = {
 };
 
 export const zh = {
+  'tl.dupInList': '另一个客户端令牌也叫这个名字，日志里按前缀区分',
   'kl.intRequired': '请输入整数。',
   'kl.req24': '24 小时请求数 / 失败数', 'kl.cost24': '24 小时费用',
   'kl.leftPre': '（剩 ', 'kl.leftPost': '）', 'kl.withCode': '{s}（{c}）',

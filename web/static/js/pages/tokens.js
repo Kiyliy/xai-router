@@ -231,7 +231,7 @@ export function render(el, ctx) {
         h('div', { class: 'title-line' },
           h('button', { type: 'button', class: 'name-link name-text', title: [tk.name, tk.notes, t('td.openHint')].filter(Boolean).join('\n'), onclick: (e) => { e.stopPropagation(); drawer.open(tk.id, { push: true }); } }, tk.name || `#${tk.id}`),
           h('span', { class: 'kl-mask mono' }, `${tk.prefix || ''}`),
-          dup ? h('span', { class: 'dup-flag', title: t('tokens.dupInList') }, icon('alert', 13)) : null,
+          dup ? h('span', { class: 'dup-flag', tabindex: 0, 'data-tip': t('tl.dupInList'), 'aria-label': t('tl.dupInList') }, icon('alert', 14)) : null,
           h('span', { class: 'm-only' }, statusBadge(tk)))),
       h('td', { class: 'col-status hide-m' }, statusBadge(tk)),
       quotaCell(tk),
