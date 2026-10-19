@@ -19,6 +19,11 @@
 .table-keys .col-status { width: 15%; }
 .table-keys .col-prio, .table-keys .col-weight { width: 64px; }
 .table-keys .col-test { width: 15%; }
+/* actions follow 最近检测 directly: not a sticky column, no divider or own background; the whole row highlights */
+.table-keys .col-actions, .table-keys thead .col-actions { position: static; box-shadow: none; background: transparent; background-image: none; }
+.table-keys tbody tr:hover td.col-actions { background: var(--hover); background-image: none; }
+.table-keys tr.row-selected td.col-actions { background: var(--accent-soft); background-image: none; }
+.table-keys tr.row-active td.col-actions { background: var(--accent-soft) !important; background-image: none !important; }
 .table-keys .title-line { gap: 10px; }
 .table-keys .name-link { font-weight: 400; color: var(--text); font-size: 13px; }
 .kl-mask { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
@@ -98,18 +103,16 @@ button.kl-test:hover .kl-test-l > span:first-child { text-decoration: underline;
 .callout-line.is-danger .kd-reason-t { color: var(--danger); }
 .callout-line .link { font-size: 12.5px; }
 
-/* usage: three cards (key) or one hairline grid (token) */
-.detail-drawer .usage-grid { gap: 12px; }
-.detail-drawer .usage-col { padding: 16px; border-color: var(--border); background: transparent; }
+/* usage: three columns between two 1px hairlines, vertical dividers between them, no card frames */
+.detail-drawer .usage-grid { gap: 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); border-radius: 0; }
+.detail-drawer .usage-col { padding: 20px; border: 0; border-radius: 0; background: transparent; }
+.detail-drawer .usage-col + .usage-col { border-left: 1px solid var(--border); }
 .detail-drawer .usage-range { font-size: 12px; font-weight: 400; color: var(--text-2); }
 .detail-drawer .usage-cost { font-family: var(--font-mono); font-weight: 300; font-size: 22px; letter-spacing: -.02em; margin: 6px 0 12px; color: var(--text); }
 .detail-drawer .usage-rows { gap: 8px 10px; font-size: 12.5px; }
 .detail-drawer .usage-rows dt { color: var(--text-2); }
 .detail-drawer .usage-rows dd { font-family: var(--font-mono); color: var(--text); }
 .detail-drawer .usage-rows dd.bad { color: var(--danger); }
-.detail-drawer .usage-joined { gap: 0; border: 1px solid var(--border); border-radius: var(--radius); }
-.detail-drawer .usage-joined .usage-col { border: 0; border-radius: 0; padding: 20px; }
-.detail-drawer .usage-joined .usage-col + .usage-col { border-left: 1px solid var(--border); }
 
 /* last check + configuration */
 .detail-drawer .entity-cols { gap: 24px; align-items: start; }
@@ -124,9 +127,14 @@ button.kd-test:hover { background: var(--active); }
 .detail-drawer .kv { grid-template-columns: 112px minmax(0, 1fr); gap: 8px 12px; font-size: 12.5px; }
 .detail-drawer .kv dt { color: var(--text-2); }
 .detail-drawer .kv .mono { font-size: 12.5px; }
+.detail-drawer .kv dd, .td-info dd { font-weight: 400; }
+.detail-drawer .kd-date { font-family: var(--font-sans); font-weight: 400; font-variant-numeric: tabular-nums; }
 
-/* recent events / failures */
-.detail-drawer .mini-row { padding: 10px 14px; font-size: 12.5px; }
+/* recent events / failures: plain rows with a 1px divider under each, no card frame */
+.detail-drawer .mini-list { border: 0; border-radius: 0; overflow: visible; }
+.detail-drawer .mini-row { padding: 10px 0; font-size: 12.5px; border-bottom: 1px solid var(--border); }
+.detail-drawer .mini-row:last-child { border-bottom: 1px solid var(--border); }
+.detail-drawer .mini-list > .mini-empty { padding-left: 0; padding-right: 0; }
 .kd-ev.mini-row { display: grid; grid-template-columns: 6px auto 64px minmax(0, 1fr) auto; align-items: center; gap: 12px; }
 .kd-ev .type-tag-pill { font-weight: 400; }
 .kd-ev-act { color: var(--text); white-space: nowrap; }

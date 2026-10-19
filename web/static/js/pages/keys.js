@@ -671,7 +671,8 @@ export function render(el, ctx) {
           },
         }, t('kd.viewTrigger')) : null;
         reasonEl.className = 'kd-reason callout-line is-danger';
-        reasonEl.replaceChildren(icon('xCircle', 16), h('span', { class: 'kd-reason-t', title: rr.full || null }, text), reqBtn, restoreBtn(k));
+        // replaceChildren() would print a missing button as the text "null"
+        reasonEl.replaceChildren(...[icon('xCircle', 16), h('span', { class: 'kd-reason-t', title: rr.full || null }, text), reqBtn, restoreBtn(k)].filter(Boolean));
         reasonEl.hidden = false;
       } else if (k.status === 'cooldown' && rr.short) {
         reasonEl.className = 'kd-reason callout-line is-warning';
@@ -711,8 +712,8 @@ export function render(el, ctx) {
         [t('keys.maxConcurrency'), h('span', { class: k.max_concurrency ? 'mono' : '' }, lim(k.max_concurrency))],
         [t('keys.rpmLimit'), h('span', { class: k.rpm_limit ? 'mono' : '' }, lim(k.rpm_limit))],
         [t('common.notes'), k.notes ? h('span', { class: 'break' }, k.notes) : null],
-        [t('kd.created'), k.created_at ? h('span', { class: 'mono', title: fmtDateTime(k.created_at) }, fmtDateTime(k.created_at, { seconds: false })) : null],
-        [t('kd.updated'), k.updated_at ? h('span', { class: 'mono', title: fmtDateTime(k.updated_at) }, fmtDateTime(k.updated_at, { seconds: false })) : null],
+        [t('kd.created'), k.created_at ? h('span', { class: 'kd-date', title: fmtDateTime(k.created_at) }, fmtDateTime(k.created_at, { seconds: false })) : null],
+        [t('kd.updated'), k.updated_at ? h('span', { class: 'kd-date', title: fmtDateTime(k.updated_at) }, fmtDateTime(k.updated_at, { seconds: false })) : null],
       ]));
     };
     const fetchKey = async () => {

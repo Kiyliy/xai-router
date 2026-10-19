@@ -405,8 +405,8 @@ export function render(el, ctx) {
       quotaEl.replaceChildren(quotaFigures(tk));
       const s = tokenState(tk);
       infoEl.replaceChildren(h('dl', { class: 'td-info' },
-        h('dt', null, t('common.created')), h('dd', { class: 'mono' }, tk.created_at ? isoMin(tk.created_at) : '—'),
-        h('dt', null, t('tokens.expiry')), h('dd', { class: s === 'expired' ? 'text-warning' : '' }, !tk.expires_at ? t('tokens.never') : [h('span', { class: 'mono' }, isoMin(tk.expires_at)), tk.expired ? t('tl.expiredMark') : '']),
+        h('dt', null, t('common.created')), h('dd', null, tk.created_at ? isoMin(tk.created_at) : '—'),
+        h('dt', null, t('tokens.expiry')), h('dd', { class: s === 'expired' ? 'text-warning' : '' }, !tk.expires_at ? t('tokens.never') : [h('span', null, isoMin(tk.expires_at)), tk.expired ? t('tl.expiredMark') : '']),
         h('dt', null, t('tokens.allowedModels')), h('dd', null, tk.allowed_models && tk.allowed_models.length ? h('span', { class: 'mono break' }, tk.allowed_models.join('、')) : t('tokens.allModels')),
         h('dt', null, t('common.notes')), h('dd', { class: 'break' }, tk.notes || h('span', { class: 'muted' }, '—'))));
     };
