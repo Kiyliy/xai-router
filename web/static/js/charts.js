@@ -272,3 +272,98 @@ export function shareBar(ratio, color = 'var(--accent)') {
     h('div', { class: 'share-track' }, h('div', { class: 'share-fill', style: { width: `${(r * 100).toFixed(1)}%`, background: color } })),
     h('span', { class: 'share-pct' }, `${(r * 100).toFixed(r < 0.1 && r > 0 ? 1 : 0)}%`));
 }
+
+/**
+ * Overview traffic chart (Ion): one brand area + line for the current window, a dashed grey line
+ * for the previous window, red 2px ticks along the bottom for buckets that failed too often.
+ * areaChart({ values, prev?, fail?: bool[], height, xLabel(i) → string|null, tipTitle(i), tipRows(i) → [[label, value, cls?]] })
+ */
+export function areaChart(opts) {
+  const { values = [], prev = null, fail = [], height = 270, xLabel, tipTitle, tipRows, yFormat = String, partialLast = false } = opts;
+  const svgHost = h('div', { class: 'chart-svg' });
+  const tip = h('div', { class: 'chart-tip ac-tip', hidden: true });
+  const root = h('div', { class: 'chart area-chart', style: { minHeight: `${height}px` } }, svgHost, tip);
+  let lastW = 0;
+  const draw = () => {
+    const W = Math.max(280, Math.floor(svgHost.clientWidth || root.clientWidth || 600));
+    lastW = W;
+    const H = height;
+    const pad = { l: 32, r: 16, t: 8, b: 30 };
+    const pw = W - pad.l - pad.r, ph = H - pad.t - pad.b;
+    const n = values.length;
+    const svg = s('svg', { width: W, height: H, viewBox: `0 0 ${W} ${H}`, class: 'chart-el', role: 'img' });
+    if (!n) { svgHost.replaceChildren(svg); return; }
+    let max = Math.max(1, ...values.map((v) => v || 0), ...(prev || []).map((v) => v || 0));
+    const step = niceStep(max, 3);
+    const top = Math.ceil(max / step) * step;
+    const x = (i) => pad.l + (n === 1 ? pw / 2 : (pw * i) / (n - 1));
+    const y = (v) => pad.t + ph - ((v || 0) / top) * ph;
+    // full-width hairlines (no frame), value at the left above each line
+    const grid = s('g', { class: 'chart-grid ac-grid' });
+    for (let v = step; v <= top + step / 2; v += step) {
+      const yy = Math.round(y(v)) + 0.5;
+      grid.appendChild(s('line', { x1: 0, x2: W, y1: yy, y2: yy }));
+      grid.appendChild(s('text', { x: pad.l, y: yy - 5, class: 'chart-axis ac-ylab' }, yFormat(v)));
+    }
+    const base = Math.round(y(0)) + 0.5;
+    grid.appendChild(s('line', { x1: 0, x2: W, y1: base, y2: base, class: 'ac-base' }));
+    svg.appendChild(grid);
+    // x labels: the caller decides which buckets get one
+    const xl = s('g');
+    for (let i = 0; i < n; i++) {
+      const lab = xLabel ? xLabel(i) : null;
+      if (lab == null) continue;
+      const anchor = i === n - 1 ? 'end' : i === 0 ? 'start' : 'middle';
+      xl.appendChild(s('text', { x: i === n - 1 ? W - pad.r : x(i), y: H - 9, 'text-anchor': anchor, class: 'chart-axis' }, lab));
+    }
+    svg.appendChild(xl);
+    const pts = values.map((v, i) => [x(i), y(v)]);
+    const line = smoothPath(pts);
+    if (prev) {
+      const pp = prev.map((v, i) => [x(i), y(v)]);
+      svg.appendChild(s('path', { d: smoothPath(pp), class: 'ac-prev' }));
+    }
+    svg.appendChild(s('path', { d: `${line}L${x(n - 1).toFixed(1)},${y(0)}L${x(0).toFixed(1)},${y(0)}Z`, class: 'ac-area' }));
+    // The bucket still in progress is drawn dashed, so its lower count does not read as a drop.
+    if (partialLast && n > 2) {
+      svg.appendChild(s('path', { d: smoothPath(pts.slice(0, n - 1)), class: 'ac-line' }));
+      svg.appendChild(s('path', { d: `M${pts[n - 2][0].toFixed(1)},${pts[n - 2][1].toFixed(1)}L${pts[n - 1][0].toFixed(1)},${pts[n - 1][1].toFixed(1)}`, class: 'ac-line ac-partial' }));
+    } else svg.appendChild(s('path', { d: line, class: 'ac-line' }));
+    if (n <= 2) pts.forEach((p) => svg.appendChild(s('circle', { cx: p[0], cy: p[1], r: 3, class: 'ac-pt' })));
+    // failure ticks
+    const ticks = s('g', { class: 'ac-fail' });
+    fail.forEach((f, i) => { if (f) ticks.appendChild(s('line', { x1: x(i), x2: x(i), y1: base - 8, y2: base })); });
+    svg.appendChild(ticks);
+    // hover
+    const guide = s('line', { class: 'ac-guide', y1: 0, y2: base, x1: 0, x2: 0, visibility: 'hidden' });
+    const dot = s('circle', { class: 'ac-dot', r: 3.5, visibility: 'hidden' });
+    svg.appendChild(guide); svg.appendChild(dot);
+    const hit = s('rect', { x: 0, y: 0, width: W, height: base, fill: 'transparent' });
+    svg.appendChild(hit);
+    const show = (evt) => {
+      const rect = svg.getBoundingClientRect();
+      const mx = evt.clientX - rect.left;
+      const i = Math.max(0, Math.min(n - 1, Math.round(((mx - pad.l) / (pw || 1)) * (n - 1))));
+      guide.setAttribute('x1', x(i)); guide.setAttribute('x2', x(i)); guide.setAttribute('visibility', 'visible');
+      dot.setAttribute('cx', x(i)); dot.setAttribute('cy', y(values[i])); dot.setAttribute('visibility', 'visible');
+      tip.replaceChildren(h('div', { class: 'chart-tip-title' }, tipTitle ? tipTitle(i) : ''),
+        ...(tipRows ? tipRows(i) : []).map(([k, v, cls]) => h('div', { class: 'chart-tip-row' }, h('span', { class: 'chart-tip-name' }, k), h('span', { class: `chart-tip-val ${cls || ''}` }, v))));
+      tip.hidden = false;
+      const tw = tip.offsetWidth, th = tip.offsetHeight;
+      let left = x(i) + 12;
+      if (left + tw > W - 4) left = x(i) - tw - 12;
+      const topPx = Math.max(4, Math.min(base - th - 4, y(values[i]) - th / 2));
+      tip.style.transform = `translate(${Math.max(4, left)}px, ${topPx}px)`;
+    };
+    const hide = () => { tip.hidden = true; guide.setAttribute('visibility', 'hidden'); dot.setAttribute('visibility', 'hidden'); };
+    hit.addEventListener('mousemove', show);
+    hit.addEventListener('mouseleave', hide);
+    hit.addEventListener('touchstart', (e) => { if (e.touches[0]) show(e.touches[0]); }, { passive: true });
+    svgHost.replaceChildren(svg);
+  };
+  const ro = new ResizeObserver(() => { const w = Math.floor(svgHost.clientWidth); if (w && Math.abs(w - lastW) > 2) draw(); });
+  ro.observe(svgHost);
+  requestAnimationFrame(draw);
+  root.destroy = () => ro.disconnect();
+  return root;
+}

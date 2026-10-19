@@ -92,6 +92,13 @@ export function upstreamWhy(reason) {
   return raw ? t('ev.why.other0') : t('ev.why.unknown');
 }
 
+/** Why a price sync failed: the key xAI rejected, or the plain upstream reason. Never the raw text or URL. */
+function syncWhy(reason) {
+  const raw = String(reason || '');
+  if (/invalid api key|incorrect api key|HTTP 40[13]/i.test(raw)) return t('ev.why.syncKey');
+  return upstreamWhy(raw);
+}
+
 function changesText(e) {
   const ch = (e.detail || {}).changes;
   if (!ch || typeof ch !== 'object') return '';
@@ -139,7 +146,7 @@ export function eventSentence(e) {
     case 'key.cooldown': return /429|rate/i.test(d.reason || '') ? t('ev.s.cooldownRate', { name, n: d.seconds ?? '—' }) : t('ev.s.cooldown', { name, n: d.seconds ?? '—', why: upstreamWhy(d.reason) });
     case 'key.circuit_open': { const m = /after (\d+) consecutive/.exec(d.reason || ''); return t('ev.s.circuit', { name, k: m ? m[1] : '—', n: d.seconds ?? '—' }); }
     case 'model.sync':
-      if (res.ok === false || res.error || d.error) return t(e.type === 'system' ? 'ev.s.syncFailAuto' : 'ev.s.syncFail', { why: upstreamWhy(res.error || d.error || '') });
+      if (res.ok === false || res.error || d.error) return t(e.type === 'system' || d.scheduled ? 'ev.s.syncFailAuto' : 'ev.s.syncFail', { why: syncWhy(res.error || d.error || '') });
       return t(e.type === 'system' ? 'ev.s.syncAuto' : 'ev.s.sync', { a: (res.added || []).length, u: (res.updated || []).length });
     case 'disk.low': return t('ev.s.disk', { p: Math.floor(d.used_percent || 0), f: fmtBytes(d.free_bytes || 0) });
     case 'logs.retention_start': return t('ev.s.retStart', { n: d.retention_days ?? '—' });
