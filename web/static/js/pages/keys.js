@@ -7,7 +7,9 @@ import {
   card, toast, toastError, openModal, confirmDialog, menuButton, badge, statusDot, switchEl, searchInput, select, pager as pagerEl, setTableLoading,
   skeletonRows, tableEmptyRow, tableWrap, field, input, checkbox, button, busy, kv, spinner, passwordInput, tapToMenu, errorMessage,
 } from '../ui.js';
-import { drawerState, section, usageBlock, failuresBlock, allLogsLink, goneBody, recentEventsBlock, allEventsLink, listTime } from '../detail-drawer.js';
+import { drawerState, section, usageBlock, failuresBlock, allLogsLink, goneBody, recentEventsBlock, allEventsLink, listTime, lastAutoDisable } from '../detail-drawer.js';
+import { upstreamWhy } from '../events.js';
+import { findRequestLog } from '../log-detail.js';
 
 const TEST_VARIANT = { ok: 'success', rate_limited: 'warning', invalid: 'danger', blocked: 'danger', no_credits: 'danger', error: 'danger' };
 
@@ -615,29 +617,40 @@ export function render(el, ctx) {
     }));
   }
 
-  // ---- detail drawer (P0-3) ----
+  // ---- detail drawer (frame 123-3982) ----
   function buildDrawer(id, d, signal) {
     const actionsEl = h('div', { class: 'detail-actions' });
-    const reasonEl = h('div');
+    const reasonEl = h('div', { class: 'kd-reason', hidden: true });
     const testEl = h('div');
     const configEl = h('div');
     let k = st.rows.find((x) => x.id === id) || null;
-    const paint = () => {
+    let autoEv; // undefined = not fetched yet, null = none
+    const fetchAuto = () => lastAutoDisable(id, signal).then((e) => { autoEv = e; paintReason(); }).catch(() => { autoEv = null; paintReason(); });
+    function paintReason() {
       if (!k) return;
       const rr = readableReason(k.status !== 'active' ? k.status_reason : '');
-      d.setHead({
-        title: k.name || `#${k.id}`,
-        badges: [
-          h('span', { title: rr.full || null }, statusBadgeFor(k)),
-          k.status === 'cooldown' && k.cooldown_until ? h('span', { class: 'countdown mono muted small', 'data-countdown': k.cooldown_until, title: fmtDateTime(k.cooldown_until) }, countdownText(k.cooldown_until)) : null,
-          k.auto_disabled ? h('button', { class: 'btn btn-sm btn-warning-soft btn-restore', title: t('keys.restoreHint'), onclick: (e) => busy(e.currentTarget, () => reset(k)) }, icon('reset', 13), h('span', null, t('keys.restore'))) : null,
-        ],
-        sub: [
-          h('span', { class: 'mono' }, k.key_masked || '—'),
-          h('span', { title: `${t('keys.priority')} / ${t('keys.weight')}` }, `P${k.priority ?? 0} · W${k.weight ?? 1}`),
-          k.created_at ? h('span', { title: fmtDateTime(k.created_at) }, t('kd.added', { when: timeEl(k.created_at).textContent })) : null,
-        ],
-      });
+      if (k.auto_disabled) {
+        const why = upstreamWhy((autoEv && autoEv.detail && autoEv.detail.reason) || k.status_reason);
+        const text = autoEv ? t('kd.autoAt', { when: listTime(autoEv.created_at), why }) : t('kd.autoNoTime', { why });
+        const reqBtn = autoEv && autoEv.request_id ? h('a', {
+          href: '#/logs', class: 'link nowrap', onclick: async (e) => {
+            e.preventDefault();
+            const lid = await findRequestLog(autoEv.request_id, signal).catch(() => null);
+            if (lid) ctx.navigate(`#/logs?range=all&open=${lid}`); else toast(t('kd.triggerGone'), 'info');
+          },
+        }, t('kd.viewTrigger')) : null;
+        reasonEl.className = 'kd-reason callout-line is-danger';
+        reasonEl.replaceChildren(icon('xCircle', 16), h('span', { class: 'kd-reason-t', title: rr.full || null }, text), reqBtn, restoreBtn(k));
+        reasonEl.hidden = false;
+      } else if (k.status === 'cooldown' && rr.short) {
+        reasonEl.className = 'kd-reason callout-line is-warning';
+        reasonEl.replaceChildren(icon('alert', 16), h('span', { class: 'kd-reason-t', title: rr.full }, rr.short));
+        reasonEl.hidden = false;
+      } else reasonEl.hidden = true;
+    }
+    const paint = () => {
+      if (!k) return;
+      d.setHead({ title: k.name || `#${k.id}`, badges: [h('span', { class: 'kd-status' }, statusBadgeFor(k, { countdown: true }))], sub: h('span', { class: 'mono' }, k.key_masked || '—') });
       actionsEl.replaceChildren(
         button(t('common.edit'), { icon: 'edit', size: 'sm', onClick: () => openForm(k) }),
         button(t('kt.quickCheck'), { icon: 'zap', size: 'sm', attrs: { title: t('kt.zapTip') }, onClick: (e) => testOne(k, e.currentTarget, false) }),
@@ -645,35 +658,38 @@ export function render(el, ctx) {
         k.enabled
           ? button(t('keys.disable'), { icon: 'xCircle', size: 'sm', variant: 'danger-soft', onClick: (e) => busy(e.currentTarget, () => setEnabled(k, false)) })
           : button(t('keys.enable'), { icon: 'checkCircle', size: 'sm', onClick: (e) => busy(e.currentTarget, () => setEnabled(k, true)) }));
-      reasonEl.replaceChildren(rr.short
-        ? h('div', { class: `callout ${k.auto_disabled ? 'callout-danger' : 'callout-warning'}` }, icon(k.auto_disabled ? 'xCircle' : 'alert', 16),
-          h('div', { class: 'break', title: rr.full }, k.auto_disabled ? t('kd.autoDisabledWhy', { reason: rr.short }) : rr.short))
-        : '');
-      reasonEl.hidden = !rr.short;
+      if (k.auto_disabled && autoEv === undefined) fetchAuto();
+      paintReason();
       const lt = k.last_test;
       if (lt) {
-        const hero = testResultView({ ...lt, key_name: '' }).querySelector('.test-hero');
-        testEl.replaceChildren(hero, h('div', { class: 'dd-test-actions' },
-          button(t('kd.testDetails'), { size: 'sm', variant: 'ghost', icon: 'info', onClick: () => showTestResult({ ...lt, key_name: k.name }) })));
+        const kind = t(lt.probe ? 'kd.checkKind.full' : 'kd.checkKind.quick');
+        const meta = [kind, lt.tested_at ? fmtDateTime(lt.tested_at, { seconds: false }) : '', lt.latency_ms != null ? fmtMs(lt.latency_ms) : ''].filter(Boolean).join(' · ');
+        const v = lt.ok ? 'ok' : lt.status === 'rate_limited' ? 'warn' : 'bad';
+        testEl.replaceChildren(h('button', { type: 'button', class: `kd-test is-${v}`, title: `${testMessage(lt)}\n${t('kd.testDetails')}`, onclick: () => showTestResult({ ...lt, key_name: k.name }) },
+          icon(lt.ok ? 'checkCircle' : v === 'warn' ? 'alert' : 'xCircle', 16),
+          h('span', { class: 'kd-test-s' }, t(`test.${lt.status}`) || lt.status),
+          h('span', { class: 'kd-test-m' }, meta)));
       } else {
-        testEl.replaceChildren(h('div', { class: 'test-hero test-neutral' }, icon('info', 22),
-          h('div', null, h('div', { class: 'test-hero-title' }, t('keys.neverTested')), h('div', { class: 'test-hero-msg' }, t('kd.neverTestedDesc'))),
-          button(t('kd.testNow'), { icon: 'zap', size: 'sm', variant: 'primary', onClick: (e) => testOne(k, e.currentTarget, false) })));
+        testEl.replaceChildren(h('div', { class: 'kd-test is-none' }, icon('clock', 16), h('span', { class: 'kd-test-s' }, t('keys.neverTested')),
+          button(t('kd.testNow'), { icon: 'zap', size: 'sm', onClick: (e) => testOne(k, e.currentTarget, false) })));
       }
-      const lim = (v) => (v ? fmtInt(v) : '∞');
+      const lim = (v) => (v ? fmtInt(v) : t('kd.noLimit'));
       configEl.replaceChildren(kv([
-        [t('keys.baseUrl'), h('span', { class: 'mono small break' }, k.base_url || 'https://api.x.ai')],
-        [t('kd.prioWeight'), `${k.priority ?? 0} / ${k.weight ?? 1}`],
-        [t('kd.concRpm'), `${lim(k.max_concurrency)} / ${lim(k.rpm_limit)}`],
+        [t('keys.baseUrl'), h('span', { class: 'mono break' }, k.base_url || 'https://api.x.ai')],
+        [t('kd.prioWeight'), h('span', { class: 'mono' }, `${k.priority ?? 0} / ${k.weight ?? 1}`)],
+        [t('keys.maxConcurrency'), h('span', { class: k.max_concurrency ? 'mono' : '' }, lim(k.max_concurrency))],
+        [t('keys.rpmLimit'), h('span', { class: k.rpm_limit ? 'mono' : '' }, lim(k.rpm_limit))],
         [t('common.notes'), k.notes ? h('span', { class: 'break' }, k.notes) : null],
-        [t('kd.created'), k.created_at ? h('span', { title: fmtDateTime(k.created_at) }, fmtDateTime(k.created_at, { seconds: false })) : null],
-        [t('kd.updated'), k.updated_at ? h('span', { title: fmtDateTime(k.updated_at) }, fmtDateTime(k.updated_at, { seconds: false })) : null],
+        [t('kd.created'), k.created_at ? h('span', { class: 'mono', title: fmtDateTime(k.created_at) }, fmtDateTime(k.created_at, { seconds: false })) : null],
+        [t('kd.updated'), k.updated_at ? h('span', { class: 'mono', title: fmtDateTime(k.updated_at) }, fmtDateTime(k.updated_at, { seconds: false })) : null],
       ]));
     };
     const fetchKey = async () => {
       try {
+        const was = k && k.auto_disabled;
         k = await get(`/api/v1/keys/${id}`, null, { signal });
         if (signal.aborted) return;
+        if (k.auto_disabled && !was) autoEv = undefined;
         paint();
         if (!d.body.querySelector('.entity-body')) mountBody();
       } catch (e) {
@@ -683,12 +699,12 @@ export function render(el, ctx) {
         else toastError(e);
       }
     };
-    const mountBody = () => d.setBody(h('div', { class: 'entity-body' },
-      actionsEl, reasonEl,
+    const mountBody = () => d.setBody(h('div', { class: 'entity-body kd-body' },
+      h('div', { class: 'kd-top' }, reasonEl, actionsEl),
       section(t('kd.usage'), usageBlock('key', id, signal)),
       h('div', { class: 'entity-cols' }, section(t('kd.lastCheck'), testEl), section(t('kd.config'), configEl)),
-      section(t('kd.recentFailures'), failuresBlock({ param: 'key_id', id, signal, navigate: ctx.navigate }), allLogsLink(`#/logs?key_id=${id}`, ctx.navigate)),
-      section(t('kd.recentEvents'), recentEventsBlock({ keyId: id, signal, navigate: ctx.navigate }), allEventsLink(id, ctx.navigate))));
+      section(t('kd.recentEvents'), recentEventsBlock({ keyId: id, signal, navigate: ctx.navigate }), allEventsLink(id, ctx.navigate)),
+      section(t('kd.recentFailures'), failuresBlock({ param: 'key_id', id, signal, navigate: ctx.navigate }), allLogsLink(`#/logs?key_id=${id}`, ctx.navigate))));
     if (k) { paint(); mountBody(); }
     fetchKey();
     return fetchKey;

@@ -1,12 +1,12 @@
 // Shared pieces of the upstream key / client token detail drawers (v0.4.0):
 // drawer shell, URL-synced open state, 24h/7d/30d usage, recent failed requests,
 // and the "name · prefix" credential label.
-import { h, fmtInt, fmtUSD, fmtCompact, fmtDateTime, relTime, statusClass } from './util.js';
+import { h, fmtInt, fmtUSD, fmtCompact, fmtDateTime, fmtTimeShort, fmtMs, relTime } from './util.js';
 import { icon } from './icons.js';
-import { t } from './i18n.js';
+import { t, hasT } from './i18n.js';
 import { get } from './api.js';
-import { openModal, badge, spinner, errorMessage } from './ui.js';
-import { eventSentence, levelDot } from './events.js';
+import { openModal, badge, statusCode, spinner, errorMessage } from './ui.js';
+import { eventSentence, levelDot, actionLabel, actorLabel, upstreamWhy, fieldLabel, fmtChangeValue, requestReason } from './events.js';
 
 export const USAGE_RANGES = ['24h', '7d', '30d'];
 
@@ -27,12 +27,21 @@ export function openDetailDrawer({ onClose }) {
     onClose,
   });
   d.el.classList.add('detail-drawer');
-  /** Header: title + badges on the first line, a "·"-separated meta line under it. */
-  d.setHead = ({ title, badges = [], sub = [] }) => {
+  /**
+   * Header: title + badges on the first line, at most one identifier (mask or prefix) under it
+   * (pm-spec 10.8 C55: everything else lives in the drawer's configuration / summary block).
+   * `aside` sits left of the close button (e.g. the token's "已启用" switch).
+   */
+  d.setHead = ({ title, badges = [], sub, aside } = {}) => {
     const heading = d.el.querySelector('.modal-heading');
+    const one = Array.isArray(sub) ? sub.filter(Boolean)[0] : sub;
     heading.replaceChildren(
       h('div', { class: 'entity-head' }, h('span', { class: 'entity-title modal-title' }, title), ...badges.filter(Boolean)),
-      sub.filter(Boolean).length ? h('div', { class: 'entity-sub' }, sub.filter(Boolean).flatMap((x, i) => (i ? [h('span', { 'aria-hidden': 'true' }, '·'), x] : [x]))) : '');
+      one ? h('div', { class: 'entity-sub' }, one) : '');
+    const acts = d.el.querySelector('.modal-header-actions');
+    const old = acts.querySelector('.entity-aside');
+    if (old) old.remove();
+    if (aside) acts.prepend(h('div', { class: 'entity-aside' }, aside));
   };
   return d;
 }
@@ -99,8 +108,8 @@ function failLine(e) { return h('div', { class: 'mini-empty mini-error' }, icon(
  * 24h / 7d / 30d usage of one key or token from GET /api/v1/stats/breakdown?by=…&range=…
  * (the overview breakdown numbers; a key/token without a row there counts as 0).
  */
-export function usageBlock(by, id, signal, onRow) {
-  const box = h('div', { class: 'usage-grid' }, USAGE_RANGES.map((r) => h('div', { class: 'usage-col' },
+export function usageBlock(by, id, signal, onRow, { joined = false } = {}) {
+  const box = h('div', { class: `usage-grid ${joined ? 'usage-joined' : ''}` }, USAGE_RANGES.map((r) => h('div', { class: 'usage-col' },
     h('div', { class: 'usage-range' }, t(`kd.range.${r}`)), h('div', { class: 'usage-cost' }, h('span', { class: 'skeleton dd-skel' })))));
   Promise.all(USAGE_RANGES.map((range) => get('/api/v1/stats/breakdown', { range, by }, { signal })
     .then((res) => (res.data || []).find((r) => String(r.id) === String(id)) || {})))
@@ -128,16 +137,20 @@ export function failuresBlock({ param, id, signal, navigate }) {
     .then((res) => {
       const rows = (res.data || []).slice(0, 5);
       if (!rows.length) { box.replaceChildren(h('div', { class: 'mini-empty' }, icon('checkCircle', 15), h('span', null, t('kd.noFailures')))); return; }
-      box.replaceChildren(...rows.map((r) => h('button', {
-        type: 'button', class: 'mini-row', title: t('kd.openLog'),
-        onclick: () => navigate(`#/logs?${param}=${id}&status=error&range=all&open=${r.id}`),
-      },
-      badge(r.status ? String(r.status) : 'ERR', statusClass(r.status), { class: 'badge-status mono' }),
-      h('span', { class: 'when', title: fmtDateTime(r.created_at) }, listTime(r.created_at)),
-      h('span', { class: 'what' },
-        h('span', { class: 'mono' }, r.path || '', r.model ? h('span', { class: 'muted' }, ` · ${r.model}`) : null),
-        r.error ? h('span', { class: 'err', title: r.error }, r.error) : null),
-      icon('chevronRight', 14))));
+      box.replaceChildren(...rows.map((r) => {
+        const why = requestReason(r);
+        const sub = [r.model, why && why.text].filter(Boolean).join(t('kd.listSep'));
+        return h('button', {
+          type: 'button', class: 'mini-row kd-fail', title: t('kd.openLog'),
+          onclick: () => navigate(`#/logs?${param}=${id}&status=error&range=all&open=${r.id}`),
+        },
+        statusCode(r.status),
+        h('span', { class: 'when mono', title: fmtDateTime(r.created_at) }, failTime(r.created_at)),
+        h('span', { class: 'what' },
+          h('span', { class: 'mono' }, r.method ? `${r.method} ` : '', r.path || ''),
+          sub ? h('span', { class: 'err', title: (why && why.raw) || sub }, sub) : null),
+        icon('chevronRight', 14));
+      }));
     })
     .catch((e) => { if (e.name !== 'AbortError') box.replaceChildren(failLine(e)); });
   return box;
@@ -188,16 +201,63 @@ export function recentEventsBlock({ keyId, signal, navigate }) {
       const rows = (res.data || []).slice(0, 5);
       if (!rows.length) { box.replaceChildren(h('div', { class: 'mini-empty' }, icon('checkCircle', 15), h('span', null, t('kd.noEvents')))); return; }
       box.replaceChildren(...rows.map((e) => {
-        const line = eventSentence(e);
-        return h('button', { type: 'button', class: 'mini-row', title: t('kd.openEvent'), onclick: () => navigate(`${base}&event=${e.id}`) },
+        const line = keyEventLine(e);
+        return h('button', { type: 'button', class: 'mini-row kd-ev', title: `${eventSentence(e)}\n${t('kd.openEvent')}`, onclick: () => navigate(`${base}&event=${e.id}`) },
           levelDot(e.level),
-          h('span', { class: 'when', title: fmtDateTime(e.created_at) }, listTime(e.created_at)),
-          h('span', { class: 'what' }, h('span', { class: 'ev-line', title: line }, line)),
-          icon('chevronRight', 14));
+          h('span', { class: `type-tag-pill type-${e.type}` }, t(`lg.type.${e.type}`)),
+          h('span', { class: 'kd-ev-act' }, keyEventLabel(e.action)),
+          h('span', { class: 'what' }, h('span', { class: 'ev-line' }, line)),
+          h('span', { class: 'when', title: fmtDateTime(e.created_at) }, listTime(e.created_at)));
       }));
     })
     .catch((e) => { if (e.name !== 'AbortError') box.replaceChildren(failLine(e)); });
   return box;
+}
+
+/** Within 24 hours "12:20:03", older "10月16日 10:02". */
+function failTime(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return '—';
+  return Date.now() - d.getTime() < 86400e3 ? fmtTimeShort(d) : fmtDateTime(d, { seconds: false });
+}
+
+/** Short action name for the key drawer ("自动禁用", "编辑", "开始冷却" …). */
+export function keyEventLabel(action) {
+  const k = `kd.ev.${action}`;
+  return hasT(k) ? t(k) : actionLabel(action);
+}
+
+/**
+ * The event without the key's name, which the drawer already shows:
+ * "xAI 返回 401（密钥无效或被封禁），已自动禁用"; "权重 20 → 10（管理员）"; "被 xAI 限流，冷却 60 秒".
+ */
+export function keyEventLine(e) {
+  const d = e.detail || {};
+  const who = e.type === 'audit' ? t('kd.byWho', { who: e.actor === 'password' ? t('kd.admin') : actorLabel(e) }) : '';
+  switch (e.action) {
+    case 'key.auto_disable': return t('kd.evAutoDisable', { why: upstreamWhy(d.reason) });
+    case 'key.cooldown': return /429|rate/i.test(d.reason || '') ? t('kd.evRate', { n: d.seconds ?? '—' }) : t('kd.evPause', { why: upstreamWhy(d.reason), n: d.seconds ?? '—' });
+    case 'key.update': {
+      const ch = d.changes && typeof d.changes === 'object' ? Object.entries(d.changes) : [];
+      if (!ch.length) break;
+      const parts = ch.slice(0, 3).map(([f, c]) => `${fieldLabel(e.target_type, f)} ${fmtChangeValue(c && c.before)} → ${fmtChangeValue(c && c.after)}`);
+      return parts.join(t('kd.listSep')) + who;
+    }
+    case 'key.test': {
+      const res = d.result && typeof d.result === 'object' ? d.result : {};
+      if (res.ok) return (res.latency_ms != null ? t('kd.evTestOkMs', { ms: fmtMs(res.latency_ms) }) : t('kd.evTestOk')) + who;
+      if (res.status) return t('kd.evTestBad', { r: hasT(`test.${res.status}`) ? t(`test.${res.status}`) : res.status }) + who;
+      break;
+    }
+    default: break;
+  }
+  return eventSentence(e);
+}
+
+/** The newest auto-disable record of a key (time, reason, the request that caused it), or null. */
+export async function lastAutoDisable(keyId, signal) {
+  const res = await get('/api/v1/logs', { type: 'system', key_id: keyId, q: 'key.auto_disable', page_size: 5 }, { signal });
+  return (res.data || []).find((e) => e.action === 'key.auto_disable') || null;
 }
 
 /** "View all →" for the key drawer's recent events: the mixed operation / system list for this key. */

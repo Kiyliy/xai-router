@@ -73,3 +73,70 @@ button.kl-test:hover .kl-test-l > span:first-child { text-decoration: underline;
   .kl-toolbar .search-input { width: 100%; }
   .kl-summary { width: 100%; flex-wrap: wrap; gap: 12px; }
 }
+
+/* ---------- detail drawers (key 123-3982, token 124-8167) ---------- */
+.detail-drawer .modal-heading { min-width: 0; }
+.detail-drawer .entity-title { font-size: 17px; font-weight: 600; }
+.detail-drawer .entity-sub { margin-top: 6px; }
+.detail-drawer .entity-sub .mono { color: var(--text-3); font-size: 12px; }
+.entity-head .cred-prefix-inline { font-family: var(--font-mono); font-size: 12px; color: var(--text-3); }
+.entity-aside { display: inline-flex; align-items: center; gap: 8px; margin-right: 8px; font-size: 12.5px; color: var(--text-2); }
+.kd-status .status-dot { font-size: 12.5px; color: var(--text-2); }
+.kd-body { gap: 24px; }
+.kd-top { display: flex; flex-direction: column; gap: 12px; padding-bottom: 20px; margin: 0 -24px; padding-left: 24px; padding-right: 24px; border-bottom: 1px solid var(--border); }
+.detail-drawer .section-label { font-size: 12px; font-weight: 400; color: var(--text-3); margin-bottom: 12px; }
+.detail-drawer .section-label a { font-size: 12.5px; font-weight: 400; }
+
+/* reason line: 2px status line + icon + text + link + action, no filled block */
+.callout-line { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--surface-2); box-shadow: inset 2px 0 0 var(--text-3); font-size: 12.5px; color: var(--text); }
+.callout-line.is-danger { box-shadow: inset 2px 0 0 var(--danger-solid); }
+.callout-line.is-danger > .icon { color: var(--danger); }
+.callout-line.is-warning { box-shadow: inset 2px 0 0 var(--warning-solid); }
+.callout-line.is-warning > .icon { color: var(--warning); }
+.callout-line .kd-reason-t { flex: 1; min-width: 0; }
+.callout-line.is-danger .kd-reason-t { color: var(--danger); }
+.callout-line .link { font-size: 12.5px; }
+
+/* usage: three cards (key) or one hairline grid (token) */
+.detail-drawer .usage-grid { gap: 12px; }
+.detail-drawer .usage-col { padding: 16px; border-color: var(--border); background: transparent; }
+.detail-drawer .usage-range { font-size: 12px; font-weight: 400; color: var(--text-2); }
+.detail-drawer .usage-cost { font-family: var(--font-mono); font-weight: 300; font-size: 22px; letter-spacing: -.02em; margin: 6px 0 12px; color: var(--text); }
+.detail-drawer .usage-rows { gap: 8px 10px; font-size: 12.5px; }
+.detail-drawer .usage-rows dt { color: var(--text-2); }
+.detail-drawer .usage-rows dd { font-family: var(--font-mono); color: var(--text); }
+.detail-drawer .usage-rows dd.bad { color: var(--danger); }
+.detail-drawer .usage-joined { gap: 0; border: 1px solid var(--border); border-radius: var(--radius); }
+.detail-drawer .usage-joined .usage-col { border: 0; border-radius: 0; padding: 20px; }
+.detail-drawer .usage-joined .usage-col + .usage-col { border-left: 1px solid var(--border); }
+
+/* last check + configuration */
+.detail-drawer .entity-cols { gap: 24px; align-items: start; }
+.kd-test { display: flex; align-items: center; gap: 8px; width: 100%; padding: 12px 14px; border: 0; border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); font-size: 13px; text-align: left; cursor: pointer; }
+.kd-test > .icon { color: var(--text-3); }
+.kd-test.is-bad > .icon, .kd-test.is-bad .kd-test-s { color: var(--danger); }
+.kd-test.is-warn > .icon { color: var(--warning); }
+.kd-test.is-none { cursor: default; }
+.kd-test.is-none .btn { margin-left: auto; }
+.kd-test-m { color: var(--text-2); font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.kd-test:hover { background: var(--active); }
+.detail-drawer .kv { grid-template-columns: 112px minmax(0, 1fr); gap: 8px 12px; font-size: 12.5px; }
+.detail-drawer .kv dt { color: var(--text-2); }
+.detail-drawer .kv .mono { font-size: 12.5px; }
+
+/* recent events / failures */
+.detail-drawer .mini-row { padding: 10px 14px; font-size: 12.5px; }
+.kd-ev.mini-row { display: grid; grid-template-columns: 6px auto 64px minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.kd-ev .type-tag-pill { font-weight: 400; }
+.kd-ev-act { color: var(--text); white-space: nowrap; }
+.kd-ev .ev-line { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.kd-ev .when { text-align: right; font-size: 12px; }
+.kd-fail.mini-row { display: grid; grid-template-columns: auto minmax(64px, auto) minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.kd-fail .when { font-size: 12.5px; color: var(--text-2); }
+.kd-fail .what .mono { font-size: 12.5px; color: var(--text); }
+.kd-fail .what .err { font-size: 12px; color: var(--text-3); }
+@media (max-width: 640px) {
+  .kd-ev.mini-row { grid-template-columns: 6px auto minmax(0, 1fr); }
+  .kd-ev .kd-ev-act, .kd-ev .when { display: none; }
+  .kd-top { margin: 0 -16px; padding-left: 16px; padding-right: 16px; }
+}

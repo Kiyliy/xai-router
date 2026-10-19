@@ -19,6 +19,16 @@ export const en = {
   'kd.testDetails': 'Full result', 'kd.neverTestedDesc': 'This key has not been checked yet.', 'kd.testNow': 'Check now',
   'kd.prioWeight': 'Priority / weight', 'kd.concRpm': 'Max concurrency / requests per minute', 'kd.created': 'Added', 'kd.updated': 'Last changed',
   'kd.notFound': 'This upstream key has been deleted. Its history is below.',
+  // v0.5 drawers
+  'kd.listSep': ', ', 'kd.byWho': ' ({who})', 'kd.admin': 'Administrator', 'kd.noLimit': 'No limit',
+  'kd.evAutoDisable': '{why}; disabled automatically', 'kd.evRate': 'Rate limited by xAI, cooling down {n} s', 'kd.evPause': '{why}; paused for {n} s',
+  'kd.evTestOkMs': 'Check OK, {ms}', 'kd.evTestOk': 'Check OK', 'kd.evTestBad': 'Check result: {r}',
+  'kd.ev.key.auto_disable': 'Auto-disabled', 'kd.ev.key.cooldown': 'Cooling down', 'kd.ev.key.circuit_open': 'Paused', 'kd.ev.key.update': 'Edited',
+  'kd.ev.key.test': 'Checked', 'kd.ev.key.create': 'Added', 'kd.ev.key.enable': 'Enabled', 'kd.ev.key.disable': 'Disabled', 'kd.ev.key.restore': 'Restored', 'kd.ev.key.import': 'Imported',
+  'kd.autoAt': 'Disabled automatically {when}: {why}. Replace the key, then click “Restore” to use it again.',
+  'kd.autoNoTime': 'Disabled automatically: {why}. Replace the key, then click “Restore” to use it again.',
+  'kd.viewTrigger': 'View the request that caused it →', 'kd.triggerGone': 'That request’s log has already been deleted.',
+  'kd.checkKind.quick': 'Quick check', 'kd.checkKind.full': 'Full check',
 
   // key tests
   'kt.quickCheck': 'Quick check', 'kt.fullCheck': 'Full check',
@@ -78,6 +88,15 @@ export const zh = {
   'kd.testDetails': '完整结果', 'kd.neverTestedDesc': '这个上游密钥还没有检测过。', 'kd.testNow': '立即检测',
   'kd.prioWeight': '优先级 / 权重', 'kd.concRpm': '最大并发 / 每分钟请求上限', 'kd.created': '添加时间', 'kd.updated': '最近修改',
   'kd.notFound': '这个上游密钥已删除，下面是它的历史记录。',
+  'kd.listSep': '，', 'kd.byWho': '（{who}）', 'kd.admin': '管理员', 'kd.noLimit': '不限',
+  'kd.evAutoDisable': '{why}，已自动禁用', 'kd.evRate': '被 xAI 限流，冷却 {n} 秒', 'kd.evPause': '{why}，暂停使用 {n} 秒',
+  'kd.evTestOkMs': '检测正常，{ms}', 'kd.evTestOk': '检测正常', 'kd.evTestBad': '检测结果：{r}',
+  'kd.ev.key.auto_disable': '自动禁用', 'kd.ev.key.cooldown': '开始冷却', 'kd.ev.key.circuit_open': '暂停使用', 'kd.ev.key.update': '编辑',
+  'kd.ev.key.test': '检测', 'kd.ev.key.create': '添加', 'kd.ev.key.enable': '启用', 'kd.ev.key.disable': '禁用', 'kd.ev.key.restore': '恢复', 'kd.ev.key.import': '导入',
+  'kd.autoAt': '{when}已自动禁用：{why}。更换密钥后点“恢复”重新启用。',
+  'kd.autoNoTime': '已自动禁用：{why}。更换密钥后点“恢复”重新启用。',
+  'kd.viewTrigger': '查看触发的请求 →', 'kd.triggerGone': '触发的请求日志已被清理。',
+  'kd.checkKind.quick': '快速检测', 'kd.checkKind.full': '完整检测',
 
   'kt.quickCheck': '快速检测', 'kt.fullCheck': '完整检测',
   'kt.quickDesc': '只查询密钥信息，不消耗额度', 'kt.fullDesc': '额外发一条最小请求，消耗额度（约 $0.0001）',
