@@ -41,6 +41,13 @@ jobs:
           go tool cover -func=all.out | tail -1
       - name: build
         run: CGO_ENABLED=0 go build -trimpath -o xai-router ./cmd/xai-router && ./xai-router version
+      - name: console smoke test (headless Chrome, every page, no console errors)
+        run: |
+          mkdir -p /tmp/xr-smoke
+          XR_DATA_DIR=/tmp/xr-smoke XR_LISTEN=127.0.0.1:18080 XR_ADMIN_PASSWORD=ci-smoke-password ./xai-router > /tmp/xr-smoke.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf 127.0.0.1:18080/healthz > /dev/null && break; sleep 1; done
+          flag=""; [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 22 ] && flag=--experimental-websocket
+          node $flag tools/smoke/smoke.mjs --base http://127.0.0.1:18080 --password ci-smoke-password || { tail -50 /tmp/xr-smoke.log; exit 1; }
 
   secrets:
     runs-on: ubuntu-24.04
