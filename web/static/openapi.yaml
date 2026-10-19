@@ -340,7 +340,8 @@ paths:
               required: [action, reason]
               properties:
                 action: { type: string, enum: [increase, decrease, set_limited, set_unlimited] }
-                amount_usd: { type: number, example: 5, description: "Required except for set_unlimited" }
+                amount_usd: { type: number, example: 5, description: "Required except for set_unlimited and to_used" }
+                to_used: { type: boolean, description: "decrease only, without amount_usd: lower the quota to exactly what has been used (tick precision)" }
                 reason: { type: string, maxLength: 200 }
       responses:
         "200":

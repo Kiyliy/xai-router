@@ -284,8 +284,8 @@ func (p *Pool) Report(id int64, o Outcome) Verdict {
 			}
 			if last, busy := p.verifying[id]; !busy || now.Sub(last) > time.Minute {
 				p.verifying[id] = now
-				k := *e.key
-				go p.verify(&k)
+				k, rid := *e.key, o.RequestID
+				go p.verify(&k, rid)
 			}
 		}
 	case ActionDisable:
@@ -371,7 +371,9 @@ func MaskKey(k string) string {
 	return k[:6] + "…" + k[len(k)-4:]
 }
 
-func (p *Pool) verify(k *store.Key) {
+// verify checks a suspected key and disables it when it is dead; the
+// event names the request whose upstream reply raised the suspicion.
+func (p *Pool) verify(k *store.Key, requestID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	dead, reason := p.Verify(ctx, k)
@@ -379,7 +381,7 @@ func (p *Pool) verify(k *store.Key) {
 		p.log.Info("suspected key verified healthy", "key_id", k.ID, "key", k.Name)
 		return
 	}
-	if err := p.Disable(ctx, k.ID, reason); err != nil {
+	if err := p.disable(ctx, k.ID, reason, requestID); err != nil {
 		p.log.Error("disable key", "key_id", k.ID, "err", err)
 		return
 	}
@@ -590,6 +592,10 @@ func (p *Pool) ResetKey(ctx context.Context, id int64) error {
 
 // Disable marks a key auto-disabled (used by health checks).
 func (p *Pool) Disable(ctx context.Context, id int64, reason string) error {
+	return p.disable(ctx, id, reason, "")
+}
+
+func (p *Pool) disable(ctx context.Context, id int64, reason, requestID string) error {
 	p.mu.Lock()
 	var was *store.Key
 	if e := p.entries[id]; e != nil {
@@ -604,7 +610,7 @@ func (p *Pool) Disable(ctx context.Context, id int64, reason string) error {
 		return err
 	}
 	if was != nil {
-		p.keyEvent(was, "key.auto_disable", store.LevelError, reason, "", nil)
+		p.keyEvent(was, "key.auto_disable", store.LevelError, reason, requestID, nil)
 	}
 	return nil
 }

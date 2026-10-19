@@ -869,7 +869,7 @@ func (h *Handler) authenticate(r *http.Request) (*store.Token, error) {
 	}
 	if tok.Limited && tok.UsedTicks >= tok.QuotaTicks {
 		return nil, errf(http.StatusTooManyRequests, "insufficient_quota",
-			"this API key has used its quota of $%.2f", billing.TicksToUSD(tok.QuotaTicks))
+			"this API key has used its quota of $%.4f", billing.TicksToUSD(tok.QuotaTicks))
 	}
 	return tok, nil
 }

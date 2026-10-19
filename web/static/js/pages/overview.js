@@ -16,7 +16,7 @@ const RANGE_MS = { '1h': 3600e3, '24h': 86400e3, '7d': 7 * 86400e3, '30d': 30 * 
 // The previous window is read from the next longer range (there is nothing longer than 90 days).
 const PREV_RANGE = { '1h': '24h', '24h': '7d', '7d': '30d', '30d': '90d' };
 const ONBOARD_KEY = 'xr.onboard.dismissed';
-const ATTN_HASH = '#/logs?type=audit,system&problems=1';
+const ATTN_HASH = '#/logs?type=system&problems=1';
 const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } };
 const pad = (n) => String(n).padStart(2, '0');
@@ -277,7 +277,7 @@ export function render(el, ctx) {
   // --- events needing attention (pm-spec 9.6): warnings and errors of the last 24 hours ---
   async function loadAttention(keysP) {
     try {
-      const res = await get('/api/v1/logs', { type: 'audit,system', problems: 1, from: new Date(Date.now() - 86400e3).toISOString(), page_size: 100 }, { signal: ctx.signal });
+      const res = await get('/api/v1/logs', { type: 'system', problems: 1, from: new Date(Date.now() - 86400e3).toISOString(), page_size: 100 }, { signal: ctx.signal });
       const keys = await keysP;
       // The same failure repeated (e.g. a scheduled job) is one line with a count.
       const groups = [];

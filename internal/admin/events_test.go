@@ -163,6 +163,9 @@ func TestQuotaAdjust(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := h.must(h.call(http.MethodPost, path, `{"action":"increase","amount_usd":2.5,"reason":"monthly top-up"}`), 200)
+	// Amounts whose float value is not an exact multiple of 0.0001 (8.63) are fine.
+	h.must(h.call(http.MethodPost, path, `{"action":"increase","amount_usd":8.63,"reason":"r"}`), 200)
+	h.must(h.call(http.MethodPost, path, `{"action":"decrease","amount_usd":8.63,"reason":"r"}`), 200)
 	if got["quota_usd"] != 7.5 || got["remaining_usd"] != 5.5 {
 		t.Fatalf("after +2.5: %v", got)
 	}
@@ -199,10 +202,10 @@ func TestQuotaAdjust(t *testing.T) {
 		}
 	}
 
-	// History: initial + 4 adjustments; the amounts add up to the quota.
+	// History: initial + 6 adjustments; the amounts add up to the quota.
 	hist := h.must(h.call(http.MethodGet, "/api/v1/tokens/"+id+"/quota-history", ""), 200)
 	recs := list(hist)
-	if num(hist["total"]) != 5 || len(recs) != 5 || hist["granted_total_usd"] != 5.0 {
+	if num(hist["total"]) != 7 || len(recs) != 7 || hist["granted_total_usd"] != 5.0 {
 		t.Fatalf("history %v", hist)
 	}
 	last := recs[len(recs)-1]
@@ -213,6 +216,23 @@ func TestQuotaAdjust(t *testing.T) {
 	if inc["action"] != "increase" || inc["reason"] != "monthly top-up" || inc["before_usd"] != 5.0 || inc["after_usd"] != 7.5 ||
 		inc["used_usd"] != 2.0 {
 		t.Fatalf("increase record %v", inc)
+	}
+	// "Down to what is used" is exact even when used has more than 4 decimals.
+	f := h.must(h.call(http.MethodPost, "/api/v1/tokens", `{"name":"fine","quota_usd":1}`), 201)
+	fid := itoa(num(f["id"]))
+	if _, err := h.db.W.Exec(`UPDATE tokens SET used_ticks = 1006000 WHERE id = ?`, num(f["id"])); err != nil {
+		t.Fatal(err)
+	}
+	h.s.Quota.Invalidate(int64(num(f["id"])))
+	got = h.must(h.call(http.MethodPost, "/api/v1/tokens/"+fid+"/quota", `{"action":"decrease","to_used":true,"reason":"close it"}`), 200)
+	if got["exhausted"] != true || got["quota_usd"] != got["used_usd"] {
+		t.Fatalf("to_used: %v", got)
+	}
+	if r := h.call(http.MethodPost, "/api/v1/tokens/"+fid+"/quota", `{"action":"decrease","to_used":true,"reason":"again"}`); r.status != 400 {
+		t.Fatalf("to_used twice: %d %s", r.status, r.body)
+	}
+	if r := h.call(http.MethodPost, "/api/v1/tokens/"+fid+"/quota", `{"action":"increase","to_used":true,"reason":"x"}`); r.status != 400 {
+		t.Fatalf("to_used on increase: %d", r.status)
 	}
 	// A limited quota of 0 blocks (it is not "unlimited").
 	z := h.must(h.call(http.MethodPost, "/api/v1/tokens", `{"name":"zero","quota_usd":0}`), 201)

@@ -230,14 +230,14 @@ func TestClientErrorsDoNotTripBreaker(t *testing.T) {
 }
 
 func TestVerifyBeforeDisable(t *testing.T) {
-	p, _ := newPool(t, &store.Key{Key: "a"}, &store.Key{Key: "b"})
+	p, db := newPool(t, &store.Key{Key: "a"}, &store.Key{Key: "b"})
 	calls := make(chan int64, 4)
 	p.Verify = func(_ context.Context, k *store.Key) (bool, string) {
 		calls <- k.ID
 		return k.ID == 1, "verified: invalid"
 	}
 	body := `{"error":"Incorrect API key provided"}`
-	p.Report(1, Outcome{Status: 400, Body: body})
+	p.Report(1, Outcome{Status: 400, Body: body, RequestID: "req-verify"})
 	p.Report(2, Outcome{Status: 400, Body: body})
 	<-calls
 	<-calls
@@ -247,5 +247,17 @@ func TestVerifyBeforeDisable(t *testing.T) {
 	}
 	if !p.State(1).AutoDisabled || p.State(2).AutoDisabled {
 		t.Fatalf("key1 %+v key2 %+v", p.State(1), p.State(2))
+	}
+	// The verified disable still names the request that raised the suspicion.
+	var evs []*store.Event
+	for time.Now().Before(deadline) {
+		evs, _ = db.ListEvents(context.Background(), store.EventFilter{Action: "key.auto_disable", Limit: 5})
+		if len(evs) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(evs) != 1 || evs[0].RequestID != "req-verify" || evs[0].TargetID != "1" {
+		t.Fatalf("auto-disable events %+v", evs)
 	}
 }

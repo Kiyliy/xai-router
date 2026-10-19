@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -197,6 +198,7 @@ func (s *Server) adjustQuota(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Action    string   `json:"action"`
 		AmountUSD *float64 `json:"amount_usd"`
+		ToUsed    bool     `json:"to_used"` // decrease: down to exactly what has been used
 		Reason    string   `json:"reason"`
 	}
 	if !decode(w, r, &in) {
@@ -210,17 +212,23 @@ func (s *Server) adjustQuota(w http.ResponseWriter, r *http.Request) {
 	case utf8.RuneCountInString(in.Reason) > 200:
 		writeErr(w, http.StatusBadRequest, "invalid_quota", "the reason must be at most 200 characters")
 		return
-	case in.Action != store.QuotaSetUnlimited && in.AmountUSD == nil:
+	case in.ToUsed && (in.Action != store.QuotaDecrease || in.AmountUSD != nil):
+		writeErr(w, http.StatusBadRequest, "invalid_quota", "to_used is only for decrease, without amount_usd")
+		return
+	case in.Action != store.QuotaSetUnlimited && in.AmountUSD == nil && !in.ToUsed:
 		writeErr(w, http.StatusBadRequest, "invalid_quota", "amount_usd is required for "+in.Action)
 		return
 	}
 	var amount int64
 	if in.AmountUSD != nil {
-		if v := *in.AmountUSD * 1e4; v != float64(int64(v)) {
+		if v := *in.AmountUSD * 1e4; math.Abs(v-math.Round(v)) > 1e-6 { // 8.63*1e4 is not exactly an integer
 			writeErr(w, http.StatusBadRequest, "invalid_quota", "amount_usd has at most 4 decimal places")
 			return
 		}
 		amount = billing.USDToTicks(*in.AmountUSD)
+	}
+	if in.ToUsed {
+		amount = store.QuotaToUsed
 	}
 	e := s.newAudit(r, "token.quota_"+in.Action)
 	e.Detail = map[string]any{"reason": in.Reason}
@@ -234,7 +242,7 @@ func (s *Server) adjustQuota(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.As(err, &qerr):
 		msg := qerr.Reason
-		if in.Action == store.QuotaDecrease && !qc.BeforeUnlimited && amount > 0 {
+		if in.Action == store.QuotaDecrease && !qc.BeforeUnlimited && amount > 0 && !in.ToUsed {
 			msg += fmt.Sprintf(" (at most $%.4f can be removed; $%.4f is used)",
 				billing.TicksToUSD(max(qc.BeforeTicks-qc.UsedTicks, 0)), billing.TicksToUSD(qc.UsedTicks))
 		}

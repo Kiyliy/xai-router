@@ -8,4 +8,6 @@ description = "Fake xAI keys used as test fixtures"
 regexes = [
   '''xai-abc123def456''',
   '''xai-second-key-0002''',
+  # A UI string key the generic-api-key entropy rule mistakes for a secret.
+  '''lg5\.reasoningUnknown''',
 ]

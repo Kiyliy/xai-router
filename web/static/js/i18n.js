@@ -185,7 +185,7 @@ const en = {
   'settings.f.disk_warn_percent': 'Disk warning threshold', 
   'settings.f.log_retention_days': 'Retention', 'settings.h.log_retention_days': 'Request logs older than this are deleted daily (0 = keep forever). Stats and operation records are not affected.',
   'settings.f.model_sync_interval_hours': 'Price sync interval', 'settings.h.model_sync_interval_hours': '0 = manual sync only.',
-  'settings.f.key_test_model': 'Upstream key check model', 'settings.h.key_test_model': 'Model used for full-check test requests. Empty = cheapest chat model.',
+  'settings.f.key_test_model': 'Upstream key check model', 'settings.h.key_test_model': 'Model used for the test request of a full check (empty = the cheapest chat model).',
   'settings.f.inject_stream_usage': 'Count usage for streams', 'settings.h.inject_stream_usage': 'Ask xAI to return usage in streaming responses so they can be billed.',
   'settings.f.anthropic_stream_fix': 'Anthropic SDK streaming compatibility', 'settings.h.anthropic_stream_fix': 'Fix xAI /v1/messages streams so the Anthropic SDK can read them.',
   'settings.f.trusted_proxies': 'Trusted proxies', 'settings.h.trusted_proxies': 'One IP range per line, e.g. 10.0.0.0/8. For requests from these addresses, the forwarded address is used as the client IP.',
@@ -445,7 +445,7 @@ const zh = {
   'keys.flagTeamBlocked': '团队被封禁', 'keys.flagTeamOk': '团队正常', 'keys.noApiKeyInfo': 'xAI 没有返回密钥信息', 'keys.probe': '检测请求',
   'keys.noProbe': '未做完整检测', 'keys.modelsAvailable': '可用模型', 'keys.testResult': '上游密钥检测结果',
   'keys.testAll': '全部快速检测', 'keys.bulkImport': '批量导入', 'keys.add': '添加上游密钥', 'keys.searchPh': '搜索名称或密钥后缀…',
-  'keys.allStatuses': '全部状态', 'keys.prioWeight': '优先级', 'keys.priorityHint': '数字越小越优先', 'keys.limits': '并发 / 每分钟请求上限',
+  'keys.allStatuses': '全部状态', 'keys.prioWeight': '优先级', 'keys.priorityHint': '数字越小越优先', 'keys.limits': '最大并发 / 每分钟请求上限',
   'keys.reqErr': '请求数 / 失败数', 'keys.lastTest': '最近检测', 'keys.disable': '禁用', 'keys.enable': '启用', 'keys.enabled': '已启用上游密钥', 'keys.disabled': '已禁用上游密钥',
   'keys.maxConcurrency': '最大并发', 'keys.rpmLimit': '每分钟请求上限', 'keys.inflight': '进行中', 'keys.inflightN': '{n} 个进行中',
   'keys.test': '完整检测', 'keys.testNoProbe': '快速检测', 'keys.reset': '恢复',
@@ -549,7 +549,7 @@ const zh = {
   'settings.f.disk_warn_percent': '磁盘告警阈值', 
   'settings.f.log_retention_days': '保留天数', 'settings.h.log_retention_days': '超过天数的请求日志每天自动删除（0 = 永久保留）。统计和操作记录不受影响。',
   'settings.f.model_sync_interval_hours': '价格自动同步间隔', 'settings.h.model_sync_interval_hours': '0 = 只手动同步。',
-  'settings.f.key_test_model': '上游密钥检测模型', 'settings.h.key_test_model': '完整检测时使用的模型，留空 = 最便宜的对话模型。',
+  'settings.f.key_test_model': '上游密钥检测模型', 'settings.h.key_test_model': '完整检测发送测试请求时使用的模型（留空 = 最便宜的对话模型）',
   'settings.f.inject_stream_usage': '流式请求统计用量', 'settings.h.inject_stream_usage': '让 xAI 在流式响应里返回用量，以便计费。',
   'settings.f.anthropic_stream_fix': '兼容 Anthropic SDK 流式调用', 'settings.h.anthropic_stream_fix': '修复 xAI 的 /v1/messages 流式响应与 Anthropic SDK 不兼容的问题。',
   'settings.f.trusted_proxies': '受信任代理', 'settings.h.trusted_proxies': '每行一个 IP 段，例如 10.0.0.0/8。来自这些地址的请求，用转发头里的地址作为客户端 IP。',
@@ -722,13 +722,6 @@ const zh = {
   'docs.adminAuth': '认证',
   'docs.adminAuthDesc': '把管理 API 令牌（xra-…）作为 Bearer 令牌发送。在“管理访问”页创建和吊销。',
   'docs.goAccess': '去管理访问 →',
-};
-
-// Page-specific dictionaries are kept in their own modules and merged here;
-// keys defined in this file win.
-const DICTS = {
-  en: { ...lists.en, ...en, ...logsI18n.en, ...miscI18n.en },
-  zh: { ...lists.zh, ...zh, ...logsI18n.zh, ...miscI18n.zh },
   'unit.s': '秒',
   'unit.h': '小时',
   'unit.d': '天',
@@ -737,6 +730,13 @@ const DICTS = {
   'models.thOutput': '输出（每百万）',
   'models.longCtxHint': '提示超过阈值时，整个请求按长上下文价格计费。',
   'data.commitParen': '（{c}）',
+};
+
+// Page-specific dictionaries are kept in their own modules and merged here;
+// keys defined in this file win.
+const DICTS = {
+  en: { ...lists.en, ...en, ...logsI18n.en, ...miscI18n.en },
+  zh: { ...lists.zh, ...zh, ...logsI18n.zh, ...miscI18n.zh },
 };
 
 function detect() {
