@@ -238,3 +238,30 @@ button.kd-test:hover { background: var(--active); }
   .td-quota { gap: 20px; }
   .q-head { flex-direction: column; align-items: flex-start; }
 }
+
+/* ---------- bulk import (123-4639) ---------- */
+.kl-imp-modal .modal-subtitle { color: var(--text-2); margin-top: 4px; }
+.kl-imp { gap: 14px; }
+.kl-imp-ta { width: 100%; min-height: 128px; font-size: 12.5px; line-height: 1.6; resize: vertical; }
+.kl-imp-count { margin-top: 6px; font-size: 12px; color: var(--text-3); }
+.kl-imp-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.kl-imp-more summary { cursor: pointer; font-size: 12.5px; color: var(--text-2); width: max-content; }
+.kl-imp-more[open] summary { margin-bottom: 12px; }
+.kl-imp-res { padding: 14px 16px; border-radius: var(--radius-sm); background: var(--surface-2); display: flex; flex-direction: column; gap: 12px; }
+.kl-imp-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; }
+.kl-imp-title { display: inline-flex; align-items: center; gap: 8px; color: var(--text); }
+.kl-imp-title .icon { color: var(--text-3); }
+.kl-imp-sum { font-size: 12.5px; color: var(--text-2); }
+.kl-imp-bar { display: flex; height: 4px; border-radius: 2px; overflow: hidden; background: var(--surface-3); }
+.kl-imp-bar .ok { background: var(--success-solid); } .kl-imp-bar .bad { background: var(--danger-solid); }
+.kl-imp-bar .none { background: var(--accent-muted); } .kl-imp-bar .skip { background: var(--text-3); }
+.kl-imp-list { display: flex; flex-direction: column; gap: 8px; max-height: 240px; overflow: auto; }
+.kl-imp-line { display: grid; grid-template-columns: 16px 110px 120px minmax(0, 1fr); align-items: center; gap: 8px; font-size: 12.5px; }
+.kl-imp-line .icon, .kl-imp-line .dash { color: var(--text-3); }
+.kl-imp-line .n { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kl-imp-line .k { font-size: 11.5px; color: var(--text-3); }
+.kl-imp-line .t { color: var(--text-2); }
+.kl-imp-line.is-ok .t { color: var(--success); }
+.kl-imp-line.is-bad .t, .kl-imp-line.is-bad .icon { color: var(--danger); }
+.kl-imp-line.is-warn .t, .kl-imp-line.is-warn .icon { color: var(--warning); }
+@media (max-width: 640px) { .kl-imp-row { grid-template-columns: 1fr 1fr; } .kl-imp-row .field:first-child { grid-column: 1 / -1; } .kl-imp-line { grid-template-columns: 16px minmax(0, 1fr); } .kl-imp-line .k, .kl-imp-line .n { display: none; } }

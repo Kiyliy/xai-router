@@ -169,6 +169,7 @@ export function render(el, ctx) {
       h('th', { class: 'col-test' }, t('keys.lastTest')), h('th', { class: 'col-actions' }, h('span', { class: 'sr-only' }, t('common.actions'))))),
     tbody);
   let use24 = new Map();
+  let poolAll = [];
   const pager = pagerEl({
     sizes: PAGE_SIZES,
     onChange: (p, ps) => {
@@ -349,6 +350,7 @@ export function render(el, ctx) {
       ]);
       if (signal.aborted) return;
       if (b24) use24 = new Map((b24.data || []).map((r) => [Number(r.id), r]));
+      poolAll = all ? all.data || [] : res.total <= (res.data || []).length ? res.data || [] : poolAll;
       paintSummary(all ? all.data || [] : res.total <= (res.data || []).length ? res.data || [] : null, all ? all.total : res.total);
       let rows = res.data || [];
       if (silent && rows.length === st.rows.length) {
@@ -563,29 +565,69 @@ export function render(el, ctx) {
     }
   }
 
+  // ---- bulk import (frame 123-4639) ----
   function openImport() {
-    const ta = h('textarea', { class: 'input mono', rows: 9, placeholder: 'xai-xxxxxxxxxxxxxxxx\nbackup,xai-yyyyyyyyyyyyyyyy', spellcheck: 'false' });
-    const lineCount = h('span', { class: 'field-hint' }, t('keys.importLines', { n: 0 }));
+    const ta = h('textarea', { class: 'input mono kl-imp-ta', rows: 7, placeholder: 'team-b-01,xai-xxxxxxxxxxxxxxxx\nxai-yyyyyyyyyyyyyyyy', spellcheck: 'false' });
+    const lineCount = h('div', { class: 'kl-imp-count' }, t('keys.importLines', { n: 0 }));
     ta.addEventListener('input', () => { lineCount.textContent = t('keys.importLines', { n: ta.value.split('\n').filter((l) => l.trim()).length }); });
     const baseUrl = input({ placeholder: 'https://api.x.ai', class: 'input mono' });
-    const priority = input({ type: 'number', value: 0, step: 1 });
-    const weight = input({ type: 'number', value: 1, min: 1, step: 1 });
-    const prefix = input({ value: 'key', placeholder: 'key' });
-    const testBox = checkbox({ checked: true, label: t('keys.importTest') });
+    const priority = input({ type: 'number', value: 0, step: 1, class: 'input mono' });
+    const weight = input({ type: 'number', value: 1, min: 1, step: 1, class: 'input mono' });
+    const prefix = input({ value: '', placeholder: 'key' });
+    const testBox = checkbox({ checked: true, label: t('kl.importTest') });
     const probeBox = checkbox({ checked: false, label: t('kt.fullCheckOpt'), hint: t('kt.fullCheckOptHint') });
-    const impErr = h('div', { class: 'callout callout-danger field-full', role: 'alert', hidden: true }, icon('xCircle', 16), h('span', { class: 'break' }));
+    const impErr = h('div', { class: 'callout-line is-danger', role: 'alert', hidden: true }, icon('xCircle', 16), h('span', { class: 'break' }));
     baseUrl.addEventListener('input', () => { baseUrl.classList.remove('invalid'); impErr.hidden = true; });
-    const form = h('div', { class: 'form-grid' },
+    const result = h('div', { class: 'kl-imp-res', hidden: true, 'aria-live': 'polite' });
+    const more = h('details', { class: 'kl-imp-more' }, h('summary', null, t('kl.moreOptions')),
+      h('div', { class: 'form-grid' }, field(t('keys.baseUrl'), baseUrl, { hint: t('keys.baseUrlHint'), full: true }), h('div', { class: 'field field-full' }, probeBox)));
+    const form = h('div', { class: 'stack kl-imp' },
       impErr,
-      field(t('keys.importKeys'), h('div', null, ta, lineCount), { full: true, hint: t('keys.importHint') }),
-      field(t('keys.baseUrl'), baseUrl, { hint: t('keys.baseUrlHint') }),
-      field(t('keys.namePrefix'), prefix),
-      field(t('keys.priority'), priority),
-      field(t('keys.weight'), weight),
-      h('div', { class: 'field field-full checks' }, testBox, probeBox));
+      h('div', null, ta, lineCount),
+      h('div', { class: 'kl-imp-row' }, field(t('keys.namePrefix'), prefix), field(t('keys.priority'), priority), field(t('keys.weight'), weight)),
+      testBox, more, result);
     const go = h('button', { class: 'btn btn-primary' }, icon('upload', 15), h('span', null, t('keys.import')));
     const cancel = h('button', { class: 'btn', onclick: () => m.close() }, t('common.cancel'));
-    const m = openModal({ title: t('keys.bulkImport'), subtitle: t('keys.importSub'), size: 'lg', body: form, footer: [cancel, go] });
+    const m = openModal({ title: t('kl.importTitle'), subtitle: t('keys.importHint'), size: 'md', body: form, footer: [cancel, go] });
+    m.el.classList.add('kl-imp-modal');
+    setTimeout(() => ta.focus(), 40);
+    const codeOf = (msg) => (String(msg || '').match(/\b([45]\d\d)\b/) || [])[1];
+    const nameOfMask = (mask) => { const k = poolAll.find((x) => x.key_masked === mask); return k ? k.name : ''; };
+    function showResult({ created, skipped, tests }) {
+      const byId = new Map(tests.map((r) => [r.key_id, r]));
+      const rows = [];
+      let ok = 0, bad = 0;
+      for (const c of created) {
+        const r = byId.get(c.id);
+        let v = 'none', text = t('kl.impCreated');
+        if (r && r.ok) { ok++; v = 'ok'; text = r.latency_ms != null ? t('kl.impValidMs', { ms: fmtMs(r.latency_ms) }) : t('kl.impValid'); }
+        else if (r) {
+          bad++; v = r.status === 'rate_limited' ? 'warn' : 'bad';
+          const name = t(`test.${r.status}`) || r.status;
+          const s = codeOf(r.message) ? t('kl.withCode', { s: name, c: codeOf(r.message) }) : name;
+          text = c.auto_disabled ? t('kl.impBadDisabled', { s }) : t('kl.impBad', { s });
+        }
+        rows.push(h('div', { class: `kl-imp-line is-${v}`, title: r ? testMessage(r) : null },
+          icon(v === 'ok' ? 'checkCircle' : v === 'none' ? 'check' : v === 'warn' ? 'alert' : 'xCircle', 14),
+          h('span', { class: 'n' }, c.name), h('span', { class: 'mono k' }, c.key_masked || ''), h('span', { class: 't' }, text)));
+      }
+      for (const s of skipped) {
+        const nm = /already in the pool/i.test(s.reason) ? nameOfMask(s.key_masked) : '';
+        const text = /already in the pool/i.test(s.reason) ? (nm ? t('kl.impExists', { n: nm }) : t('kl.impExistsBare'))
+          : /duplicate in input/i.test(s.reason) ? t('kl.impDup') : t('kl.impFailed');
+        rows.push(h('div', { class: 'kl-imp-line is-skip', title: s.reason },
+          h('span', { class: 'dash' }, '—'), h('span', { class: 'n' }, t('kl.lineN', { n: s.line })), h('span', { class: 'mono k' }, s.key_masked || ''), h('span', { class: 't' }, text)));
+      }
+      const total = created.length + skipped.length || 1;
+      const seg = (n, cls) => (n ? h('span', { class: cls, style: { width: `${(n / total) * 100}%` } }) : null);
+      result.replaceChildren(
+        h('div', { class: 'kl-imp-head' },
+          h('span', { class: 'kl-imp-title' }, icon('check', 14), tests.length ? t('kl.impTested', { n: tests.length }) : t('kl.impDone', { n: created.length })),
+          h('span', { class: 'kl-imp-sum' }, tests.length ? t('kl.impSum', { ok, bad, s: skipped.length }) : t('kl.impSum2', { c: created.length, s: skipped.length }))),
+        h('div', { class: 'kl-imp-bar' }, seg(ok, 'ok'), seg(bad, 'bad'), seg(created.length - ok - bad, 'none'), seg(skipped.length, 'skip')),
+        h('div', { class: 'kl-imp-list' }, rows));
+      result.hidden = false;
+    }
     go.addEventListener('click', () => busy(go, async () => {
       if (!ta.value.trim()) { ta.focus(); return; }
       try {
@@ -593,25 +635,14 @@ export function render(el, ctx) {
           keys: ta.value, base_url: baseUrl.value.trim() || undefined, priority: Number(priority.value) || 0, weight: Number(weight.value) || 1,
           name_prefix: prefix.value.trim() || undefined, test: testBox.input.checked, probe: probeBox.input.checked,
         });
-        const created = res.created || [], skipped = res.skipped || [], tests = res.tests || [];
-        const okN = tests.filter((x) => x.ok).length;
-        m.setTitle(t('keys.importResult'));
-        m.setBody(h('div', { class: 'import-result' },
-          h('div', { class: 'stat-row' },
-            h('div', { class: 'stat stat-success' }, h('div', { class: 'stat-v' }, String(created.length)), h('div', { class: 'stat-l' }, t('keys.created'))),
-            h('div', { class: 'stat stat-warning' }, h('div', { class: 'stat-v' }, String(skipped.length)), h('div', { class: 'stat-l' }, t('keys.skipped'))),
-            tests.length ? h('div', { class: 'stat' }, h('div', { class: 'stat-v' }, `${okN}/${tests.length}`), h('div', { class: 'stat-l' }, t('keys.testsPassed'))) : null),
-          created.length ? [h('h4', { class: 'section-title' }, t('keys.created')), h('div', { class: 'chips' }, created.map((c) => h('span', { class: 'chip' }, h('span', { class: 'strong' }, c.name), ' ', h('span', { class: 'mono muted' }, c.key_masked))))] : null,
-          skipped.length ? [h('h4', { class: 'section-title' }, t('keys.skipped')), tableWrap(h('table', { class: 'table table-compact' },
-            h('thead', null, h('tr', null, h('th', { class: 'num' }, t('keys.line')), h('th', null, t('common.key')), h('th', null, t('keys.reason')))),
-            h('tbody', null, skipped.map((s) => h('tr', null, h('td', { class: 'num mono' }, String(s.line)), h('td', { class: 'mono' }, s.key_masked || '—'), h('td', { class: 'muted' }, s.reason))))), { maxHeight: '220px' })] : null,
-          tests.length ? [h('h4', { class: 'section-title' }, t('keys.testResults')), testResultsTable(tests, showTestResult)] : null));
-        m.setFooter(h('button', { class: 'btn btn-primary', onclick: () => m.close() }, t('common.done')));
+        showResult({ created: res.created || [], skipped: res.skipped || [], tests: res.tests || [] });
+        m.setFooter(h('button', { class: 'btn', onclick: () => m.close() }, t('common.close')),
+          h('button', { class: 'btn btn-primary', onclick: () => { m.close(); clearFilters(); } }, t('kl.viewInList')));
         load();
       } catch (e) {
         if (e.status === 400) {
           impErr.lastChild.textContent = errorMessage(e); impErr.hidden = false;
-          if (/base_url|upstream host|allowed hosts|private|insecure/i.test(e.message || '')) { baseUrl.classList.add('invalid'); baseUrl.focus(); }
+          if (/base_url|upstream host|allowed hosts|private|insecure/i.test(e.message || '')) { more.open = true; baseUrl.classList.add('invalid'); baseUrl.focus(); }
         } else toastError(e);
       }
     }));
