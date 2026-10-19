@@ -71,6 +71,14 @@ export const en = {
 
   // request logs
   'll.noKeys': 'No upstream key is available, so every request fails (503).', 'll.noKeysLink': 'View upstream keys',
+  // v0.5 client token list / drawer / quota
+  'keys.limits': 'Max concurrency / requests per minute',
+  'tl.searchPh': 'Search name or prefix…', 'tl.spentTotal': ' total spend', 'tl.modelsMore': ' and {n} models in all', 'tl.expiredMark': ' (expired)',
+  'tl.neverUsed': 'Never', 'tl.selectedN': '{n} client tokens selected',
+  'td.left': 'Remaining', 'td.basic': 'Details',
+  'q.toUsedBtn': 'Reduce to the amount used', 'q.willExhaust2': 'Nothing remains, so the client token is used up at once.', 'q.previewOver': 'The quota cannot go below what is used',
+  'q.h.change': 'Quota change', 'q.h.actorReason': 'By and reason', 'q.curQuota': 'Current quota', 'q.viewInLogs2': 'View in logs →',
+  'q.actorToken': '{n} (admin API token)', 'q.quoted': '“{r}”',
 };
 
 export const zh = {
@@ -134,4 +142,11 @@ export const zh = {
   'td.spent': '累计费用', 
 
   'll.noKeys': '没有可用的上游密钥，所有请求都会失败（503）。', 'll.noKeysLink': '查看上游密钥',
+  'keys.limits': '最大并发 / 每分钟请求上限',
+  'tl.searchPh': '搜索名称或前缀…', 'tl.spentTotal': ' 累计花费', 'tl.modelsMore': ' 等 {n} 个模型', 'tl.expiredMark': '（已过期）',
+  'tl.neverUsed': '从未使用', 'tl.selectedN': '已选 {n} 个令牌',
+  'td.left': '剩余', 'td.basic': '基本信息',
+  'q.toUsedBtn': '减到与已用相等', 'q.willExhaust2': '剩余为 $0，令牌会立即变为额度用尽。', 'q.previewOver': '额度不能低于已用',
+  'q.h.change': '额度变化', 'q.h.actorReason': '操作者和原因', 'q.curQuota': '当前额度', 'q.viewInLogs2': '在日志中查看 →',
+  'q.actorToken': '{n}（管理 API 令牌）', 'q.quoted': '“{r}”',
 };
