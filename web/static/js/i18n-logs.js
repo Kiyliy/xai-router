@@ -95,7 +95,7 @@ export const en = {
   'ev.s.disk': 'The data disk is {p}% full ({f} free). When it is full no more logs can be written; delete logs or add space.',
   'ev.s.retStart': 'Started deleting request logs older than {n} days.',
   'ev.s.retEnd': 'Deleted {n} request logs older than {d} days in {ms}.', 'ev.s.retFail': 'Scheduled log clean-up failed; existing logs are unchanged. See the details for the error.',
-  'ev.s.purge': 'Deleted {n} request logs from before {before}, freeing {f}.', 'ev.s.purgeFail': 'Deleting request logs failed; nothing was deleted after the error. See the details.',
+  'ev.s.purge': 'Deleted {n} request logs from before {before}.', 'ev.s.purgeFail': 'Deleting request logs failed; nothing was deleted after the error. See the details.',
   'ev.s.compact': 'Database compacted, {f} freed.', 'ev.s.compactFail': 'Database compaction failed; the data is unaffected. See the details for the error.',
   'ev.s.start': 'xai-router {v} started.', 'ev.s.migrate': 'Database upgraded from schema {a} to {b}.',
   'ev.s.login': 'The administrator signed in.', 'ev.s.loginFailed': 'Sign-in failed: {why}.', 'ev.s.loginFailedBare': 'Sign-in failed.', 'ev.s.logout': 'The administrator signed out.',
@@ -124,7 +124,7 @@ export const en = {
   'rr.tokenExpired': 'The client token has expired', 'rr.modelNotFound': 'This model does not exist',
   'rr.clientGone': 'The client disconnected before the response finished (billed for actual usage)',
   'rr.keysBusy': 'Every upstream key is at its concurrency or rate limit', 'rr.idleTimeout': 'The stream went idle for too long',
-  'rr.timeout': 'The request timed out', 'rr.upstreamAuth': 'Upstream key invalid or blocked', 'rr.upstreamRate': 'Rate limited by xAI',
+  'rr.timeout': 'The request timed out', 'rr.upstreamAuth': 'Upstream key invalid or blocked', 'rr.upstreamCredit': 'The upstream key has no credit left', 'rr.upstreamRate': 'Rate limited by xAI',
   'rr.upstream5xx': 'xAI server error', 'rr.network': 'Could not reach xAI', 'rr.badRequest': 'xAI rejected the request parameters', 'rr.notFound': 'xAI did not find this endpoint or resource',
 };
 
@@ -217,7 +217,7 @@ export const zh = {
   'ev.s.disk': '数据磁盘已用 {p}%，剩余 {f}。写满后将无法记录日志，请清理日志或扩容。',
   'ev.s.retStart': '开始清理 {n} 天前的请求日志。',
   'ev.s.retEnd': '已清理 {d} 天前的请求日志 {n} 条，用时 {ms}。', 'ev.s.retFail': '定时清理请求日志失败，现有日志不受影响。错误原文见详情。',
-  'ev.s.purge': '已删除 {before} 之前的请求日志 {n} 条，释放 {f}。', 'ev.s.purgeFail': '清理请求日志失败，出错后没有继续删除。错误原文见详情。',
+  'ev.s.purge': '已删除 {before} 之前的请求日志 {n} 条。', 'ev.s.purgeFail': '清理请求日志失败，出错后没有继续删除。错误原文见详情。',
   'ev.s.compact': '数据库压缩完成，释放 {f}。', 'ev.s.compactFail': '数据库压缩失败，数据不受影响。错误原文见详情。',
   'ev.s.start': 'xai-router {v} 已启动。', 'ev.s.migrate': '数据库结构已从版本 {a} 升级到 {b}。',
   'ev.s.login': '管理员登录成功。', 'ev.s.loginFailed': '登录失败：{why}。', 'ev.s.loginFailedBare': '登录失败。', 'ev.s.logout': '管理员已登出。',
@@ -245,6 +245,6 @@ export const zh = {
   'rr.tokenExpired': '客户端令牌已过期', 'rr.modelNotFound': '模型不存在',
   'rr.clientGone': '客户端在响应完成前断开（已按实际用量计费）',
   'rr.keysBusy': '所有上游密钥都达到了并发或速率上限', 'rr.idleTimeout': '流空闲超时',
-  'rr.timeout': '请求超时', 'rr.upstreamAuth': '上游密钥无效或被封禁', 'rr.upstreamRate': '被 xAI 限流',
+  'rr.timeout': '请求超时', 'rr.upstreamAuth': '上游密钥无效或被封禁', 'rr.upstreamCredit': '上游密钥余额不足', 'rr.upstreamRate': '被 xAI 限流',
   'rr.upstream5xx': 'xAI 服务器错误', 'rr.network': '无法连接 xAI', 'rr.badRequest': 'xAI 认为请求参数有误', 'rr.notFound': 'xAI 找不到这个接口或资源',
 };

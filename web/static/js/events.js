@@ -145,7 +145,7 @@ export function eventSentence(e) {
     case 'logs.retention_start': return t('ev.s.retStart', { n: d.retention_days ?? '—' });
     case 'logs.retention_end': return d.error ? t('ev.s.retFail') : t('ev.s.retEnd', { n: fmtInt(d.deleted ?? 0), d: d.retention_days ?? '—', ms: fmtMs(d.duration_ms || 0) });
     case 'logs.purge': {
-      const before = d.request && d.request.before ? fmtDateTime(d.request.before, { seconds: false }) : '—';
+      const b = (res && res.before) || (d.request && d.request.before); const before = b ? fmtDateTime(b, { seconds: false }) : '—';
       return d.error ? t('ev.s.purgeFail') : t('ev.s.purge', { before, n: fmtInt(res.deleted ?? 0), f: fmtBytes(res.freed_bytes || 0) });
     }
     case 'system.compact': return d.error ? t('ev.s.compactFail') : t('ev.s.compact', { f: fmtBytes(res.freed_bytes || 0) });
@@ -193,6 +193,10 @@ export function requestReason(r) {
   if (/at their concurrency or rate limit/i.test(raw)) return k('keysBusy');
   if (/stream idle timeout/i.test(raw)) return k('idleTimeout');
   if (/timeout|timed out|deadline exceeded/i.test(raw)) return k('timeout');
+  // The error text decides before the status code: xAI answers an invalid
+  // key with 400 (the default disable keywords, settings.go).
+  if (/incorrect api key|invalid api key|api key is (blocked|disabled)|team is blocked|account suspended|has been blocked/i.test(raw)) return k('upstreamAuth');
+  if (/(does not|doesn't) have any credits|no credits|used all available credits|spending limit/i.test(raw)) return k('upstreamCredit');
   if (s === 401 || s === 403) return k('upstreamAuth');
   if (s === 429) return k('upstreamRate');
   if (s >= 500) return k('upstream5xx');

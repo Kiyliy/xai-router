@@ -138,6 +138,14 @@ func TestLogsAPI(t *testing.T) {
 	if num(del["deleted"]) != 1 {
 		t.Fatalf("delete: %v", del)
 	}
+	// The synchronous purge is recorded with its cutoff and count.
+	pe := list(h.must(h.call(http.MethodGet, "/api/v1/logs?type=audit&action=logs.purge", ""), 200))
+	if len(pe) != 1 {
+		t.Fatalf("purge events %v", pe)
+	}
+	if res := pe[0]["detail"].(map[string]any)["result"].(map[string]any); num(res["deleted"]) != 1 || res["before"] == nil {
+		t.Fatalf("purge record %v", pe[0])
+	}
 	if ls = h.must(h.call(http.MethodGet, "/api/v1/logs", ""), 200); num(ls["total"]) != 2 {
 		t.Fatalf("after delete: %v", ls["total"])
 	}

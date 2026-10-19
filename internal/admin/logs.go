@@ -304,8 +304,14 @@ func (s *Server) deleteLogs(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid_time", "before is required (RFC 3339 or unix seconds)")
 		return
 	}
+	// Both paths record one audit event when the deletion ends, with the
+	// cutoff and the number of request logs deleted. (A purge does not
+	// return space to the disk; that is the compact job.)
+	finish := s.jobAudit(r, "logs.purge", "logs", map[string]any{"before": msTime(before)})
+	result := func(n int64) map[string]any { return map[string]any{"deleted": n, "before": msTime(before)} }
 	if r.URL.Query().Get("wait") == "true" {
 		n, err := s.DB.DeleteLogsBefore(r.Context(), before)
+		finish(result(n), err)
 		if err != nil {
 			s.internalErr(w, err)
 			return
@@ -316,7 +322,6 @@ func (s *Server) deleteLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	// Purging millions of rows takes minutes: run it in the background in
 	// small chunks (requests keep flowing) and report progress as a job.
-	finish := s.jobAudit(r, "logs.purge", "logs", map[string]any{"before": msTime(before)})
 	j, _ := s.jobs.start("purge_logs", func(ctx context.Context, j *Job) (any, error) {
 		total := s.DB.CountLogsBefore(ctx, before)
 		s.jobs.update(j, func(j *Job) { j.Phase, j.Total = "delete", total })
@@ -324,7 +329,7 @@ func (s *Server) deleteLogs(w http.ResponseWriter, r *http.Request) {
 			s.jobs.update(j, func(j *Job) { j.Progress = done })
 		})
 		if err != nil {
-			finish(map[string]any{"deleted": n}, err)
+			finish(result(n), err)
 			return map[string]any{"deleted": n}, err
 		}
 		// The freed pages are not returned to the disk here: new logs reuse
@@ -332,7 +337,7 @@ func (s *Server) deleteLogs(w http.ResponseWriter, r *http.Request) {
 		// by one (measured ~25 pages/s, a day for 13 GB). Returning space to
 		// the OS is the explicit, paced "compact" job.
 		_ = s.DB.Vacuum(ctx) // WAL checkpoint
-		finish(map[string]any{"deleted": n}, nil)
+		finish(result(n), nil)
 		return map[string]any{"deleted": n}, nil
 	})
 	writeJSON(w, http.StatusAccepted, j)
