@@ -318,7 +318,8 @@ const costOf = (n, ticks) => (ticks == null ? null : n * ticks);
 function costSection(d) {
   const snap = d.price_snapshot && typeof d.price_snapshot === 'object' ? d.price_snapshot : null;
   const totalTicks = Math.round((d.cost_usd || 0) * 1e10);
-  const srcBadge = d.cost_source ? badge(t(`costsrc.${d.cost_source}`) || d.cost_source, d.cost_source === 'upstream' ? 'success' : d.cost_source === 'computed' ? 'info' : 'neutral') : null;
+  // Cost source as quiet secondary text, like "费用来源：xAI 返回" in the KPI band.
+  const srcBadge = d.cost_source ? h('span', { class: 'ld5-cost-src' }, t(`costsrc.${d.cost_source}`) || d.cost_source) : null;
   // Images and videos: count × unit price, no token table.
   if (d.images || d.video_seconds) {
     const rows = [];

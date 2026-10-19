@@ -180,6 +180,9 @@
 .lg-filter-pop .input { height: 30px; font-size: 13px; }
 .lg-filter-pop-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .lg5 .lg-grid .filter-reset { margin-left: 4px; }
+/* object cell: plain inline text so long names truncate by character */
+.lg5 .lg-target-gone { color: var(--text-3); font-size: 12px; }
+.lg5 .lg-target-hint { color: var(--text-3); font-size: 12px; }
 .lg5 .filters-hint { padding: 0; }
 
 .lg5 .table-region .table-wrap { border: 0; border-radius: 0; }
@@ -188,8 +191,8 @@
 .lg5 .table-ulog th:first-child, .lg5 .table-ulog td:first-child { padding-left: 32px; }
 .lg5 .table-ulog th:last-child, .lg5 .table-ulog td:last-child { padding-right: 32px; }
 .lg5 .table-ulog tr.row-active td { background: var(--active); }
-.lg5 .table-ulog .col-time { width: 112px; }
-.lg5 .table-ulog[data-mode="request"] .col-time { width: 100px; }
+.lg5 .table-ulog .col-time { width: 140px; } /* fits "10月19日 20:28" for rows older than today */
+.lg5 .table-ulog[data-mode="request"] .col-time { width: 140px; }
 .lg5 .lg-time { font-family: var(--font-mono); font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
 .lg5 .table-ulog .cell-sub { font-size: 12px; color: var(--text-3); margin-top: 2px; }
 .lg5 .table-ulog .col-type { width: 96px; }
@@ -224,7 +227,21 @@
 .lg5 .tk { display: inline-flex; align-items: center; gap: 4px; font-family: var(--font-mono); font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .lg5 .tk .tok-sw { width: 6px; height: 6px; }
 .lg5 .col-tk .cell-sub { text-align: right; }
-.lg5 .lg-pager { padding: 12px 32px 24px; }
+/* requests only: token columns pinned narrow, the request column takes the rest (colgroup in logs.js) */
+.lg5 .table-ulog col.cg-time { width: 140px; }
+.lg5 .table-ulog col.cg-status { width: 160px; }
+.lg5 .table-ulog col.cg-who { width: 184px; }
+.lg5 .table-ulog col.cg-tk { width: 68px; }
+.lg5 .table-ulog col.cg-cost { width: 84px; }
+.lg5 .table-ulog col.cg-lat { width: 112px; }
+/* request line: plain "POST /v1/…" text, method in the secondary color */
+.lg5 .table-ulog .req-line { gap: 6px; white-space: nowrap; }
+.lg5 .table-ulog .req-line .lg-method { flex-shrink: 0; font-size: 12px; color: var(--text-2); }
+.lg5 .table-ulog .req-line .path { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* the table scrolls with the page; the pager is a footer bar under it */
+.lg5 .table-region .table-wrap { max-height: none; }
+.lg5 .lg-pager { padding: 12px 32px; border-top: 1px solid var(--border); background: var(--bg); }
+.lg5 .lg-pager:empty, .lg5 .lg-pager:has(> [hidden]:only-child) { display: none; }
 .lg5 .lg-cursor { justify-content: flex-end; border: 0; padding: 0; }
 .lg5 .lg-cursor .page-controls { gap: 8px; }
 .lg-count { font-family: var(--font-sans); }
@@ -268,6 +285,9 @@
 .ld5-kpi .eyebrow { margin: 0; }
 .ld5-kpi.is-warn .big-num { color: var(--warning); }
 .ld5-kpi-sub { font-size: 12px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* unit as large as the number ("2.6 秒") */
+.ld5-kpi .big-num .unit { font-size: 1em; font-weight: inherit; margin-left: .3em; }
+.ld5-cost-src { margin-left: 6px; font-family: var(--font-sans); font-size: 12px; color: var(--text-3); white-space: nowrap; }
 .ld5-bar { display: flex; height: 3px; gap: 2px; }
 .ld5-bar-a { background: var(--text-3); border-radius: 1px; }
 .ld5-bar-b { background: var(--accent); border-radius: 1px; }

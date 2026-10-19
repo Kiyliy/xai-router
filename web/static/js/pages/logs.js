@@ -278,7 +278,11 @@ export function render(el, ctx) {
     table.dataset.mode = m;
     const th = (label, cls, title) => h('th', { class: cls || null, title: title || null }, label);
     let cells;
+    table.querySelector(':scope > colgroup')?.remove();
     if (m === 'request') {
+      // Fixed layout sizes columns from the first header row, where the token columns share one
+      // colspan cell; a colgroup pins them narrow so the request column gets the rest.
+      table.insertBefore(h('colgroup', null, ['time', 'req', 'status', 'who', 'tk', 'tk', 'tk', 'tk', 'cost', 'lat'].map((c) => h('col', { class: `cg-${c}` }))), thead);
       // Four token columns under one "Token 数" group header (pm-spec 10.8 #66).
       const span = (label, cls, title) => h('th', { class: cls || null, title: title || null, rowspan: 2 }, label);
       cols = 10;
@@ -325,16 +329,17 @@ export function render(el, ctx) {
 
   const countEl = h('span', { class: 'topbar-meta lg-count' });
   const liveDot = h('span', { class: 'live-dot', hidden: !st.auto, title: t('logs.autoRefresh') });
-  const exportBtn = button(t('logs.exportJson'), { icon: 'download', size: 'sm', variant: 'ghost', attrs: { title: t('logs.exportHint') }, onClick: () => {
+  const exportBtn = button(t('logs.exportJson'), { icon: 'download', attrs: { title: t('logs.exportHint') }, onClick: () => {
     if (!st.rows.length) { toast(t('logs.exportEmpty'), 'info'); return; }
     const d = new Date(); const p2 = (n) => String(n).padStart(2, '0');
     const name = `xai-router-logs-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}.json`;
     downloadText(name, JSON.stringify({ exported_at: d.toISOString(), filters: query(), total: st.total, total_kind: st.totalKind, data: st.rows }, null, 2));
     toast(t('logs.exported', { n: st.rows.length }), 'success', 2500);
   } });
-  const wrap = tableWrap(table, { maxHeight: 'calc(100vh - 240px)' });
+  // The table grows with the page (no inner scroll box) and the pager sits in its own footer bar below it.
+  const wrap = tableWrap(table);
   const region = h('div', { class: 'table-region' }, h('div', { class: 'loading-bar', 'aria-hidden': 'true' }), wrap);
-  const pagerSlot = h('div', { class: 'lg-pager' });
+  const pagerSlot = h('footer', { class: 'lg-pager' });
   void card;
   ctx.setActions(countEl, liveDot, autoSw, exportBtn);
   el.classList.add('lg5');
@@ -395,7 +400,7 @@ export function render(el, ctx) {
   }
   function reqLine(r) {
     return h('div', null,
-      h('div', { class: 'req-line' }, methodTag(r.method), h('span', { class: 'mono path', title: r.path }, r.path)),
+      h('div', { class: 'req-line mono', title: `${r.method || 'GET'} ${r.path}` }, h('span', { class: 'lg-method' }, r.method || 'GET'), h('span', { class: 'path' }, r.path)),
       h('div', { class: 'cell-sub model-line' }, r.model ? h('span', { class: 'mono model-name', title: r.model }, r.model) : null,
         r.stream ? h('span', { class: 'stream-tag', title: t('logs.streamYes') }, icon('stream', 12), t('lg.stream')) : null,
         r.websocket ? h('span', { class: 'stream-tag', title: 'WebSocket' }, icon('stream', 12), 'WebSocket') : null));
@@ -409,7 +414,17 @@ export function render(el, ctx) {
       const g = (e.action || '').split('.')[0];
       return h('span', null, hasT(`lg.ag.${g}`) ? t(`lg.ag.${g}`) : targetTypeLabel(e.target_type));
     }
-    const node =h('span', null, h('span', { class: 'muted small' }, `${targetTypeLabel(e.target_type)} `), e.target_type && !['settings', 'logs', 'database', 'disk'].includes(e.target_type) ? cred(name, hint) : null);
+    // The event's own name and hint come first (they survive deletion); the live list only fills a
+    // missing name and tells whether the object is gone. Plain inline text, so a long name truncates
+    // character by character instead of collapsing to a bare "…".
+    const live = liveObj(e.target_type, e.target_id);
+    const shown = e.target_name ? name : (live && live.name) || name;
+    const shownHint = hint || (live && live.hint) || '';
+    const gone = live === null;
+    const node = h('span', { class: 'lg-target', title: [`${targetTypeLabel(e.target_type)} ${shown}`, shownHint, gone ? t('common.deleted') : ''].filter(Boolean).join(' · ') },
+      h('span', { class: 'muted' }, `${targetTypeLabel(e.target_type)} `), h('span', { class: 'lg-target-name' }, shown),
+      gone ? h('span', { class: 'lg-target-gone' }, ` ${t('common.deleted')}`) : null,
+      shownHint ? h('span', { class: 'lg-target-hint mono' }, ` ${shownHint}`) : null);
     if ((e.target_type === 'key' || e.target_type === 'token') && e.target_id) {
       return h('a', { class: 'link cell-link', href: `#/${e.target_type === 'key' ? 'keys' : 'tokens'}?open=${e.target_id}`, onclick: stop, title: t(e.target_type === 'key' ? 'lg.openKey' : 'lg.openToken') }, node);
     }
@@ -522,7 +537,16 @@ export function render(el, ctx) {
   get('/api/v1/settings', null, { signal: ctx.signal }).then((x) => { injectUsage = x ? x.inject_stream_usage !== false : null; }).catch(() => {});
 
   // --- filter option data ---
-  let keyList = [], tokenList = [], modelList = [];
+  let keyList = [], tokenList = [], modelList = [], adminTokenList = [];
+  const listsLoaded = { key: false, token: false, admin_token: false };
+  /** Live object for an event target: {name, hint}; null when it no longer exists; undefined when unknown. */
+  function liveObj(tt, id) {
+    if (!id || !(tt in listsLoaded) || !listsLoaded[tt]) return undefined;
+    const list = tt === 'key' ? keyList : tt === 'token' ? tokenList : adminTokenList;
+    const x = list.find((o) => String(o.id) === String(id));
+    if (x) return { name: x.name || '', hint: tt === 'key' ? x.key_masked || '' : tt === 'token' ? (x.prefix ? `${x.prefix}…` : '') : x.prefix || '' };
+    return tt !== 'admin_token' && list.length >= 200 ? undefined : null; // a full page may not hold every object
+  }
   function fillTargetList() {
     const list = st.target_type === 'key' ? keyList.map((x) => [x.id, credText(x.name, x.key_masked)])
       : st.target_type === 'token' ? tokenList.map((x) => [x.id, credText(x.name, x.prefix ? `${x.prefix}…` : '')])
@@ -542,16 +566,19 @@ export function render(el, ctx) {
       if (cur && !items.some((x) => String(x.id) === String(cur))) opts.push(h('option', { value: cur, selected: true }, `#${cur}`));
       sel.replaceChildren(...opts);
     };
-    if (ks.status === 'fulfilled') { keyList = ks.value.data || []; fill(keySel, keyList, t('common.key'), st.key_id, (x) => x.key_masked || ''); }
-    if (ts.status === 'fulfilled') { tokenList = ts.value.data || []; fill(tokenSel, tokenList, t('common.token'), st.token_id, (x) => (x.prefix ? `${x.prefix}…` : '')); }
+    if (ks.status === 'fulfilled') { keyList = ks.value.data || []; listsLoaded.key = true; fill(keySel, keyList, t('common.key'), st.key_id, (x) => x.key_masked || ''); }
+    if (ts.status === 'fulfilled') { tokenList = ts.value.data || []; listsLoaded.token = true; fill(tokenSel, tokenList, t('common.token'), st.token_id, (x) => (x.prefix ? `${x.prefix}…` : '')); }
     if (ms.status === 'fulfilled') { modelList = (ms.value.data || []).map((m) => m.id).filter(Boolean); fillModels(); }
     if (as.status === 'fulfilled') {
       const ats = Array.isArray(as.value) ? as.value : (as.value && as.value.data) || [];
+      adminTokenList = ats; listsLoaded.admin_token = true;
       ats.forEach((a) => actorSel.appendChild(h('option', { value: `admin_token:${a.id}` }, `${t('ev.actor.adminToken')} · ${a.name}`)));
       actorSel.value = st.actor;
     }
     fillTargetList();
     targetBtn.textContent = targetLabel();
+    // Rows drawn before the lists arrived: redraw so object names and "deleted" marks appear.
+    if (st.loaded && st.rows && st.rows.some((r) => r.type && r.type !== 'request')) { tbody.replaceChildren(...(st.rows.length ? st.rows.map(row) : [])); markActive(); }
   }
 
   // --- detail drawer (requests and events share one drawer; ↑ / ↓ step through the rows) ---
