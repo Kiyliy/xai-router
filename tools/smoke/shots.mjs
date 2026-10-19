@@ -98,6 +98,8 @@ try {
       where = `${theme} ${name}`;
       await send('Page.navigate', { url: `${base}/?t=${Date.now()}${hash(ids)}` });
       await sleep(2200);
+      // Wait out loading spinners and skeletons (dialogs open after their data loads).
+      for (let i = 0; i < 20 && await evaluate(`!!document.querySelector('.spinner, .skeleton, .loading')`); i++) await sleep(300);
       const shot = await send('Page.captureScreenshot', { format: 'png' });
       writeFileSync(join(out, `${name}-${theme}.png`), Buffer.from(shot.data, 'base64'));
       console.log(`${name}-${theme}.png`);
