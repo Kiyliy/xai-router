@@ -307,7 +307,7 @@ func (a *App) checkDisk(ctx context.Context) {
 	case !a.diskLow && pct >= warn:
 		a.diskLow = true
 		a.Log.Warn("data volume almost full", "used_percent", pct, "free_bytes", du.Free)
-		_ = a.DB.AddEvent(ctx, &store.Event{Kind: store.EventSystem, Action: "disk.low", Actor: "system", ActorName: "system",
+		_ = a.DB.AddEvent(ctx, &store.Event{Kind: store.EventSystem, Level: store.LevelWarn, Action: "disk.low", Actor: "system", ActorName: "system",
 			TargetType: "disk", Detail: map[string]any{"used_percent": pct, "free_bytes": du.Free, "total_bytes": du.Total,
 				"warn_percent": warn}})
 	case a.diskLow && pct < warn-2:

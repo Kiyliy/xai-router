@@ -99,7 +99,7 @@ export function render(el, ctx) {
 
   const onboard = onboarding(ctx);
   // "Events needing attention" (pm-spec 9.6): warning / error operation and system records of the last 24 hours.
-  const ATTN_HASH = '#/logs?type=audit,system&problems=1';
+  const ATTN_HASH = '#/logs?type=system&problems=1';
   const attnBody = h('div', { class: 'mini-list attn-list' }, h('div', { class: 'mini-empty' }, h('span', { class: 'skeleton', style: { width: '60%' } })));
   const attnCard = card({
     title: t('ov.attnTitle'), body: attnBody, cls: 'card-attn',
@@ -107,7 +107,7 @@ export function render(el, ctx) {
   });
   async function loadAttention() {
     try {
-      const res = await get('/api/v1/logs', { type: 'audit,system', problems: 1, from: new Date(Date.now() - 86400e3).toISOString(), page_size: 5 }, { signal: ctx.signal });
+      const res = await get('/api/v1/logs', { type: 'system', problems: 1, from: new Date(Date.now() - 86400e3).toISOString(), page_size: 5 }, { signal: ctx.signal });
       const rows = (res.data || []).slice(0, 5);
       if (!rows.length) { attnBody.replaceChildren(h('div', { class: 'mini-empty attn-ok' }, icon('checkCircle', 16), h('span', null, t('ov.attnNone')))); return; }
       attnBody.replaceChildren(...rows.map((e) => {
