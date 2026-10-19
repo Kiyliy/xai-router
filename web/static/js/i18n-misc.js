@@ -68,6 +68,14 @@ export const en = {
   'models.tierSubImage': "Image, billed per image",
   'models.tiersSection': "Resolution tiers",
   'models.inputMedia': "Input media",
+  'access.revokeTip': "Scripts that use admin API tokens will stop working",
+  'access.minCharsPh': "At least 8 characters",
+  'access.againPh': "Enter it again",
+  'access.createToken': "Create admin API token",
+  'access.tokensN': "{n} tokens",
+  'access.lastLogin': "Last sign-in: {at}",
+  'access.lastLoginIp': "Last sign-in: {at}, from {ip}",
+  'access.neverUsed': "Never",
 };
 
 export const zh = {
@@ -133,4 +141,12 @@ export const zh = {
   'models.tierSubImage': "图片，按张计费",
   'models.tiersSection': "分辨率档位",
   'models.inputMedia': "输入素材",
+  'access.revokeTip': "使用管理 API 令牌的脚本会失效",
+  'access.minCharsPh': "至少 8 位",
+  'access.againPh': "再输入一次",
+  'access.createToken': "创建管理 API 令牌",
+  'access.tokensN': "{n} 个令牌",
+  'access.lastLogin': "上次登录：{at}",
+  'access.lastLoginIp': "上次登录：{at}，来自 {ip}",
+  'access.neverUsed': "从未使用",
 };

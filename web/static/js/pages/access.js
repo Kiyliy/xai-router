@@ -1,27 +1,28 @@
 // 管理访问 (#/access): admin password + admin API tokens (moved here from Settings in v0.4.0).
-import { h, timeEl, cred } from '../util.js';
-import { icon } from '../icons.js';
+import { h, timeEl, fmtDate, fmtDateTime, fmtInt } from '../util.js';
 import { t } from '../i18n.js';
 import { get, put, post, del } from '../api.js';
 import {
-  card, toast, toastError, openModal, confirmDialog, field, input, button, busy,
-  tableWrap, tableEmptyRow, skeletonRows, passwordInput, checkbox, errorMessage,
+  toast, toastError, openModal, confirmDialog, field, input, button, busy,
+  tableEmptyRow, skeletonRows, passwordInput, checkbox, errorMessage,
 } from '../ui.js';
 import { showSecret } from './tokens.js';
 
 /** Change-password form, shared by this page, the account menu and the "initial password" banner. */
-export function passwordForm({ onDone, autofocus = false, inline = false } = {}) {
+export function passwordForm({ onDone, autofocus = false, inline = false, placeholders = false } = {}) {
   const oldPw = passwordInput({ autocomplete: 'current-password', autofocus });
   const newPw = passwordInput({ autocomplete: 'new-password', minlength: 8 });
   const newPw2 = passwordInput({ autocomplete: 'new-password' });
-  const revoke = checkbox({ checked: false, label: t('settings.revokeAdminTokens'), hint: t('settings.revokeAdminTokensHint') });
+  const revoke = checkbox({ checked: false, label: t('settings.revokeAdminTokens'), hint: placeholders ? null : t('settings.revokeAdminTokensHint') });
+  if (placeholders) revoke.title = t('access.revokeTip');
   const btn = h('button', { class: 'btn btn-primary', type: 'submit' }, h('span', null, t('settings.changePassword')));
   const fields = [
     field(t('settings.oldPassword'), oldPw),
-    field(t('settings.newPassword'), newPw, inline ? {} : { hint: t('settings.minChars') }),
+    field(t('settings.newPassword'), newPw, inline || placeholders ? {} : { hint: t('settings.minChars') }),
     field(t('settings.confirmPassword'), newPw2),
   ];
-  if (inline) newPw.input.placeholder = t('settings.minChars');
+  if (inline || placeholders) newPw.input.placeholder = t('access.minCharsPh');
+  if (placeholders) newPw2.input.placeholder = t('access.againPh');
   const form = h('form', { class: 'stack', onsubmit: (e) => { e.preventDefault(); submit(); } },
     inline ? h('div', { class: 'inline-form' }, fields, h('div', { class: 'inline-form-btn' }, btn)) : fields,
     revoke,
@@ -54,32 +55,49 @@ export function openPasswordDialog({ onDone } = {}) {
 }
 
 export function render(el, ctx) {
+  el.classList.add('pg-access');
+  const section = (title, desc, body) => h('section', { class: 'access-sec' },
+    h('div', { class: 'access-sec-head' }, h('h2', null, title), ...[].concat(desc).filter(Boolean).map((d) => h('p', null, d))),
+    h('div', { class: 'access-sec-body' }, body));
+
   // ---- password ----
-  const pwCard = card({
-    title: h('span', { class: 'card-title-ic' }, icon('lock', 16), t('settings.password')), subtitle: t('settings.passwordSub'),
-    body: passwordForm({ inline: true, onDone: (b) => { ctx.refreshInfo(); if (b.revoke_admin_tokens) loadAdminTokens(); } }),
-  });
+  const lastLogin = h('p', { class: 'access-last', hidden: true });
+  const pwSec = section(t('settings.password'), [t('settings.passwordSub')],
+    h('div', { class: 'access-pw' }, passwordForm({ placeholders: true, onDone: (b) => { ctx.refreshInfo(); if (b.revoke_admin_tokens) loadAdminTokens(); } })));
+  pwSec.querySelector('.access-sec-head').append(lastLogin);
 
   // ---- admin API tokens ----
   const atBody = h('tbody', null, skeletonRows(4, 2));
-  const atCard = card({
-    title: h('span', { class: 'card-title-ic' }, icon('key', 16), t('settings.adminTokens')), subtitle: [t('access.tokensIntro'), ' ', h('a', { class: 'link', href: '#/docs?tab=admin' }, t('access.viewReference'))], flush: true,
-    actions: button(t('common.create'), { icon: 'plus', size: 'sm', variant: 'primary', onClick: createAdminToken }),
-    body: [tableWrap(h('table', { class: 'table table-compact' },
-      h('thead', null, h('tr', null, h('th', null, t('common.name')), h('th', null, t('common.lastUsed')), h('th', null, t('common.created')), h('th', { class: 'col-actions' }, ''))),
-      atBody))],
-  });
-  el.append(h('div', { class: 'page-narrow page-stack' }, pwCard, atCard));
+  const atCount = h('span', { class: 'access-count' });
+  const atSec = section(t('settings.adminTokens'), [t('access.tokensIntro')], [
+    h('div', { class: 'access-tokens-head' }, atCount, button(t('access.createToken'), { icon: 'plus', size: 'sm', onClick: createAdminToken })),
+    h('table', { class: 'table access-table' },
+      h('thead', null, h('tr', null, h('th', null, t('common.name')), h('th', { class: 'col-date' }, t('common.created')), h('th', { class: 'col-date' }, t('common.lastUsed')), h('th', { class: 'col-revoke' }, h('span', { class: 'sr-only' }, t('common.actions'))))),
+      atBody),
+    h('a', { class: 'access-ref', href: '#/docs?tab=admin' }, t('access.viewReference')),
+  ]);
+  el.append(h('div', { class: 'access-wrap' }, pwSec, atSec));
+
+  async function loadLastLogin() {
+    try {
+      const r = await get('/api/v1/logs', { type: 'audit', action: 'auth.login', page_size: 1 }, { signal: ctx.signal });
+      const e = (r.data || [])[0];
+      if (!e) return;
+      lastLogin.textContent = e.ip ? t('access.lastLoginIp', { at: fmtDateTime(e.created_at, { seconds: false }), ip: e.ip }) : t('access.lastLogin', { at: fmtDateTime(e.created_at, { seconds: false }) });
+      lastLogin.hidden = false;
+    } catch { /* optional line */ }
+  }
 
   async function loadAdminTokens() {
     try {
       const res = await get('/api/v1/admin-tokens', null, { signal: ctx.signal });
       const rows = res.data || [];
+      atCount.textContent = t('access.tokensN', { n: fmtInt(rows.length) });
       atBody.replaceChildren(...(rows.length ? rows.map((a) => h('tr', null,
-        h('td', null, cred(a.name, a.prefix || 'xra-', 'strong')),
-        h('td', null, timeEl(a.last_used_at)),
-        h('td', null, timeEl(a.created_at)),
-        h('td', { class: 'col-actions' }, h('button', { class: 'btn btn-sm btn-danger-soft', onclick: () => revoke(a) }, t('settings.revoke'))))) : [tableEmptyRow(4, { icon: 'key', title: t('settings.noAdminTokens'), desc: t('settings.noAdminTokensDesc') })]));
+        h('td', null, h('span', { class: 'access-name' }, a.name), h('span', { class: 'mono access-prefix' }, a.prefix || 'xra-')),
+        h('td', { class: 'col-date', title: fmtDateTime(a.created_at) }, fmtDate(a.created_at)),
+        h('td', { class: 'col-date' }, a.last_used_at ? timeEl(a.last_used_at) : h('span', { class: 'muted' }, t('access.neverUsed'))),
+        h('td', { class: 'col-revoke' }, h('button', { class: 'btn-link-danger', type: 'button', onclick: () => revoke(a) }, t('settings.revoke'))))) : [tableEmptyRow(4, { icon: 'key', title: t('settings.noAdminTokens'), desc: t('settings.noAdminTokensDesc') })]));
     } catch (e) { if (e.name !== 'AbortError') { toastError(e); atBody.replaceChildren(tableEmptyRow(4, { icon: 'alert', title: t('common.loadFailed'), desc: errorMessage(e) })); } }
   }
   function createAdminToken() {
@@ -103,4 +121,5 @@ export function render(el, ctx) {
     try { await del(`/api/v1/admin-tokens/${a.id}`); toast(t('settings.revoked'), 'success'); loadAdminTokens(); } catch (e) { toastError(e); }
   }
   loadAdminTokens();
+  loadLastLogin();
 }

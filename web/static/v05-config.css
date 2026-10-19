@@ -86,3 +86,33 @@
 .models-meta-item .v, .models-meta-item .v * { font-weight: 400; }
 .table-models .model-name, .table-models td { font-weight: 400; }
 .tier-in-l { font-weight: 400; }
+
+/* ---------- admin access (frames 67-3321 / 127-18494) ---------- */
+.access-wrap { max-width: 984px; padding: 24px 32px 48px; }
+.access-sec { display: grid; grid-template-columns: 308px minmax(0, 612px); padding: 32px 0; border-bottom: 1px solid var(--border); }
+.access-sec-head h2 { margin: 0 0 6px; font-size: 14px; font-weight: 500; line-height: 22px; }
+.access-sec-head p { margin: 0; padding-right: 32px; font-size: 12.5px; line-height: 22px; color: var(--text-2); }
+.access-sec-head p.access-last { color: var(--text-2); }
+.access-sec-head p[hidden] { display: none; }
+.access-pw .stack { gap: 16px; }
+.access-pw .field-label { font-weight: 400; color: var(--text-2); font-size: 12.5px; }
+.access-pw .input { height: 32px; }
+.access-pw .btn-primary { height: 32px; }
+.access-tokens-head { display: flex; align-items: center; justify-content: space-between; min-height: 40px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.access-count { font-size: 13px; color: var(--text-2); }
+.access-table th { background: transparent; position: static; padding: 0; height: 32px; }
+.access-table td { padding: 0; border-bottom-color: var(--border); }
+.access-table .col-date { width: 108px; white-space: nowrap; color: var(--text-2); font-family: var(--font-sans); }
+.access-table td.col-date { color: var(--text-2); }
+.access-table .col-revoke { width: 48px; text-align: right; }
+.access-name { color: var(--text); }
+.access-prefix { margin-left: 8px; font-size: 11.5px; color: var(--text-3); }
+.btn-link-danger { border: 0; background: none; padding: 0; color: var(--danger); font-size: 13px; cursor: pointer; }
+.btn-link-danger:hover { text-decoration: underline; }
+.access-ref { display: inline-block; margin-top: 16px; font-size: 13px; color: var(--accent-text); }
+@media (max-width: 900px) { .access-sec { grid-template-columns: 1fr; gap: 16px; } }
+.access-pw { max-width: 300px; }
+.access-pw .checkbox span { font-weight: 400; white-space: nowrap; }
+.access-table .empty-row td { padding: 24px 0; }
+.access-table .empty-row .empty { padding: 16px 0; }
+.access-pw .checkbox, .access-pw .checkbox * { font-weight: 400 !important; }
