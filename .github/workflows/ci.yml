@@ -20,6 +20,13 @@ jobs:
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
       - name: openapi.yaml is valid YAML
         run: python3 -c "import yaml,sys; yaml.safe_load(open('web/static/openapi.yaml')); print('ok')"
+      - name: console JS parses (ES modules)
+        run: |
+          fail=0
+          for f in $(git ls-files 'web/static/*.js' 'web/static/**/*.js'); do
+            node --input-type=module --check < "$f" || { echo "::error file=$f::syntax error"; fail=1; }
+          done
+          exit $fail
       - name: go vet
         run: go vet ./...
       - name: staticcheck
