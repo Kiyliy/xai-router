@@ -1404,3 +1404,26 @@ a.btn:hover { text-decoration: none; }
   .topbar-actions { padding-bottom: 8px; flex-wrap: wrap; }
   .banner { padding: 9px 16px; }
 }
+
+/* ---- v0.5.1 type and controls (design review 1, 2, 4) ---- */
+/* Chinese text falls back to the OS font. Microsoft YaHei has only regular and
+   bold and renders far heavier than the design's Noto Sans SC Regular, so the
+   lighter DengXian (Windows 10+) comes first on Windows; macOS keeps PingFang. */
+:root {
+  --font-cjk: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "DengXian", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --font-sans: "Geist", "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "DengXian", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", -apple-system, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, "Noto Sans SC", "PingFang SC", "DengXian", "Microsoft YaHei UI", "Microsoft YaHei", monospace;
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235f6670' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+:root[data-theme="light"] {
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238a9099' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+/* Mono only for numbers, IDs, paths, status codes and table times: headers
+   and labels stay in the text font even on number columns. */
+.table th, .table th.num, th.num, .kl-sum-item .mono, .seg-btn .seg-count, .seg-btn .count, .tab-count { font-family: var(--font-sans); letter-spacing: 0; }
+/* Text weight: 400 for body copy and values, 500 for names, buttons and the
+   active tab, 600 only for page and drawer titles. */
+.table td, .detail-drawer dd, .detail-drawer .kv-v, .mini-row .what, .ev-line, .cost-table td { font-weight: 400; }
+.btn { font-weight: 500; }
+/* Selects: the Lucide chevron-down (16px, 1.5 stroke) like the filter chips. */
+.select { background-image: var(--chevron); background-position: right 8px center; background-size: 16px 16px; padding-right: 30px; }

@@ -5,7 +5,7 @@ import * as miscI18n from './i18n-misc.js';
 const KEY = 'xr.lang';
 
 const en = {
-  'app.tagline': 'Grok API gateway',
+
   'app.unreachable': 'Cannot reach the server',
 
   'nav.overview': 'Overview', 'nav.keys': 'Upstream keys', 'nav.tokens': 'Client tokens', 'nav.models': 'Models & pricing',
@@ -369,7 +369,7 @@ const en = {
 };
 
 const zh = {
-  'app.tagline': 'Grok API 网关',
+
   'app.unreachable': '无法连接到服务器',
 
   'nav.overview': '概览', 'nav.keys': '上游密钥', 'nav.tokens': '客户端令牌', 'nav.models': '模型与价格',

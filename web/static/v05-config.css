@@ -126,8 +126,8 @@
 .set-sec { padding-top: 8px; }
 .set-sec + .set-sec { padding-top: 32px; }
 .set-sec-title { margin: 0; padding: 4px 0 8px; font-size: 15px; font-weight: 500; line-height: 24px; }
-.set-row { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 24px; min-height: 70px; padding: 12px 0; border-bottom: 1px solid var(--border); }
-.set-text { min-width: 0; flex: 1; max-width: 360px; display: flex; flex-direction: column; gap: 4px; }
+.set-row { display: flex; flex-direction: row; align-items: flex-start; justify-content: space-between; gap: 24px; min-height: 70px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.set-text { padding-top: 6px; min-width: 0; flex: 1; max-width: 360px; display: flex; flex-direction: column; gap: 4px; }
 .set-row .field-label { margin: 0; font-size: 13px; font-weight: 400; color: var(--text); }
 .set-row .field-hint { margin: 0; font-size: 12px; line-height: 18px; color: var(--text-3); }
 .set-ctl { flex: none; display: flex; justify-content: flex-end; }

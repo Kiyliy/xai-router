@@ -167,7 +167,7 @@ function renderShell() {
       : h('a', { class: 'nav-item', href: it.tab ? `#/${it.route}?tab=${it.tab}` : `#/${it.route}`, 'data-route': it.route, 'data-tab': it.tab || '' },
         icon(it.icon, 17), h('span', null, t(it.label || `nav.${it.route}`))))));
   const sidebar = h('aside', { class: 'sidebar' },
-    h('div', { class: 'brand' }, logo(24), h('div', { class: 'brand-text' }, h('div', { class: 'brand-name' }, 'xai-router'), h('div', { class: 'brand-sub' }, t('app.tagline')))),
+    h('div', { class: 'brand' }, logo(24), h('div', { class: 'brand-text' }, h('div', { class: 'brand-name' }, 'xai-router'))),
     nav,
     // Theme and language live in the account menu (v0.5 design: the sidebar foot is just the account).
     h('div', { class: 'sidebar-foot' }, accountButton()));
