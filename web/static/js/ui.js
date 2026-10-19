@@ -197,6 +197,25 @@ export function badge(text, variant = 'neutral', attrs = {}) {
 }
 export function dot(variant) { return h('span', { class: `dot dot-${variant}` }); }
 
+// ---- v0.5 Ion primitives (style.css "foundation primitives") ----
+/** HTTP status code, mono with a 1px outline: 2xx/3xx grey, 4xx warning, 5xx and network errors danger. */
+export function statusCode(code, attrs = {}) {
+  const v = !code ? 'danger' : code < 400 ? '' : code < 500 ? 'warning' : 'danger';
+  return h('span', { ...attrs, class: `status-code ${v ? `is-${v}` : ''} ${attrs.class || ''}` }, code ? String(code) : 'ERR');
+}
+/** Status as "coloured dot + neutral text"; variant: success | warning | danger | neutral. */
+export function statusDot(text, variant = 'neutral', attrs = {}) {
+  return h('span', { ...attrs, class: `status-dot is-${variant} ${attrs.class || ''}` }, text);
+}
+/** Small grey section label, optionally with a right-aligned link ({ label, href }). */
+export function eyebrow(text, link) {
+  return h('div', { class: 'eyebrow' }, h('span', null, text), link ? h('a', { href: link.href }, link.label) : null);
+}
+/** Big mono number (Geist Mono Light); unit is a short CJK suffix such as "万" or "秒". */
+export function bigNum(value, { unit, size = '', accent = false } = {}) {
+  return h('div', { class: `big-num ${size === 'md' ? 'big-num-md' : ''} ${accent ? 'is-accent' : ''}` }, value, unit ? h('span', { class: 'unit' }, unit) : null);
+}
+
 export function switchEl({ checked = false, onChange, disabled = false, label, title } = {}) {
   const input = h('input', { type: 'checkbox', role: 'switch', checked, disabled });
   const el = h('label', { class: 'switch', title, onclick: (e) => e.stopPropagation() }, input, h('span', { class: 'switch-track' }, h('span', { class: 'switch-thumb' })), label ? h('span', { class: 'switch-label' }, label) : null);
