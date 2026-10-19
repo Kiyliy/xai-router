@@ -104,7 +104,7 @@ export function render(el, ctx) {
     title: title('trash', t('data.purge')), subtitle: t('data.purgeSub'),
     body: h('div', { class: 'stack' }, policy, field(t('settings.deleteBefore'), before), estimate, purgeJob),
   });
-  purgeCard.append(h('div', { class: 'card-foot-actions' }, h('span', { class: 'muted small foot-note' }, t('data.purgeKeeps')), purgeBtn));
+  purgeCard.append(h('div', { class: 'card-foot-actions' }, purgeBtn));
 
   const approx = (kind) => kind && kind !== 'exact';
   const countText = (e) => (approx(e.kind) ? fmtCompactLong(e.total) : fmtInt(e.total));
@@ -125,7 +125,7 @@ export function render(el, ctx) {
     if (!est) { estimate.classList.remove('has-rows'); estN.textContent = '—'; estText.textContent = before.value ? t('common.loading') : t('data.pickDate'); estSub.textContent = ''; syncPurgeBtn(); return; }
     const n = est.total;
     estimate.classList.toggle('has-rows', n > 0);
-    estN.textContent = n > 0 ? `${approx(est.kind) ? '≈ ' : ''}${countText(est)}` : '0';
+    estN.textContent = n > 0 ? (approx(est.kind) ? fmtTotal(n, 'approx') : countText(est)) : '0';
     estText.textContent = n > 0 ? t(approx(est.kind) ? 'data.willDeleteApprox' : 'data.willDelete') : t('data.willDeleteNone');
     const oldest = info && info.oldest_log_at;
     estSub.textContent = n > 0 && oldest ? t('data.estRange', { a: fmtDateTime(oldest, { seconds: false }), b: fmtDateTime(est.iso, { seconds: false }) })
@@ -163,7 +163,6 @@ export function render(el, ctx) {
       title: t('settings.purgeTitle'),
       message: t(approx(est.kind) ? 'data.purgeMsgApprox' : 'data.purgeMsg', { n: countText(est), d: fmtDateTime(iso, { seconds: false }) }),
       confirmText: label, danger: true,
-      extra: h('p', { class: 'muted small' }, t('data.purgeKeeps')),
     });
     if (!ok) return;
     await busy(purgeBtn, async () => {
@@ -235,18 +234,16 @@ export function render(el, ctx) {
 
     freeN.textContent = fmtBytes(free);
     const av = i.db_auto_vacuum || '';
-    freeSub.textContent = [size ? t('data.freeShare', { p: ((free / size) * 100).toFixed(free / size < 0.1 ? 1 : 0) }) : '', av && av !== 'incremental' ? t('data.avLegacyHint') : ''].filter(Boolean).join(' · ');
+    freeSub.textContent = [size ? t('data.freeShare', { p: ((free / size) * 100).toFixed(free / size < 0.1 ? 1 : 0) }) : '', av && av !== 'incremental' ? t('data.avLegacyHint') : ''].filter(Boolean).join('；');
     vacuumWarn.hidden = !av || av === 'incremental';
 
     sysBody.replaceChildren(kv([
-      [t('settings.version'), h('span', null, mono(i.version || '—'), i.commit && i.commit !== 'none' ? h('span', { class: 'muted' }, ` · ${i.commit.slice(0, 12)}`) : null)],
+      [t('settings.version'), h('span', null, mono(i.version || '—'), i.commit && i.commit !== 'none' ? h('span', { class: 'muted' }, t('data.commitParen', { c: i.commit.slice(0, 12) })) : null)],
       [t('settings.buildDate'), i.build_date && i.build_date !== 'unknown' ? mono(i.build_date) : null],
       [t('settings.goVersion'), mono(i.go_version || '—')],
       [t('settings.startedAt'), i.started_at ? h('span', { title: fmtDateTime(i.started_at) }, fmtDateTime(i.started_at, { seconds: false })) : null],
       [t('settings.uptime'), fmtDuration(i.uptime_seconds)],
-      [t('settings.goHeap'), i.go_heap_bytes != null ? mono(fmtBytes(i.go_heap_bytes)) : null],
-      [t('settings.goSys'), i.go_sys_bytes != null ? h('span', { class: 'mono', title: t('settings.goSysHint') }, fmtBytes(i.go_sys_bytes)) : null],
-      [t('settings.goroutines'), i.goroutines != null ? mono(fmtInt(i.goroutines)) : null],
+      [t('settings.goSys'), i.go_sys_bytes != null ? mono(fmtBytes(i.go_sys_bytes)) : null],
       [t('settings.logQueue'), fmtInt(i.log_queue_length)],
       [t('settings.logDropped'), h('span', { class: i.log_dropped ? 'text-warning' : '' }, fmtInt(i.log_dropped))],
     ]));

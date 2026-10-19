@@ -30,11 +30,11 @@ export function render(el, ctx) {
   const table = h('table', { class: 'table table-models table-cards' },
     h('thead', null, h('tr', null,
       h('th', null, t('common.model')), ctxTh,
-      h('th', { class: 'num' }, t('models.input')), h('th', { class: 'num' }, t('models.cached')), h('th', { class: 'num' }, t('models.output')),
-      h('th', { class: 'num' }, t('models.longCtx')), h('th', { class: 'num' }, t('models.image')), h('th', { class: 'num' }, t('models.video')),
+      h('th', { class: 'num' }, t('models.thInput')), h('th', { class: 'num' }, t('models.thCached')), h('th', { class: 'num' }, t('models.thOutput')),
+      h('th', { class: 'num', title: t('models.longCtxHint') }, t('models.longCtx')), h('th', { class: 'num' }, t('models.image')), h('th', { class: 'num' }, t('models.video')),
       h('th', null, t('models.source')), h('th', { class: 'col-actions' }, h('span', { class: 'sr-only' }, t('common.actions'))))),
     tbody);
-  el.append(card({ flush: true, body: [h('div', { class: 'toolbar' }, kindSel, search, h('div', { class: 'toolbar-spacer' }), syncInfo), tableWrap(table), h('div', { class: 'table-foot muted small' }, t('models.priceNote'))] }));
+  el.append(card({ flush: true, body: [h('div', { class: 'toolbar' }, kindSel, search, h('div', { class: 'toolbar-spacer' }), syncInfo), tableWrap(table)] }));
 
   function renderSyncInfo() {
     const s = st.lastSync;

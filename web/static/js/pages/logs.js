@@ -3,11 +3,11 @@
 // selected types, everything in the URL. type=request alone pages by number; any other
 // selection is merged newest first and pages with a cursor.
 import {
-  h, fmtInt, fmtUSD, fmtMs, fmtCompact, fmtDateTime, fmtTimeShort, relTime, debounce, toLocalInput, fromLocalInput, downloadText,
+  h, fmtInt, fmtUSD, fmtMs, fmtCompact, fmtDateTime, relTime, debounce, toLocalInput, fromLocalInput, downloadText,
   fmtTotal, latestSignal,
 } from '../util.js';
 import { icon } from '../icons.js';
-import { t } from '../i18n.js';
+import { t, hasT } from '../i18n.js';
 import { get } from '../api.js';
 import {
   card, toast, toastError, openModal, badge, select, input, pager as pagerEl, setTableLoading, skeletonRows, tableEmptyRow, tableWrap,
@@ -204,7 +204,7 @@ export function render(el, ctx) {
     const th = (label, cls, title) => h('th', { class: cls || null, title: title || null }, label);
     let cells;
     if (m === 'request') {
-      cells = [th(t('logs.time'), 'col-time'), th(t('logs.request')), th(t('common.status'), 'col-status'), th(t('lg.col.tokenKey')),
+      cells = [th(t('logs.time'), 'col-time'), th(t('logs.request')), th(t('common.status'), 'col-status'), th(t('lg.col.tokenKey'), 'col-who'),
         th(h('span', { class: 'tok4 tok4-head' }, h('span', null, t('lg.tok.input')), h('span', { title: t('lg.tok.cacheWriteTip') }, t('lg.tok.cacheWrite')), h('span', null, t('lg.tok.cacheRead')), h('span', null, t('lg.tok.output'))), 'num col-tok'),
         th(t('common.cost'), 'num col-cost'), th(t('common.latency'), 'num col-lat', t('logs.ttfbClientHint'))];
     } else if (m === 'mixed') {
@@ -266,7 +266,12 @@ export function render(el, ctx) {
   const keyLink = (r) => (r.key_name
     ? (r.key_id != null ? h('a', { class: 'link cell-link', href: `#/keys?open=${r.key_id}`, title: `${t('lg.openKey')}: ${r.key_name}`, onclick: stop }, icon('key', 10), ' ', r.key_name) : h('span', null, icon('key', 10), ' ', r.key_name))
     : h('span', { class: 'muted' }, icon('key', 10), ' —'));
-  const timeCell = (r) => h('td', { class: 'nowrap m-meta m-time' }, h('div', { class: 'mono', title: fmtDateTime(r.created_at) }, fmtTimeShort(r.created_at)), h('div', { class: 'cell-sub', 'data-rel': r.created_at }, relTime(r.created_at)));
+  // List time "10月18日 14:02" (pm-spec 10.3); the relative time below only within the last day.
+  const timeCell = (r) => {
+    const recent = Date.now() - new Date(r.created_at).getTime() < 86400e3;
+    return h('td', { class: 'nowrap m-meta m-time' }, h('div', { title: fmtDateTime(r.created_at) }, fmtDateTime(r.created_at, { seconds: false })),
+      recent ? h('div', { class: 'cell-sub', 'data-rel': r.created_at }, relTime(r.created_at)) : null);
+  };
   const isErr = (r) => (r.type === 'request' ? (r.status >= 400 || !r.status) : r.level === 'error');
   function tok4(r) {
     if (r.images) return h('span', null, `${r.images} ${t('logs.imgShort')}`);
@@ -275,7 +280,7 @@ export function render(el, ctx) {
     const c = tokenCats(r);
     return h('div', null,
       h('span', { class: 'tok4' },
-        h('span', { title: t('lg.tok.input') }, fmtCompact(c.input)),
+        h('span', { title: t('lg.tok.input') }, fmtCompact(c.input + c.image)),
         h('span', { title: t('lg.tok.cacheWriteTip'), class: c.cacheWrite == null ? 'muted' : '' }, c.cacheWrite == null ? '—' : fmtCompact(c.cacheWrite)),
         h('span', { title: t('lg.tok.cacheRead') }, fmtCompact(c.cacheRead)),
         h('span', { title: t('lg.tok.output') }, fmtCompact(c.output))),
@@ -295,7 +300,13 @@ export function render(el, ctx) {
   const tries = (r) => ((r.attempts || 0) > 1 ? badge(`×${r.attempts}`, 'warning', { class: 'badge-tries', title: t('logs.retriedN', { n: r.attempts }) }) : null);
   function targetCell(e) {
     const name = targetText(e), hint = targetHint(e);
-    const node = h('span', null, h('span', { class: 'muted small' }, `${targetTypeLabel(e.target_type)} `), e.target_type && !['settings', 'logs', 'database', 'disk'].includes(e.target_type) ? cred(name, hint) : null);
+    // No object (sign-in, start-up) or a whole-catalogue action (price sync): name the area instead.
+    if (['settings', 'logs', 'database', 'disk'].includes(e.target_type)) return h('span', null, targetTypeLabel(e.target_type));
+    if (!e.target_type || (e.target_type === 'model' && !e.target_id)) {
+      const g = (e.action || '').split('.')[0];
+      return h('span', null, hasT(`lg.ag.${g}`) ? t(`lg.ag.${g}`) : targetTypeLabel(e.target_type));
+    }
+    const node =h('span', null, h('span', { class: 'muted small' }, `${targetTypeLabel(e.target_type)} `), e.target_type && !['settings', 'logs', 'database', 'disk'].includes(e.target_type) ? cred(name, hint) : null);
     if ((e.target_type === 'key' || e.target_type === 'token') && e.target_id) {
       return h('a', { class: 'link cell-link', href: `#/${e.target_type === 'key' ? 'keys' : 'tokens'}?open=${e.target_id}`, onclick: stop, title: t(e.target_type === 'key' ? 'lg.openKey' : 'lg.openToken') }, node);
     }
@@ -344,7 +355,7 @@ export function render(el, ctx) {
   }
   function tokCompact(r) {
     const c = tokenCats(r);
-    return `${t('lg.tok.input')} ${fmtCompact(c.input)}，${t('lg.tok.cacheRead')} ${fmtCompact(c.cacheRead)}，${t('lg.tok.output')} ${fmtCompact(c.output)}`;
+    return [`${t('lg.tok.input')} ${fmtCompact(c.input + c.image)}`, `${t('lg.tok.cacheRead')} ${fmtCompact(c.cacheRead)}`, `${t('lg.tok.output')} ${fmtCompact(c.output)}`].join(t('lg.sep'));
   }
 
   function query() {

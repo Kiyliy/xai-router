@@ -145,7 +145,7 @@ export function render(el, ctx) {
     }
     controls[f.k] = c;
     let node = c;
-    if (f.unit) node = h('div', { class: 'input-affix input-affix-end' }, c, h('span', { class: 'affix' }, f.unit));
+    if (f.unit) node = h('div', { class: 'input-affix input-affix-end' }, c, h('span', { class: 'affix' }, ['s', 'h', 'd'].includes(f.unit) ? t(`unit.${f.unit}`) : f.unit));
     if (f.type === 'bool') {
       return h('div', { class: `field field-bool ${f.full ? 'field-full' : ''} ${f.warn ? 'field-bool-warn' : ''}` },
         h('div', { class: 'field-bool-text' }, h('div', { class: 'field-label' }, t(`settings.f.${f.k}`)),

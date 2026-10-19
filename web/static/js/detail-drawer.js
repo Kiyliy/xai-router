@@ -1,9 +1,9 @@
 // Shared pieces of the upstream key / client token detail drawers (v0.4.0):
 // drawer shell, URL-synced open state, 24h/7d/30d usage, recent failed requests,
 // and the "name · prefix" credential label.
-import { h, fmtInt, fmtUSD, fmtCompact, fmtDateTime, fmtTimeShort, statusClass } from './util.js';
+import { h, fmtInt, fmtUSD, fmtCompact, fmtDateTime, relTime, statusClass } from './util.js';
 import { icon } from './icons.js';
-import { t, getLang } from './i18n.js';
+import { t } from './i18n.js';
 import { get } from './api.js';
 import { openModal, badge, spinner, errorMessage } from './ui.js';
 import { eventSentence, levelDot } from './events.js';
@@ -133,7 +133,7 @@ export function failuresBlock({ param, id, signal, navigate }) {
         onclick: () => navigate(`#/logs?${param}=${id}&status=error&range=all&open=${r.id}`),
       },
       badge(r.status ? String(r.status) : 'ERR', statusClass(r.status), { class: 'badge-status mono' }),
-      h('span', { class: 'when', title: fmtDateTime(r.created_at) }, sameDay(r.created_at) ? fmtTimeShort(r.created_at) : fmtDateTime(r.created_at, { seconds: false }).slice(5)),
+      h('span', { class: 'when', title: fmtDateTime(r.created_at) }, listTime(r.created_at)),
       h('span', { class: 'what' },
         h('span', { class: 'mono' }, r.path || '', r.model ? h('span', { class: 'muted' }, ` · ${r.model}`) : null),
         r.error ? h('span', { class: 'err', title: r.error }, r.error) : null),
@@ -143,7 +143,6 @@ export function failuresBlock({ param, id, signal, navigate }) {
   return box;
 }
 
-function sameDay(iso) { const d = new Date(iso), n = new Date(); return d.toDateString() === n.toDateString(); }
 
 /**
  * Drawer body for a key / token that no longer exists (soft-deleted): its history is kept, so
@@ -174,13 +173,7 @@ export function allLogsLink(hash, navigate) {
 export function listTime(iso) {
   const d = new Date(iso);
   if (isNaN(d)) return '—';
-  const s = (Date.now() - d.getTime()) / 1000;
-  if (s >= 0 && s < 60) return t('misc.justNow');
-  if (s >= 0 && s < 3600) return t('misc.minAgo', { n: Math.floor(s / 60) });
-  if (s >= 0 && s < 86400) return t('misc.hrAgo', { n: Math.floor(s / 3600) });
-  const opts = { month: getLang() === 'zh' ? 'numeric' : 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false };
-  if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
-  return new Intl.DateTimeFormat(getLang() === 'zh' ? 'zh-CN' : 'en-US', opts).format(d);
+  return d.getTime() <= Date.now() + 5000 ? relTime(d) : fmtDateTime(d, { seconds: false });
 }
 
 /**
