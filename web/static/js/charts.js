@@ -298,12 +298,11 @@ export function areaChart(opts) {
     const top = Math.ceil(max / step) * step;
     const x = (i) => pad.l + (n === 1 ? pw / 2 : (pw * i) / (n - 1));
     const y = (v) => pad.t + ph - ((v || 0) / top) * ph;
-    // full-width hairlines (no frame), value at the left above each line
+    // full-width hairlines only (no frame, no tick labels): the hover tooltip carries the values
     const grid = s('g', { class: 'chart-grid ac-grid' });
     for (let v = step; v <= top + step / 2; v += step) {
       const yy = Math.round(y(v)) + 0.5;
       grid.appendChild(s('line', { x1: 0, x2: W, y1: yy, y2: yy }));
-      grid.appendChild(s('text', { x: pad.l, y: yy - 5, class: 'chart-axis ac-ylab' }, yFormat(v)));
     }
     const base = Math.round(y(0)) + 0.5;
     grid.appendChild(s('line', { x1: 0, x2: W, y1: base, y2: base, class: 'ac-base' }));

@@ -347,3 +347,20 @@
   .ld5-kpi:nth-child(3) { border-left: 0; }
   .ld5-att-row { grid-template-columns: 1fr; gap: 6px; }
 }
+
+/* ---- overview v0.5.1 spacing (designer pass): KPI strip 136px, chart area ~290px, so the
+   upstream key strip fits on the first screen at 1440x900 ---- */
+.ov-metric { gap: 8px; height: 136px; min-height: 0; padding: 24px 24px 0; }
+.ov-metric .big-num { line-height: 1; }
+.ov-metric-sub { line-height: 1.4; }
+.ov-tokbar { margin-top: 0; }
+.ov-chart { padding-top: 20px; }
+.ov-legend { padding-bottom: 14px; }
+.ov-chart-host { min-height: 248px; }
+.ov-chart-host .skeleton-chart { height: 216px; }
+.ov-chart-empty { height: 248px; }
+.ov-block { padding: 20px 32px 20px; }
+.ov-mtable td { height: 36px; }
+@media (max-width: 900px) {
+  .ov-metric { height: auto; padding: 16px; gap: 6px; }
+}

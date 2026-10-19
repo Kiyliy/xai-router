@@ -17,6 +17,8 @@ const RANGE_MS = { '1h': 3600e3, '24h': 86400e3, '7d': 7 * 86400e3, '30d': 30 * 
 const PREV_RANGE = { '1h': '24h', '24h': '7d', '7d': '30d', '30d': '90d' };
 const ONBOARD_KEY = 'xr.onboard.dismissed';
 const ATTN_HASH = '#/logs?type=system&problems=1';
+// Four events keep the attention column no taller than the model table, so the key strip stays on the first screen.
+const ATTN_SHOWN = 4;
 const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } };
 const pad = (n) => String(n).padStart(2, '0');
@@ -237,7 +239,7 @@ export function render(el, ctx) {
     }
     const fail = values.map((v, i) => v > 0 && errs[i] / v > 0.05);
     chart = areaChart({
-      values, prev, fail, height: 280, yFormat: fmtCompact, partialLast: times[times.length - 1] + stepMs() > Date.now(),
+      values, prev, fail, height: 248, yFormat: fmtCompact, partialLast: times[times.length - 1] + stepMs() > Date.now(),
       xLabel: ((labs) => (i) => labs[i])(xLabels(times)),
       tipTitle: (i) => bucketTitle(times[i]),
       tipRows: (i) => [
@@ -296,13 +298,13 @@ export function render(el, ctx) {
         attnBody.replaceChildren(h('div', { class: 'ov-ok' }, h('span', { class: 'empty-icon' }, icon('checkCircle', 18)), h('div', { class: 'ov-ok-title' }, t('ov5.allOk')), h('div', { class: 'ov-ok-desc' }, t('ov5.allOkDesc'))), ...(foot ? [foot] : []));
         return;
       }
-      attnBody.replaceChildren(h('div', { class: 'ov-attn-list' }, groups.slice(0, 5).map(({ e, line, n }) => h('a', {
+      attnBody.replaceChildren(h('div', { class: 'ov-attn-list' }, groups.slice(0, ATTN_SHOWN).map(({ e, line, n }) => h('a', {
         class: 'ov-ev', href: `${ATTN_HASH}&event=${e.id}`, onclick: go(ctx, `${ATTN_HASH}&event=${e.id}`), title: t('ov.attnOpen'),
       },
       h('span', { class: `level-dot ${e.level === 'error' ? 'is-error' : e.level === 'warn' ? 'is-warning' : ''}` }),
       h('span', { class: 'ov-ev-text' }, line, n > 1 ? h('span', { class: 'ov-ev-n' }, t('ov5.repeat', { n: n - 1 })) : null),
       h('span', { class: 'ov-ev-time', title: fmtDateTime(e.created_at) }, listTime(e.created_at))))),
-      ...[groups.length > 5 ? h('div', { class: 'ov-attn-foot' }, t('ov5.moreEvents', { n: groups.length - 5 })) : null, foot].filter(Boolean));
+      ...[groups.length > ATTN_SHOWN ? h('div', { class: 'ov-attn-foot' }, t('ov5.moreEvents', { n: groups.length - ATTN_SHOWN })) : null, foot].filter(Boolean));
     } catch (e) {
       if (e.name !== 'AbortError') attnBody.replaceChildren(h('div', { class: 'ov-none' }, t('common.loadFailed')));
     }
