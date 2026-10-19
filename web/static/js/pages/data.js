@@ -94,7 +94,7 @@ export function render(el, ctx) {
     onState: (running) => syncPurgeBtn(running),
   });
   const purgeSec = section(t('data.purgeTitle'), t('data.purgeSub'),
-    h('div', { class: 'data-line' }, h('span', { class: 'data-hint data-hint-text' }, t('data.beforePre')), before, t('data.beforePost') ? h('span', { class: 'data-hint data-hint-text' }, t('data.beforePost')) : null),
+    h('div', { class: 'data-line' }, h('span', { class: 'data-hint data-hint-text' }, t('data.beforePre')), h('span', { class: 'data-date' }, before), t('data.beforePost') ? h('span', { class: 'data-hint data-hint-text' }, t('data.beforePost')) : null),
     estimate, h('div', null, purgeBtn), purgeJob);
 
   const approx = (kind) => kind && kind !== 'exact';

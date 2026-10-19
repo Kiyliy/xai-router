@@ -109,17 +109,17 @@ function snippets() {
   return {
     chat: {
       curl: `curl ${base}/chat/completions \\\n  -H "Authorization: Bearer ${KEY}" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "model": "grok-4.3",\n    "messages": [{"role": "user", "content": "What is the meaning of life?"}],\n    "stream": false\n  }'`,
-      python: `from openai import OpenAI\n\nclient = OpenAI(base_url="${base}", api_key="${KEY}")\n\n# Non-streaming\nresp = client.chat.completions.create(\n    model="grok-4.3",\n    messages=[{"role": "user", "content": "What is the meaning of life?"}],\n)\nprint(resp.choices[0].message.content)\n\n# Streaming\nstream = client.chat.completions.create(\n    model="grok-4.3",\n    messages=[{"role": "user", "content": "Write a haiku about routers."}],\n    stream=True,\n)\nfor chunk in stream:\n    if chunk.choices and chunk.choices[0].delta.content:\n        print(chunk.choices[0].delta.content, end="", flush=True)`,
-      node: `import OpenAI from "openai";\n\nconst client = new OpenAI({ baseURL: "${base}", apiKey: process.env.XR_API_KEY ?? "${KEY}" });\n\n// Non-streaming\nconst resp = await client.chat.completions.create({\n  model: "grok-4.3",\n  messages: [{ role: "user", content: "What is the meaning of life?" }],\n});\nconsole.log(resp.choices[0].message.content);\n\n// Streaming\nconst stream = await client.chat.completions.create({\n  model: "grok-4.3",\n  messages: [{ role: "user", content: "Write a haiku about routers." }],\n  stream: true,\n});\nfor await (const chunk of stream) {\n  process.stdout.write(chunk.choices[0]?.delta?.content ?? "");\n}`,
+      python: `from openai import OpenAI\n\nclient = OpenAI(\n    base_url="${base}",\n    api_key="${KEY}",\n)\n\n# Non-streaming\nresp = client.chat.completions.create(\n    model="grok-4.3",\n    messages=[{"role": "user", "content": "What is the meaning of life?"}],\n)\nprint(resp.choices[0].message.content)\n\n# Streaming\nstream = client.chat.completions.create(\n    model="grok-4.3",\n    messages=[{"role": "user", "content": "Write a haiku about routers."}],\n    stream=True,\n)\nfor chunk in stream:\n    if chunk.choices and chunk.choices[0].delta.content:\n        print(chunk.choices[0].delta.content, end="", flush=True)`,
+      node: `import OpenAI from "openai";\n\nconst client = new OpenAI({\n  baseURL: "${base}",\n  apiKey: process.env.XR_API_KEY ?? "${KEY}",\n});\n\n// Non-streaming\nconst resp = await client.chat.completions.create({\n  model: "grok-4.3",\n  messages: [{ role: "user", content: "What is the meaning of life?" }],\n});\nconsole.log(resp.choices[0].message.content);\n\n// Streaming\nconst stream = await client.chat.completions.create({\n  model: "grok-4.3",\n  messages: [{ role: "user", content: "Write a haiku about routers." }],\n  stream: true,\n});\nfor await (const chunk of stream) {\n  process.stdout.write(chunk.choices[0]?.delta?.content ?? "");\n}`,
     },
     anthropic: {
-      python: `import anthropic\n\n# The Anthropic SDK appends /v1/messages itself, so use the bare origin.\nclient = anthropic.Anthropic(base_url="${origin}", api_key="${KEY}")\n\nmsg = client.messages.create(\n    model="grok-4.3",\n    max_tokens=1024,\n    messages=[{"role": "user", "content": "What is the meaning of life?"}],\n)\nprint(msg.content[0].text)\n\n# Streaming\nwith client.messages.stream(\n    model="grok-4.3",\n    max_tokens=1024,\n    messages=[{"role": "user", "content": "Write a haiku about routers."}],\n) as stream:\n    for text in stream.text_stream:\n        print(text, end="", flush=True)`,
-      node: `import Anthropic from "@anthropic-ai/sdk";\n\n// The Anthropic SDK appends /v1/messages itself, so use the bare origin.\nconst client = new Anthropic({ baseURL: "${origin}", apiKey: process.env.XR_API_KEY ?? "${KEY}" });\n\nconst msg = await client.messages.create({\n  model: "grok-4.3",\n  max_tokens: 1024,\n  messages: [{ role: "user", content: "What is the meaning of life?" }],\n});\nconsole.log(msg.content[0].text);`,
+      python: `import anthropic\n\n# The Anthropic SDK appends /v1/messages itself, so use the bare origin.\nclient = anthropic.Anthropic(\n    base_url="${origin}",\n    api_key="${KEY}",\n)\n\nmsg = client.messages.create(\n    model="grok-4.3",\n    max_tokens=1024,\n    messages=[{"role": "user", "content": "What is the meaning of life?"}],\n)\nprint(msg.content[0].text)\n\n# Streaming\nwith client.messages.stream(\n    model="grok-4.3",\n    max_tokens=1024,\n    messages=[{"role": "user", "content": "Write a haiku about routers."}],\n) as stream:\n    for text in stream.text_stream:\n        print(text, end="", flush=True)`,
+      node: `import Anthropic from "@anthropic-ai/sdk";\n\n// The Anthropic SDK appends /v1/messages itself, so use the bare origin.\nconst client = new Anthropic({\n  baseURL: "${origin}",\n  apiKey: process.env.XR_API_KEY ?? "${KEY}",\n});\n\nconst msg = await client.messages.create({\n  model: "grok-4.3",\n  max_tokens: 1024,\n  messages: [{ role: "user", content: "What is the meaning of life?" }],\n});\nconsole.log(msg.content[0].text);`,
       curl: `curl ${base}/messages \\\n  -H "x-api-key: ${KEY}" \\\n  -H "anthropic-version: 2023-06-01" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "model": "grok-4.3",\n    "max_tokens": 1024,\n    "messages": [{"role": "user", "content": "What is the meaning of life?"}]\n  }'`,
     },
     responses: {
       curl: `curl ${base}/responses \\\n  -H "Authorization: Bearer ${KEY}" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "model": "grok-4.3",\n    "input": "Summarize the plot of Hamlet in two sentences."\n  }'`,
-      python: `from openai import OpenAI\n\nclient = OpenAI(base_url="${base}", api_key="${KEY}")\n\nresp = client.responses.create(\n    model="grok-4.3",\n    input="Summarize the plot of Hamlet in two sentences.",\n)\nprint(resp.output_text)`,
+      python: `from openai import OpenAI\n\nclient = OpenAI(\n    base_url="${base}",\n    api_key="${KEY}",\n)\n\nresp = client.responses.create(\n    model="grok-4.3",\n    input="Summarize the plot of Hamlet in two sentences.",\n)\nprint(resp.output_text)`,
     },
     admin: `curl ${origin}/api/v1/stats/overview?range=24h \\\n  -H "Authorization: Bearer xra-…"`,
   };
@@ -187,7 +187,7 @@ function renderAdmin(el, ctx, sn) {
   const authBar = h('div', { class: 'docs-auth' }, icon('shield', 15),
     h('span', null, t('docs.authPre'), ' ', h('code', { class: 'mono' }, 'Authorization: Bearer xra-…'), t('docs.authPost')),
     h('a', { class: 'docs-yaml mono', href: './openapi.yaml', target: '_blank', rel: 'noopener' }, 'openapi.yaml', icon('download', 14)));
-  const example = h('details', { class: 'docs-example' }, h('summary', null, t('docs.example')), codeBlock(sn.admin));
+  const example = h('details', { class: 'docs-example' }, h('summary', null, icon('chevronRight', 16), h('span', null, t('docs.example'))), codeBlock(sn.admin));
   const nav = h('nav', { class: 'docs-ref-nav', 'aria-label': t('docs.sections') });
   const host = h('div', { class: 'swagger-host' });
   const status = h('div', { class: 'swagger-status' }, spinner(18), h('span', { class: 'muted' }, t('docs.loadingRef')));
@@ -201,16 +201,40 @@ function renderAdmin(el, ctx, sn) {
   function buildNav(tries = 30) {
     const secs = [...host.querySelectorAll('.opblock-tag-section')];
     if (!secs.length) { if (tries > 0 && ctx.alive()) setTimeout(() => buildNav(tries - 1), 200); return; }
-    nav.replaceChildren(...secs.map((s) => {
+    const items = secs.map((s, i) => {
       const tag = s.querySelector('.opblock-tag');
       const name = (tag && (tag.getAttribute('data-tag') || tag.textContent) || '').trim();
-      return h('a', { class: 'docs-ref-item', href: '#/docs?tab=admin', onclick: (e) => {
+      return h('a', { class: `docs-ref-item${i === 0 ? ' active' : ''}`, href: '#/docs?tab=admin', 'aria-current': i === 0 ? 'true' : null, onclick: (e) => {
         e.preventDefault();
-        nav.querySelectorAll('.docs-ref-item').forEach((x) => x.classList.toggle('active', x === e.currentTarget));
+        setActive(i);
+        pinned = Date.now() + 900; // let the smooth scroll settle before scroll-tracking takes over again
         s.scrollIntoView({ behavior: 'smooth', block: 'start' });
       } }, name);
-    }));
+    });
+    nav.replaceChildren(...items);
+    const setActive = (idx) => items.forEach((x, i) => {
+      x.classList.toggle('active', i === idx);
+      if (i === idx) x.setAttribute('aria-current', 'true'); else x.removeAttribute('aria-current');
+    });
+    // Highlight the group whose header is at or above the top third of the viewport.
+    let pinned = 0;
+    let raf = 0;
+    const track = () => {
+      raf = 0;
+      if (!ctx.alive() || !host.isConnected) { window.removeEventListener('scroll', onScroll, true); return; }
+      if (Date.now() < pinned) return;
+      const line = window.innerHeight / 3;
+      let idx = 0;
+      secs.forEach((s, i) => { if (s.getBoundingClientRect().top <= line) idx = i; });
+      const se = document.scrollingElement || document.documentElement;
+      if (se.scrollTop > 0 && se.scrollTop + window.innerHeight >= se.scrollHeight - 4) idx = secs.length - 1;
+      setActive(idx);
+    };
+    const onScroll = () => { if (!raf) raf = requestAnimationFrame(track); };
+    window.addEventListener('scroll', onScroll, { capture: true, passive: true });
+    stopTracking = () => window.removeEventListener('scroll', onScroll, true);
   }
+  let stopTracking = () => {};
 
   loadSwagger().then((SwaggerUIBundle) => {
     if (!ctx.alive()) return;
@@ -238,5 +262,5 @@ function renderAdmin(el, ctx, sn) {
     status.replaceChildren(icon('alert', 18), h('span', null, `${t('docs.loadFailed')} — ${e.message}`), button(t('common.retry'), { size: 'sm', onClick: () => ctx.navigate('#/docs?tab=admin&r=' + Date.now()) }));
   });
 
-  return () => document.removeEventListener('xr:themechange', applyTheme);
+  return () => { document.removeEventListener('xr:themechange', applyTheme); stopTracking(); };
 }
