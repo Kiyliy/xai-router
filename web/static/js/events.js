@@ -200,6 +200,8 @@ export function requestReason(r) {
   if (/at their concurrency or rate limit/i.test(raw)) return k('keysBusy');
   if (/stream idle timeout/i.test(raw)) return k('idleTimeout');
   if (/timeout|timed out|deadline exceeded/i.test(raw)) return k('timeout');
+  // A failed connection to xAI comes back as 502; say so before the generic 5xx reason.
+  if (!/^HTTP \d{3}/.test(raw) && /\bEOF\b|connection (reset|refused)|reset by peer|\bdial\b|no such host|\btls\b|x509|certificate/i.test(raw)) return k('network');
   if (s === 401 || s === 403) return k('upstreamAuth');
   if (s === 429) return k('upstreamRate');
   if (s >= 500) return k('upstream5xx');

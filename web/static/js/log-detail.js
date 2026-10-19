@@ -8,7 +8,7 @@ import {
 import { icon } from './icons.js';
 import { t } from './i18n.js';
 import { get } from './api.js';
-import { toast, toastError, badge, copyButton, busy, tabs, kv } from './ui.js';
+import { toast, toastError, badge, copyButton, busy, tabs, kv, statusCode, statusDot, bigNum, menuButton } from './ui.js';
 import { cred } from './detail-drawer.js';
 import {
   actionLabel, actorLabel, targetTypeLabel, targetText, targetHint, eventSentence, levelBadge, requestReason, tokenCats, usdT,
@@ -20,7 +20,6 @@ if (!document.querySelector('link[href$="logs-v041.css"]')) {
   document.head.appendChild(h('link', { rel: 'stylesheet', href: new URL('../logs-v041.css', import.meta.url).href }));
 }
 
-const ACTION_VARIANT ={ success: 'success', retry: 'warning', return: 'neutral', cooldown: 'warning', disable: 'danger', verify: 'warning' };
 
 export function statusBadge(code) {
   return badge(code ? String(code) : t('lg.failed'), statusClass(code), { class: 'badge-status mono' });
@@ -178,34 +177,6 @@ function pane(title, tabItems, copyGetter, copyLabel) {
     h('div', { class: 'pane-title' }, h('span', null, title), copyGetter ? copyButton(copyGetter, { label: copyLabel }) : null),
     tabs(tabItems, { cls: 'tabs-sm' }));
 }
-
-function attemptsView(d) {
-  const at = (d.upstream_attempts || []).slice().sort((a, b) => (a.seq || 0) - (b.seq || 0));
-  if (!at.length) return null;
-  const starts = at.map((a) => (a.started_at ? new Date(a.started_at).getTime() : NaN));
-  const valid = starts.every((x) => !isNaN(x));
-  const t0 = valid ? Math.min(...starts) : 0;
-  let acc = 0;
-  const offs = at.map((a, i) => { if (valid) return starts[i] - t0; const o = acc; acc += a.latency_ms || 0; return o; });
-  const span = Math.max(1, ...at.map((a, i) => offs[i] + (a.latency_ms || 0)));
-  return h('div', { class: 'attempts' },
-    at.map((a, i) => {
-      const v = a.status ? statusClass(a.status) : 'danger';
-      const left = (offs[i] / span) * 100, width = Math.max(0.8, ((a.latency_ms || 0) / span) * 100);
-      const ttfbW = a.latency_ms ? Math.min(100, ((a.ttfb_ms || 0) / a.latency_ms) * 100) : 0;
-      return h('div', { class: `attempt attempt-${v}` },
-        h('div', { class: 'attempt-rail' }, h('span', { class: 'attempt-num' }, String(a.seq ?? i + 1))),
-        h('div', { class: 'attempt-main' },
-          h('div', { class: 'attempt-head' },
-            h('span', { class: 'strong' }, a.key_name || (a.key_id != null ? `#${a.key_id}` : '—')),
-            a.status ? statusBadge(a.status) : badge(t('logs.networkError'), 'danger'),
-            a.action ? badge(t(`action.${a.action}`) || a.action, ACTION_VARIANT[a.action] || 'neutral', { class: 'badge-outline' }) : null,
-            h('span', { class: 'attempt-times mono muted' }, `+${fmtMs(offs[i])}`, t('lg.sep'), h('span', { title: t('logs.ttfbUpstreamHint') }, `${t('logs.ttfbUpstream')} ${fmtMs(a.ttfb_ms)}`), t('lg.sep'), `${t('common.latency')} ${fmtMs(a.latency_ms)}`)),
-          a.error ? h('div', { class: 'attempt-error' }, a.error) : null,
-          h('div', { class: 'waterfall' }, h('div', { class: `wf-bar wf-${v}`, style: { left: `${left}%`, width: `${width}%` } }, h('div', { class: 'wf-ttfb', style: { width: `${ttfbW}%` } })))));
-    }));
-}
-
 
 async function copyCurl(id, btn) {
   await busy(btn, async () => {
@@ -378,7 +349,7 @@ function costSection(d) {
   });
   // Reasoning: an indented sub-row of output (billed at the output price).
   body.push(h('tr', { class: 'cost-sub', 'data-k': 'reasoning' },
-    h('td', null, `└ ${t('lg.tok.reasoning')}`),
+    h('td', null, `↳ ${t('ld5.ofReasoning')}`),
     h('td', { class: 'num mono' }, c.reasoningKnown ? fmtInt(c.reasoning) : h('span', { class: 'muted' }, '—')),
     snap ? h('td', { class: 'num muted small' }, t('lg.cost.inOutput')) : null,
     snap ? h('td') : null));
@@ -406,127 +377,239 @@ function costSection(d) {
     snap ? null : h('div', { class: 'muted small cost-note' }, t('lg.cost.noSnapshot')));
 }
 
-// ---------- request detail ----------
+// ---------- request detail (v0.5, Figma 14/15) ----------
+/** Why one upstream attempt failed, in plain words ("密钥无效", "被限流"). */
+function attemptWhy(a) {
+  const s = a.status || 0;
+  const raw = a.error || '';
+  if (s === 401 || s === 403 || a.action === 'disable' || a.action === 'verify') return t('ld5.att.auth');
+  if (s === 429) return t('ld5.att.rate');
+  if (/timeout|timed out|deadline/i.test(raw)) return t('ld5.att.timeout');
+  if (!s || /\bEOF\b|connection (reset|refused)|\bdial\b|no such host|\btls\b/i.test(raw)) return t('ld5.att.network');
+  if (s >= 500) return t('ld5.att.server');
+  return t('ld5.att.other', { c: s });
+}
+/** "被限流，冷却 60 秒" style effect of a failed attempt on its upstream key. */
+function attemptEffect(a) {
+  if (a.action === 'disable') return t('ld5.att.disabled');
+  if (a.action === 'cooldown') return a.cooldown_seconds ? t('ld5.att.cooldownN', { n: a.cooldown_seconds }) : t('ld5.att.cooldown');
+  return '';
+}
+const attemptsOf = (d) => (d.upstream_attempts || []).slice().sort((a, b) => (a.seq || 0) - (b.seq || 0));
+const attKey = (a) => a.key_name || (a.key_id != null ? `#${a.key_id}` : '—');
+const isOk = (s) => s === 101 || (s >= 200 && s < 400);
+
+/** "第 3 次尝试成功。前两次：prod-07 密钥无效（已自动禁用），prod-03 被限流（冷却 60 秒）。" */
 function conclusion(d) {
-  const ok = d.status === 101 || (d.status >= 200 && d.status < 400);
-  const at = d.upstream_attempts || [];
-  if (ok) {
-    const disabled = at.filter((a) => a.action === 'disable' || a.action === 'verify');
-    if (disabled.length) return { text: t('lg.okAfterDisable', { n: at.length - 1 }), tone: 'warning' };
-    if (at.length > 1) return { text: t('lg.okAfterRetry', { n: at.length - 1 }), tone: 'warning' };
-    return { text: t('lg.ok'), tone: 'success' };
+  const at = attemptsOf(d);
+  const failed = at.filter((a) => !isOk(a.status));
+  const prev = failed.length ? t(failed.length === 1 ? 'ld5.prev1' : 'ld5.prevN', { n: failed.length }) + failed.map((a) => {
+    const eff = attemptEffect(a);
+    return `${attKey(a)} ${attemptWhy(a)}${eff ? t('ld5.paren', { x: eff }) : ''}`;
+  }).join(t('lg.sep')) + t('ld5.stop') : '';
+  if (isOk(d.status)) {
+    const n = Math.max(d.attempts || 0, at.length);
+    return { text: n > 1 ? `${t('lg5.okAttempt', { n })}${t('ld5.stop')}${prev}` : `${t('lg.ok')}${t('ld5.stop')}`, tone: n > 1 ? 'warning' : 'success' };
   }
   const r = requestReason(d);
-  return { text: r ? r.text : t('lg.failed'), tone: d.status >= 500 || !d.status ? 'danger' : 'warning', link: r && r.link };
+  return { text: `${r ? r.text : t('lg.failed')}${t('ld5.stop')}${at.length > 1 ? prev : ''}`, tone: d.status >= 500 || !d.status ? 'danger' : 'warning', link: r && r.link };
 }
 
 const navLink = (node, hash, title) => h('a', { href: hash, class: 'link', title: title || null, onclick: (e) => e.stopPropagation() }, node);
+const splitUnit = (s) => { const m = /^([-\d.,$]+)\s*(.*)$/.exec(String(s)); return m ? [m[1], m[2]] : [String(s), '']; };
+
+/** Drawer title: status code, tries, method and path. */
+export function requestTitle(d) {
+  return h('span', { class: 'ld5-title' }, statusCode(d.status),
+    (d.attempts || 0) > 1 ? h('span', { class: 'ld5-tries', title: t('logs.retriedN', { n: d.attempts }) }, `×${d.attempts}`) : null,
+    h('span', { class: 'ld5-method' }, d.method || 'GET'), h('span', { class: 'ld5-path' }, d.path || ''));
+}
+
+/** Header actions: copy as curl, and a menu with the other copy actions. */
+export function requestActions(d) {
+  const curlBtn = h('button', { class: 'btn btn-sm', type: 'button', 'data-copy': 'curl', onclick: (e) => copyCurl(d.id, e.currentTarget) }, icon('terminal', 14), h('span', null, t('logs.copyCurl')));
+  const copy = async (text, okMsg) => { const ok = await copyText(text || ''); toast(ok ? okMsg : t('common.copyFailed'), ok ? 'success' : 'error', 2000); };
+  const menu = menuButton(() => [
+    { icon: 'copy', label: t('logs.copyReq'), onClick: () => copy(d.request_body, t('common.copied')) },
+    { icon: 'copy', label: t('logs.copyRes'), onClick: () => copy(d.response_body, t('common.copied')) },
+    d.response_text ? { icon: 'copy', label: t('lg.copyText'), onClick: () => copy(d.response_text, t('common.copied')) } : null,
+    d.request_id ? { icon: 'copy', label: t('logs.copyReqId'), onClick: () => copy(d.request_id, t('common.copied')) } : null,
+  ], t('common.actions'));
+  return [curlBtn, menu];
+}
+
+/** Header block under the title: the conclusion and two meta lines. */
+export function requestHead(d) {
+  const con = conclusion(d);
+  const tokPfx = d.token_prefix ? `${d.token_prefix}…` : '';
+  const m = (label, val) => (val ? h('span', { class: 'ld5-m' }, h('span', { class: 'ld5-ml' }, label), val) : null);
+  const idv = (v, label) => (v ? h('span', { class: 'ld5-id' }, h('span', { class: 'mono' }, v), copyButton(v, { iconOnly: true, label })) : null);
+  const moreBody = h('div', { class: 'ld5-morebody', hidden: true }, kv([
+    [t('logs.clientIp'), d.client_ip ? h('span', { class: 'mono' }, d.client_ip) : null],
+    [t('logs.userAgent'), d.user_agent ? h('span', { class: 'mono small break' }, d.user_agent) : null],
+    d.query ? [t('logs.query'), h('span', { class: 'mono small break' }, d.query)] : null,
+  ]));
+  const moreBtn = h('button', { type: 'button', class: 'ld5-more', 'aria-expanded': 'false', onclick: (e) => {
+    moreBody.hidden = !moreBody.hidden; e.currentTarget.setAttribute('aria-expanded', moreBody.hidden ? 'false' : 'true');
+  } }, t('ld5.more'), icon('chevronDown', 12));
+  return h('div', { class: 'ld5-head' },
+    h('div', { class: `ld5-con ld-${con.tone}` }, con.text, con.link ? h('a', { class: 'link', href: con.link.hash }, ` ${con.link.label} →`) : null),
+    h('div', { class: 'ld5-meta' },
+      m(t('logs.time'), h('span', { class: 'mono', title: relTime(d.created_at) }, fmtDateTime(d.created_at))),
+      m(t('common.model'), d.model ? h('span', { class: 'mono' }, d.model, d.stream ? h('span', { class: 'stream-tag' }, t('lg.stream')) : null, d.websocket ? h('span', { class: 'stream-tag' }, 'WebSocket') : null) : null),
+      m(t('ld5.token'), d.token_name ? (d.token_id != null ? navLink(d.token_name, `#/tokens?open=${d.token_id}`, `${t('lg.openToken')}: ${d.token_name} ${tokPfx}`) : d.token_name) : null),
+      m(t('common.key'), d.key_name ? (d.key_id != null ? navLink(d.key_name, `#/keys?open=${d.key_id}`, t('lg.openKey')) : d.key_name) : null)),
+    h('div', { class: 'ld5-meta ld5-meta2' },
+      m(t('logs.requestId'), idv(d.request_id, t('logs.copyReqId'))),
+      m(t('ld5.upstreamId'), idv(d.upstream_id, t('lg.copyUpstreamId'))),
+      d.client_ip || d.user_agent || d.query ? moreBtn : null),
+    moreBody);
+}
+
+/** Four-cell band: latency, cost, tokens, upstream attempts. */
+function kpiBand(d) {
+  const cell = (label, value, sub, bar, cls) => h('div', { class: `ld5-kpi ${cls || ''}` }, h('div', { class: 'eyebrow' }, h('span', null, label)), value, bar || null, sub ? h('div', { class: 'ld5-kpi-sub' }, sub) : null);
+  const big = (s, accent) => { const [n, u] = splitUnit(s); return bigNum(n, { unit: u || undefined, size: 'md', accent }); };
+  const lat = d.latency_ms || 0;
+  const ttfbPct = lat && d.ttfb_ms ? Math.min(100, (d.ttfb_ms / lat) * 100) : 0;
+  const latBar = h('div', { class: 'ld5-bar' }, h('span', { class: 'ld5-bar-a', style: { width: `${ttfbPct}%` } }), h('span', { class: 'ld5-bar-b', style: { width: `${100 - ttfbPct}%` } }));
+  const c = tokenCats(d);
+  const tot = (c.input + c.image + (c.cacheWrite || 0) + c.cacheRead + c.output) || 1;
+  const seg = (n, k) => (n ? h('span', { class: `tok-sw ${k}`, style: { flex: `${n / tot} 1 0` } }) : null);
+  const tokBar = d.total_tokens ? h('div', { class: 'tok-bar ld5-tokbar' }, seg(c.input + c.image, 'in'), seg(c.cacheWrite, 'cw'), seg(c.cacheRead, 'cr'), seg(c.output, 'out')) : null;
+  const tokVal = d.images ? big(t('lg5.images', { n: d.images })) : d.video_seconds ? big(t('lg5.video', { n: d.video_seconds })) : big(d.total_tokens ? fmtInt(d.total_tokens) : '—');
+  const at = attemptsOf(d);
+  const n = Math.max(d.attempts || 0, at.length, 1);
+  const failed = at.filter((a) => !isOk(a.status)).length;
+  const attSub = isOk(d.status) ? (failed ? t('ld5.prevFailed', { n: failed }) : t('ld5.firstOk')) : t('ld5.allFailed');
+  return h('div', { class: 'hairline-grid ld5-band' },
+    cell(t('common.latency'), big(fmtMs(lat)), d.ttfb_ms ? h('span', { title: t('logs.ttfbClientHint') }, t('lg.ttfb', { v: fmtMs(d.ttfb_ms) })) : null, lat ? latBar : null),
+    cell(t('common.cost'), big(d.cost_usd ? fmtUSD(d.cost_usd) : (isOk(d.status) ? '$0' : '—')), d.cost_source ? t('ld5.costSrc', { s: t(`costsrc.${d.cost_source}`) || d.cost_source }) : null),
+    cell(t('lg5.tokGroup'), tokVal, d.total_tokens ? t('ld5.inOut', { i: fmtInt(c.input + c.image + c.cacheRead + (c.cacheWrite || 0)), o: fmtInt(c.output) }) : null, tokBar),
+    cell(t('logs.attemptsTimeline'), bigNum(String(n), { unit: t('ld5.timesUnit'), size: 'md' }), attSub, null, n > 1 ? 'is-warn' : ''));
+}
+
+/** Upstream attempts on one time axis (Figma 14): info on the left, the bar on the right. */
+function attemptsView(d) {
+  const at = attemptsOf(d);
+  if (!at.length) return null;
+  const starts = at.map((a) => (a.started_at ? new Date(a.started_at).getTime() : NaN));
+  const valid = starts.every((x) => !isNaN(x));
+  const t0 = valid ? Math.min(...starts) : 0;
+  let acc = 0;
+  const offs = at.map((a, i) => { if (valid) return starts[i] - t0; const o = acc; acc += a.latency_ms || 0; return o; });
+  const span = Math.max(1, ...at.map((a, i) => offs[i] + (a.latency_ms || 0)));
+  const ticks = [0, span / 2, span].map((v, i) => h('span', { class: 'ld5-tick', style: { left: `${(i / 2) * 100}%` } }, i ? fmtMs(v) : '0'));
+  return h('div', { class: 'ld5-att' },
+    h('div', { class: 'ld5-att-row ld5-att-axis' }, h('div'), h('div', { class: 'ld5-track' }, ticks)),
+    at.map((a, i) => {
+      const ok = isOk(a.status);
+      const v = ok ? 'ok' : a.status === 429 || (a.status >= 400 && a.status < 500 && a.status !== 401 && a.status !== 403) ? 'warn' : 'err';
+      const last = i === at.length - 1;
+      const sub = ok
+        ? (a.ttfb_ms ? t('ld5.att.okTtfb', { v: fmtMs(a.ttfb_ms) }) : t('lg.ok'))
+        : [attemptWhy(a), attemptEffect(a), last ? '' : t('ld5.att.next')].filter(Boolean).join(t('lg.sep'));
+      const left = (offs[i] / span) * 100, width = Math.max(0.8, ((a.latency_ms || 0) / span) * 100);
+      const ttfbW = a.latency_ms ? Math.min(100, ((a.ttfb_ms || 0) / a.latency_ms) * 100) : 0;
+      return h('div', { class: `ld5-att-row is-${v}` },
+        h('div', { class: 'ld5-att-info' },
+          h('div', { class: 'ld5-att-line' }, h('span', { class: 'ld5-att-n' }, String(a.seq ?? i + 1)), h('span', { class: 'ld5-att-key' }, attKey(a)),
+            statusCode(a.status), h('span', { class: 'ld5-att-ms mono' }, fmtMs(a.latency_ms))),
+          h('div', { class: 'ld5-att-sub', title: a.error || null }, sub)),
+        h('div', { class: 'ld5-track' }, h('div', { class: `ld5-wf is-${v}`, style: { left: `${left}%`, width: `${width}%` } }, h('span', { class: 'ld5-wf-ttfb', style: { width: `${ttfbW}%` } }))));
+    }),
+    at.some((a) => isOk(a.status) && a.ttfb_ms) ? h('div', { class: 'ld5-legend' }, h('span', { class: 'ld5-lg-a' }), t('ld5.lgWait'), h('span', { class: 'ld5-lg-b' }), t('ld5.lgBody')) : null);
+}
 
 export function requestDetailView(d, ctx = {}) {
   const isChat = /\/chat\/completions$/.test(d.path || '');
   const usageNote = d.stream && isChat && ctx.injectUsage !== false
     ? h('div', { class: 'pane-note' }, icon('info', 13), h('span', null, t('logs.includeUsageNote'))) : null;
-  const reqTabs = [
-    { id: 'body', label: t('logs.body'), render: () => bodyView(d.request_body, { truncated: d.truncated, note: usageNote, filename: `log-${d.id}-request.json` }) },
-    { id: 'headers', label: t('logs.headers'), count: Object.keys(d.request_headers || {}).length, render: () => headersView(d.request_headers) },
-  ];
-  const hdr = { id: 'headers', label: t('logs.headers'), count: Object.keys(d.response_headers || {}).length, render: () => headersView(d.response_headers) };
-  const resTabs = d.websocket
-    ? [{ id: 'messages', label: t('logs.wsMessages'), render: () => bodyView(d.response_body, { truncated: d.truncated, filename: `log-${d.id}-messages.json` }) },
-      ...(d.response_text ? [{ id: 'text', label: t('logs.text'), render: () => textView(d) }] : []), hdr]
-    : d.stream
-      ? [{ id: 'text', label: t('logs.text'), render: () => textView(d) },
-        { id: 'sse', label: t('lg.rawTab'), render: () => sseView(d.response_body, { filename: `log-${d.id}-response.sse.txt` }) }, hdr]
-      : [{ id: 'body', label: t('logs.body'), render: () => bodyView(d.response_body, { truncated: d.truncated, filename: `log-${d.id}-response.json` }) },
-        ...(d.response_text || d.reasoning_text ? [{ id: 'text', label: t('logs.text'), render: () => textView(d) }] : []), hdr];
-  const con = conclusion(d);
-  const tokPfx = d.token_prefix ? `${d.token_prefix}…` : '';
-  const idLine = (v, label) => (v ? h('span', { class: 'id-line' }, h('span', { class: 'mono small break' }, v), copyButton(v, { iconOnly: true, label })) : null);
-  const curlBtn = h('button', { class: 'btn btn-sm', type: 'button', 'data-copy': 'curl', onclick: (e) => copyCurl(d.id, e.currentTarget) }, icon('terminal', 14), h('span', null, t('logs.copyCurl')));
+  const bothHeaders = () => h('div', { class: 'ld5-hdrs' },
+    h('div', { class: 'eyebrow' }, h('span', null, t('logs.request'))), headersView(d.request_headers),
+    h('div', { class: 'eyebrow' }, h('span', null, t('logs.response'))), headersView(d.response_headers));
+  const hdrCount = Object.keys(d.request_headers || {}).length + Object.keys(d.response_headers || {}).length;
+  const allTabs = [
+    { id: 'req', label: t('logs.request'), render: () => bodyView(d.request_body, { truncated: d.truncated, note: usageNote, filename: `log-${d.id}-request.json` }) },
+    d.websocket
+      ? { id: 'res', label: t('logs.wsMessages'), render: () => bodyView(d.response_body, { truncated: d.truncated, filename: `log-${d.id}-messages.json` }) }
+      : !d.stream ? { id: 'res', label: t('logs.response'), render: () => bodyView(d.response_body, { truncated: d.truncated, filename: `log-${d.id}-response.json` }) } : null,
+    d.stream || d.response_text || d.reasoning_text ? { id: 'text', label: t('logs.text'), render: () => textView(d) } : null,
+    d.stream && !d.websocket ? { id: 'sse', label: t('logs.rawSse'), render: () => sseView(d.response_body, { filename: `log-${d.id}-response.sse.txt` }) } : null,
+    { id: 'headers', label: t('logs.headers'), count: hdrCount, render: bothHeaders },
+  ].filter(Boolean);
   const attempts = attemptsView(d);
-  const section = (title, body, extra) => h('section', { class: 'ld-section' }, h('h4', { class: 'ld-h' }, h('span', null, title), extra || null), body);
-  const more = h('details', { class: 'ld-more' }, h('summary', null, t('lg.more')), kv([
-    [t('logs.clientIp'), d.client_ip ? h('span', { class: 'mono' }, d.client_ip) : null],
-    [t('logs.userAgent'), d.user_agent ? h('span', { class: 'mono small break' }, d.user_agent) : null],
-    d.query ? [t('logs.query'), h('span', { class: 'mono small break' }, d.query)] : null,
-  ]));
-  return h('div', { class: 'log-detail' },
-    // 1. summary
-    section(t('lg.summary'), h('div', { class: 'ld-summary' },
-      h('div', { class: `ld-hero ld-${con.tone}` }, statusBadge(d.status),
-        (d.attempts || 0) > 1 ? badge(`×${d.attempts}`, 'warning', { class: 'badge-tries', title: t('logs.retriedN', { n: d.attempts }) }) : null,
-        h('span', { class: 'ld-conclusion' }, con.text),
-        con.link ? h('a', { class: 'link', href: con.link.hash }, `${con.link.label} →`) : null),
-      d.error ? h('div', { class: 'ld-raw' }, h('span', { class: 'muted small' }, t('lg.rawError')), h('code', { class: 'mono small break' }, d.error)) : null,
-      d.truncated ? h('div', { class: 'callout callout-warning' }, icon('alert', 16), h('span', null, t('logs.truncatedNotice'))) : null,
-      kv([
-        [t('logs.time'), h('span', null, fmtDateTime(d.created_at), h('span', { class: 'muted' }, ` · ${relTime(d.created_at)}`))],
-        [t('common.model'), d.model ? h('span', { class: 'mono' }, d.model, d.stream ? h('span', { class: 'stream-tag' }, t('lg.stream')) : null, d.websocket ? h('span', { class: 'stream-tag' }, 'WebSocket') : null) : null],
-        [t('common.token'), d.token_name ? (d.token_id != null ? navLink(cred(d.token_name, tokPfx), `#/tokens?open=${d.token_id}`, t('lg.openToken')) : cred(d.token_name, tokPfx)) : null],
-        [t('common.key'), d.key_name ? (d.key_id != null ? navLink(cred(d.key_name, ''), `#/keys?open=${d.key_id}`, t('lg.openKey')) : d.key_name) : null],
-        [t('logs.requestId'), idLine(d.request_id, t('logs.copyReqId'))],
-        [t('logs.upstreamId'), idLine(d.upstream_id, t('lg.copyUpstreamId'))],
-        [t('common.latency'), h('span', null, fmtMs(d.latency_ms), h('span', { class: 'muted', title: t('logs.ttfbClientHint') }, ` · ${t('lg.ttfb', { v: fmtMs(d.ttfb_ms) })}`))],
-      ]),
-      more,
-      h('div', { class: 'detail-actions' },
-        curlBtn,
-        copyButton(() => d.request_body || '', { label: t('logs.copyReq') }),
-        copyButton(() => d.response_body || '', { label: t('logs.copyRes') }),
-        copyButton(() => d.response_text || '', { label: t('lg.copyText') })))),
-    // 2. tokens & cost
+  const section = (title, body) => h('section', { class: 'ld-section ld5-sec' }, h('div', { class: 'eyebrow' }, h('span', null, title)), body);
+  return h('div', { class: 'log-detail ld5' },
+    d.error && !isOk(d.status) ? h('div', { class: 'ld-raw' }, h('span', { class: 'muted small' }, t('lg.rawError')), h('code', { class: 'mono small break' }, d.error)) : null,
+    d.truncated ? h('div', { class: 'callout callout-warning' }, icon('alert', 16), h('span', null, t('logs.truncatedNotice'))) : null,
+    kpiBand(d),
     section(t('lg.costTitle'), costSection(d)),
     d.websocket_session ? wsSessionView(d.websocket_session) : null,
-    // 3. upstream attempts
-    attempts ? section(t('logs.attemptsTimeline'), attempts, h('span', { class: 'count-pill' }, String((d.upstream_attempts || []).length))) : null,
-    // 4. request, 5. response
-    pane(t('logs.request'), reqTabs, null),
-    pane(t('logs.response'), resTabs, null));
+    attempts ? section(t('logs.attemptsTimeline'), attempts) : null,
+    h('div', { class: 'ld5-tabs' }, tabs(allTabs, { cls: 'tabs-sm' })));
 }
 
-// ---------- event detail ----------
+// ---------- event detail (v0.5, Figma 16) ----------
+/** "增加额度：客户端令牌 prod-app" */
+export function eventTitle(e) {
+  return e.target_type ? t('ld5.evTitle', { a: actionLabel(e.action), tt: targetTypeLabel(e.target_type), name: targetText(e) }) : actionLabel(e.action);
+}
+/** Type tag and level above the title. */
+export function eventKicker(e) {
+  return h('span', { class: 'ld5-kicker' }, h('span', { class: `type-tag-pill type-${e.type}` }, t(`lg.type.${e.type}`)), statusDot(t(`ev.level.${e.level || 'info'}`), e.level === 'error' ? 'danger' : e.level === 'warn' ? 'warning' : 'neutral'));
+}
+
 export function eventDetailView(e, ctx = {}) {
   const d = e.detail || {};
   const tt = e.target_type;
   const hint = targetHint(e);
-  const targetNode = h('span', null, h('span', { class: 'muted' }, `${targetTypeLabel(tt)} `), cred(targetText(e), hint));
-  const target = (tt === 'key' || tt === 'token') && e.target_id
-    ? navLink(targetNode, `#/${tt === 'key' ? 'keys' : 'tokens'}?open=${e.target_id}`, t(tt === 'key' ? 'lg.openKey' : 'lg.openToken'))
-    : targetNode;
-  const section = (title, body) => h('section', { class: 'ld-section' }, h('h4', { class: 'ld-h' }, h('span', null, title)), body);
-  const changes = d.changes && typeof d.changes === 'object' ? Object.entries(d.changes) : [];
+  const hasPage = (tt === 'key' || tt === 'token') && e.target_id;
+  const targetHash = hasPage ? `#/${tt === 'key' ? 'keys' : 'tokens'}?open=${e.target_id}` : '';
+  const targetNode = cred(targetText(e), hint);
+  const section = (title, body) => h('section', { class: 'ld-section ld5-sec' }, h('div', { class: 'eyebrow' }, h('span', null, title)), body);
   const isQuota = (e.action || '').startsWith('token.quota_');
+  // Before / after rows: field changes, or the quota change of a quota record.
+  let diffs = d.changes && typeof d.changes === 'object' ? Object.entries(d.changes).map(([f, c]) => [fieldLabel(tt, f), fmtChangeValue(c && c.before), fmtChangeValue(c && c.after)]) : [];
+  if (isQuota && !diffs.length) {
+    const lim = (unl, ticks) => (unl ? t('tokens.unlimitedState') : usdT(ticks));
+    diffs = [[t('ld5.quota'), lim(d.before_unlimited, d.before_ticks), lim(d.unlimited, d.after_ticks)]];
+    if (d.used_ticks != null && !d.unlimited) diffs.push([t('ld5.remaining'), d.before_unlimited ? '—' : usdT((d.before_ticks || 0) - (d.used_ticks || 0)), usdT((d.after_ticks || 0) - (d.used_ticks || 0))]);
+    const reason = quotaReasonText(d);
+    if (reason) diffs.push([t('q.h.reason'), '—', reason]);
+  }
   const result = d.result && typeof d.result === 'object' ? d.result : null;
-  const reqBtn = e.request_id && ctx.openRequest
-    ? h('button', { type: 'button', class: 'btn btn-sm', onclick: (ev) => ctx.openRequest(e.request_id, ev.currentTarget) }, icon('logs', 14), h('span', null, t('lg.openRequest')))
-    : null;
-  return h('div', { class: 'log-detail' },
-    section(t('lg.summary'), h('div', { class: 'ld-summary' },
-      h('div', { class: `ld-hero ld-${e.level === 'error' ? 'danger' : e.level === 'warn' ? 'warning' : 'info'}` }, levelBadge(e.level), h('span', { class: 'ld-conclusion' }, eventSentence(e))),
-      kv([
-        [t('logs.time'), h('span', null, fmtDateTime(e.created_at), h('span', { class: 'muted' }, ` · ${relTime(e.created_at)}`))],
-        [t('lg.col.type'), t(`lg.type.${e.type}`)],
-        [t('lg.col.action'), actionLabel(e.action)],
-        [t('lg.col.target'), tt ? target : null],
-        [t('lg.col.actor'), actorLabel(e)],
-        [t('lg.col.ip'), e.ip ? h('span', { class: 'mono' }, e.ip) : null],
-        [t('logs.requestId'), e.request_id ? h('span', { class: 'id-line' }, h('span', { class: 'mono small break' }, e.request_id), copyButton(e.request_id, { iconOnly: true })) : null],
-      ]))),
-    changes.length ? section(t('lg.changes'), h('table', { class: 'cost-table changes-table' },
+  const related = [];
+  if (hasPage) related.push(h('a', { class: 'ld5-rel', href: targetHash, onclick: (ev) => ev.stopPropagation() }, icon(tt === 'key' ? 'key' : 'ticket', 15),
+    h('span', { class: 'ld5-rel-main' }, h('span', null, t('ld5.openTarget', { tt: targetTypeLabel(tt), name: targetText(e) })), hint ? h('span', { class: 'ld5-rel-sub mono' }, hint) : null), icon('external', 13)));
+  if (e.request_id && ctx.openRequest) related.push(h('button', { type: 'button', class: 'ld5-rel', onclick: (ev) => ctx.openRequest(e.request_id, ev.currentTarget) }, icon('logs', 15),
+    h('span', { class: 'ld5-rel-main' }, h('span', null, t('lg.openRequest')), h('span', { class: 'ld5-rel-sub mono' }, e.request_id)), icon('chevronRight', 13)));
+  const rawBytes = utf8Bytes(JSON.stringify(e));
+  const raw = h('details', { class: 'ld5-raw' },
+    h('summary', null, icon('chevronRight', 13), h('span', null, t('ld5.raw')), h('span', { class: 'muted' }, fmtBytes(rawBytes)), h('span', { class: 'pane-meta-spacer' }),
+      copyButton(() => JSON.stringify(e, null, 2), { iconOnly: true, label: t('common.copy') })),
+    jsonBlock(e, `event-${e.id}.json`));
+  const row = (k, v) => (v == null || v === '' ? null : h('div', { class: 'ld5-kv-row' }, h('div', { class: 'ld5-kv-k' }, k), h('div', { class: 'ld5-kv-v' }, v)));
+  return h('div', { class: 'log-detail ld5 ld5-ev' },
+    section(t('lg.summary'), h('div', { class: 'ld5-kv' },
+      row(t('logs.time'), h('span', { class: 'mono', title: relTime(e.created_at) }, fmtDateTime(e.created_at))),
+      row(t('lg.col.actor'), actorLabel(e)),
+      row(t('lg.col.ip'), e.ip ? h('span', { class: 'mono' }, e.ip) : null),
+      row(t('lg.col.target'), tt ? (hasPage ? navLink(targetNode, targetHash, t(tt === 'key' ? 'lg.openKey' : 'lg.openToken')) : targetNode) : null),
+      row(t('lg.col.action'), actionLabel(e.action)),
+      row(t('logs.requestId'), e.request_id ? h('span', { class: 'ld5-id' }, h('span', { class: 'mono' }, e.request_id), copyButton(e.request_id, { iconOnly: true })) : null))),
+    diffs.length ? section(t('ld5.diff'), h('table', { class: 'ld5-diff' },
       h('thead', null, h('tr', null, h('th', null, t('lg.field')), h('th', null, t('lg.before')), h('th', null, t('lg.after')))),
-      h('tbody', null, changes.map(([f, c]) => h('tr', null, h('td', null, fieldLabel(tt, f)),
-        h('td', { class: 'mono small break' }, fmtChangeValue(c && c.before)), h('td', { class: 'mono small break' }, fmtChangeValue(c && c.after))))))) : null,
-    isQuota ? section(t('lg.quotaRecord'), kv([
-      [t('q.h.amount'), usdT(d.amount_ticks)],
-      [t('q.h.before'), d.before_unlimited ? t('tokens.unlimitedState') : usdT(d.before_ticks)],
-      [t('q.h.after'), d.unlimited ? t('tokens.unlimitedState') : usdT(d.after_ticks)],
-      [t('q.h.used'), usdT(d.used_ticks)],
-      [t('q.h.reason'), d.reason || null],
-    ])) : null,
-    result ? section(t('lg.result'), kv(Object.entries(result).map(([k, v]) => [k, h('span', { class: 'mono small break' }, fmtChangeValue(v))]))) : null,
+      h('tbody', null, diffs.map(([f, b, a]) => h('tr', null, h('td', null, f), h('td', null, h('span', { class: 'diff-del mono' }, b)), h('td', null, h('span', { class: 'diff-add mono' }, a))))))) : null,
+    result ? section(t('lg.result'), kv(Object.entries(result).map(([k, v]) => [fieldLabel('', k), h('span', { class: 'mono small break' }, fmtChangeValue(v))]))) : null,
     d.error ? section(t('lg.rawError'), h('code', { class: 'mono small break' }, d.error)) : null,
-    reqBtn ? section(t('lg.related'), h('div', { class: 'detail-actions' }, reqBtn)) : null,
-    h('details', { class: 'ld-more ld-raw-json' }, h('summary', null, t('lg.rawJson')), jsonBlock(e, `event-${e.id}.json`)));
+    related.length ? section(t('lg.related'), h('div', { class: 'ld5-rels' }, related)) : null,
+    raw);
+}
+function quotaReasonText(d) {
+  if (d.reason_code === 'pre_v0_4_1') return t('ev.q.codePre');
+  if (d.reason_code === 'reset_folded') return t('ev.q.codeReset');
+  return d.reason || '';
 }
 
 /** Find the request log of a request id and return its id (null when it was purged). */

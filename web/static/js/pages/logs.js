@@ -14,7 +14,9 @@ import {
   segmented, switchEl, button, spinner, errorMessage,
 } from '../ui.js';
 import { cred, credText } from '../detail-drawer.js';
-import { statusBadge, methodTag, requestDetailView, eventDetailView, findRequestLog } from '../log-detail.js';
+import {
+  statusBadge, methodTag, requestDetailView, eventDetailView, findRequestLog, requestTitle, requestHead, requestActions, eventTitle, eventKicker,
+} from '../log-detail.js';
 import {
   actionLabel, actorLabel, targetTypeLabel, targetText, targetHint, eventSentence, typeTag, levelDot, requestReason, tokenCats,
 } from '../events.js';
@@ -292,9 +294,10 @@ export function render(el, ctx) {
   };
   // Error rows get the 2px red line: server-side failures and error-level records, not client 4xx.
   const isErr = (r) => (r.type === 'request' || r.type === undefined ? (!r.status || r.status >= 500) : r.level === 'error');
-  const okText = (r) => ((r.attempts || 0) > 1 ? t('lg5.okAttempt', { n: r.attempts })
+  // The token total only where the four token columns are not shown (pm-spec 10.8 #54).
+  const okText = (r, withTokens = true) => ((r.attempts || 0) > 1 ? t('lg5.okAttempt', { n: r.attempts })
     : r.images ? t('lg5.images', { n: r.images }) : r.video_seconds ? t('lg5.video', { n: r.video_seconds })
-      : r.total_tokens ? t('lg5.okTokens', { n: fmtInt(r.total_tokens) }) : t('lg5.ok'));
+      : withTokens && r.total_tokens ? t('lg5.okTokens', { n: fmtInt(r.total_tokens) }) : t('lg5.ok'));
   function tokCells(r) {
     const td = (cls, ...kids) => h('td', { class: `num col-tk ${cls || ''}` }, ...kids);
     if (r.images || r.video_seconds) return [td(), td(), td(), td('muted small nowrap', t(r.images ? 'lg5.perImage' : 'lg5.perSecond'))];
@@ -302,7 +305,7 @@ export function render(el, ctx) {
     const c = tokenCats(r);
     const v = (n, cls) => (n == null ? h('span', { class: 'muted', title: t('lg.tok.cacheWriteTip') }, '—') : h('span', { class: 'tk' }, h('span', { class: `tok-sw ${cls}` }), fmtInt(n)));
     return [td('', v(c.input + c.image, 'in')), td('', v(c.cacheWrite, 'cw')), td('', v(c.cacheRead, 'cr')),
-      td('', h('div', null, v(c.output, 'out')), h('div', { class: 'cell-sub nowrap' }, c.reasoningKnown ? t('lg.inclReasoning', { n: fmtInt(c.reasoning) }) : t('lg5.reasoningUnknown')))];
+      td('', h('div', null, v(c.output, 'out')), h('div', { class: 'cell-sub nowrap' }, c.reasoningKnown ? t('lg.inclReasoning', { n: fmtInt(c.reasoning) }) : t('lg5.noReasoning')))];
   }
   function tok4(r) {
     if (r.images) return h('span', null, `${r.images} ${t('logs.imgShort')}`);
@@ -354,7 +357,7 @@ export function render(el, ctx) {
       tr.append(timeCell(r),
         h('td', { class: 'cell-req m-title' }, reqLine(r)),
         h('td', { class: 'col-status m-badge' }, h('div', { class: 'lg-sum' }, statusBadge(r.status), tries(r),
-          h('span', { class: 'lg-sum-text', title: rr ? (rr.raw || rr.text) : null }, rr ? rr.text : okText(r)))),
+          h('span', { class: 'lg-sum-text', title: rr ? (rr.raw || rr.text) : null }, rr ? rr.text : okText(r, false)))),
         h('td', { class: 'truncate-cell m-meta m-who' }, h('div', { class: 'truncate' }, tokenLink(r)), h('div', { class: 'cell-sub truncate' }, keyLink(r))),
         ...tokCells(r),
         h('td', { class: 'num mono m-meta col-cost' }, r.cost_usd ? fmtUSD(r.cost_usd) : h('span', { class: 'muted' }, r.status >= 400 || !r.status ? '—' : '$0')),
@@ -470,8 +473,8 @@ export function render(el, ctx) {
       if (cur && !items.some((x) => String(x.id) === String(cur))) opts.push(h('option', { value: cur, selected: true }, `#${cur}`));
       sel.replaceChildren(...opts);
     };
-    if (ks.status === 'fulfilled') { keyList = ks.value.data || []; fill(keySel, keyList, t('logs.anyKey'), st.key_id, (x) => x.key_masked || ''); }
-    if (ts.status === 'fulfilled') { tokenList = ts.value.data || []; fill(tokenSel, tokenList, t('logs.anyToken'), st.token_id, (x) => (x.prefix ? `${x.prefix}…` : '')); }
+    if (ks.status === 'fulfilled') { keyList = ks.value.data || []; fill(keySel, keyList, t('common.key'), st.key_id, (x) => x.key_masked || ''); }
+    if (ts.status === 'fulfilled') { tokenList = ts.value.data || []; fill(tokenSel, tokenList, t('common.token'), st.token_id, (x) => (x.prefix ? `${x.prefix}…` : '')); }
     if (ms.status === 'fulfilled') { modelList = (ms.value.data || []).map((m) => m.id); dlModels.replaceChildren(...modelList.map((m) => h('option', { value: m }))); }
     if (as.status === 'fulfilled') {
       const ats = Array.isArray(as.value) ? as.value : (as.value && as.value.data) || [];
@@ -493,20 +496,33 @@ export function render(el, ctx) {
     const prev = h('button', { class: 'btn btn-ghost btn-icon', title: `${t('logs.newer')} (↑ / k)`, 'aria-label': t('logs.newer'), disabled: idx <= 0, onclick: () => step(-1) }, icon('chevronLeft', 17));
     const next = h('button', { class: 'btn btn-ghost btn-icon', title: `${t('logs.older')} (↓ / j)`, 'aria-label': t('logs.older'), disabled: idx < 0 || idx >= st.rows.length - 1, onclick: () => step(1) }, icon('chevronRight', 17));
     const loadingBody = h('div', { class: 'drawer-loading' }, spinner(22), h('span', { class: 'muted' }, t('common.loading')));
+    const extra = h('span', { class: 'ld5-acts' });
     if (drawer) {
       drawer.setTitle(titleText); drawer.setBody(loadingBody);
       const acts = drawer.el.querySelector('.modal-header-actions');
-      acts.replaceChildren(prev, next, acts.querySelector(':scope > button:last-child'));
+      acts.replaceChildren(extra, prev, next, acts.querySelector(':scope > button:last-child'));
     } else {
       drawer = openModal({
-        kind: 'drawer', size: 'xl', title: titleText, subtitle: sub || ' ', body: loadingBody, headerExtra: [prev, next],
+        kind: 'drawer', size: 'lg', title: titleText, subtitle: sub || ' ', body: loadingBody, headerExtra: [extra, prev, next],
         onClose: () => { drawer = null; st.openId = null; st.openEvent = null; nextDetailSignal.abort(); syncParams(); markActive(); document.removeEventListener('keydown', onKey); },
       });
       document.addEventListener('keydown', onKey);
     }
     const s = drawer.el.querySelector('.modal-subtitle');
     if (s) s.textContent = sub || '';
+    drawerPanel().classList.add('ld5-drawer');
+    drawer.extra = extra;
     return drawer;
+  }
+  const drawerPanel = () => (drawer.el.matches('.drawer-panel') ? drawer.el : drawer.el.querySelector('.drawer-panel') || drawer.el);
+  /** v0.5 drawer header: a title node, the block under it and the header actions. */
+  function paintDrawerHead(kind, titleNode, headNode, actions) {
+    const panel = drawerPanel();
+    panel.classList.toggle('ld5-req', kind === 'req');
+    panel.classList.toggle('ld5-evd', kind === 'ev');
+    drawer.el.querySelector('.modal-title')?.replaceChildren(titleNode);
+    drawer.el.querySelector('.modal-subtitle')?.replaceChildren(headNode);
+    drawer.extra.replaceChildren(...(actions || []));
   }
   function curIndex() {
     return st.rows.findIndex((r) => (r.type === 'request' || !r.type ? r.id === st.openId && !st.openEvent : r.id === st.openEvent));
@@ -519,9 +535,7 @@ export function render(el, ctx) {
     try {
       const d = await get(`/api/v1/logs/${id}`, null, { signal });
       if (drawer !== d0 || st.openId !== id) return;
-      drawer.setTitle(`${d.method || 'GET'} ${d.path || ''}`);
-      const sub = drawer.el.querySelector('.modal-subtitle');
-      if (sub) sub.textContent = `${fmtDateTime(d.created_at)} · ${relTime(d.created_at)}${d.model ? ' · ' + d.model : ''}`;
+      paintDrawerHead('req', requestTitle(d), requestHead(d), requestActions(d));
       drawer.setBody(requestDetailView(d, { injectUsage }));
       drawer.body.scrollTop = 0;
     } catch (e) {
@@ -538,9 +552,7 @@ export function render(el, ctx) {
     try {
       const e = await get(`/api/v1/events/${id}`, null, { signal });
       if (drawer !== d0 || st.openEvent !== id) return;
-      drawer.setTitle(actionLabel(e.action));
-      const sub = drawer.el.querySelector('.modal-subtitle');
-      if (sub) sub.textContent = `${fmtDateTime(e.created_at)} · ${relTime(e.created_at)} · ${t(`lg.type.${e.type}`)}`;
+      paintDrawerHead('ev', h('span', { class: 'ld5-evtitle' }, eventKicker(e), h('span', null, eventTitle(e))), h('div', { class: 'ld5-head' }, h('div', { class: 'ld5-con' }, eventSentence(e))), []);
       drawer.setBody(eventDetailView(e, { openRequest: openRequestById }));
       drawer.body.scrollTop = 0;
     } catch (err) {

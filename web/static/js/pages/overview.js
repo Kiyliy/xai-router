@@ -299,7 +299,7 @@ export function render(el, ctx) {
         class: 'ov-ev', href: `${ATTN_HASH}&event=${e.id}`, onclick: go(ctx, `${ATTN_HASH}&event=${e.id}`), title: t('ov.attnOpen'),
       },
       h('span', { class: `level-dot ${e.level === 'error' ? 'is-error' : e.level === 'warn' ? 'is-warning' : ''}` }),
-      h('span', { class: 'ov-ev-text' }, line, n > 1 ? h('span', { class: 'ov-ev-n' }, t('ov5.repeat', { n })) : null),
+      h('span', { class: 'ov-ev-text' }, line, n > 1 ? h('span', { class: 'ov-ev-n' }, t('ov5.repeat', { n: n - 1 })) : null),
       h('span', { class: 'ov-ev-time', title: fmtDateTime(e.created_at) }, listTime(e.created_at))))),
       ...[groups.length > 5 ? h('div', { class: 'ov-attn-foot' }, t('ov5.moreEvents', { n: groups.length - 5 })) : null, foot].filter(Boolean));
     } catch (e) {
