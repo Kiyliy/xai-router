@@ -98,7 +98,6 @@ function route() {
   closeAllModals();
   const sh = state.shell;
   markNav(name, params);
-  setCrumbs([]);
   sh.title.textContent = t(titleKey(name, params));
   document.title = `${t(titleKey(name, params))} · xai-router`;
   sh.actions.replaceChildren();
@@ -113,9 +112,9 @@ function route() {
     signal: controller.signal,
     alive: () => seq === state.routeSeq,
     setActions: (...nodes) => sh.actions.replaceChildren(...nodes.flat().filter(Boolean)),
-    // Breadcrumbs between "xai-router" and the page title, e.g. [{ label: '日志', href: '#/logs' }];
-    // pass `title` to replace the last crumb (the page title) as well.
-    setCrumbs: (items, title) => { if (seq === state.routeSeq) { setCrumbs(items); if (title != null) sh.title.textContent = title; } },
+    // v0.5: no breadcrumbs, only the large page title. Kept so older callers do not break;
+    // the items are ignored, an optional title still replaces the page title.
+    setCrumbs: (items, title) => { if (seq === state.routeSeq && title != null) sh.title.textContent = title; },
     navigate: (hash) => { location.hash = hash; },
     // push: true adds a history entry (page / filter changes) so back/forward restores the view;
     // otherwise the current entry is replaced (typing, drawer state).
@@ -172,12 +171,7 @@ function renderShell() {
     nav,
     // Theme and language live in the account menu (v0.5 design: the sidebar foot is just the account).
     h('div', { class: 'sidebar-foot' }, accountButton()));
-  const title = h('h1', { class: 'topbar-title crumb-current' });
-  const crumbsMid = h('span', { class: 'crumbs-mid', style: { display: 'contents' } });
-  const crumbs = h('nav', { class: 'crumbs', 'aria-label': 'breadcrumb' },
-    h('a', { class: 'crumb crumb-root', href: '#/overview' }, 'xai-router'),
-    h('span', { class: 'crumb-sep', 'aria-hidden': 'true' }),
-    crumbsMid, title);
+  const title = h('h1', { class: 'topbar-title' });
   const actions = h('div', { class: 'topbar-actions' });
   const banner = h('div', { class: 'banner-slot' });
   const content = h('div', { class: 'content' });
@@ -186,12 +180,12 @@ function renderShell() {
     banner,
     h('header', { class: 'topbar' },
       h('button', { class: 'btn btn-ghost btn-icon hamburger', 'aria-label': t('nav.menu'), onclick: () => shell.classList.toggle('sidebar-open') }, icon('menu', 20)),
-      h('div', { class: 'topbar-heading' }, crumbs),
+      h('div', { class: 'topbar-heading' }, title),
       actions),
     content);
   mount(shell, sidebar, h('div', { class: 'sidebar-backdrop', onclick: () => shell.classList.remove('sidebar-open') }), main);
   mount(app, shell);
-  state.shell = { shell, nav, title, crumbsMid, actions, content, banner, main };
+  state.shell = { shell, nav, title, actions, content, banner, main };
   const topbar = main.querySelector('.topbar');
   const setTopVar = () => document.documentElement.style.setProperty('--topbar-real', `${topbar.offsetHeight}px`);
   if (state.topRO) state.topRO.disconnect();
@@ -199,16 +193,6 @@ function renderShell() {
   state.topRO.observe(topbar);
   setTopVar();
   renderBanner();
-}
-
-/** Middle breadcrumbs: [{ label, href? }] rendered as "xai-router / a / b / <title>". */
-function setCrumbs(items) {
-  const mid = state.shell && state.shell.crumbsMid;
-  if (!mid) return;
-  mid.replaceChildren(...(items || []).flatMap((it) => [
-    it.href ? h('a', { class: 'crumb', href: it.href }, it.label) : h('span', { class: 'crumb' }, it.label),
-    h('span', { class: 'crumb-sep', 'aria-hidden': 'true' }),
-  ]));
 }
 
 function markNav(name, params) {
