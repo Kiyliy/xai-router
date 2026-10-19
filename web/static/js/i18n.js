@@ -445,7 +445,7 @@ const zh = {
   'keys.flagTeamBlocked': '团队被封禁', 'keys.flagTeamOk': '团队正常', 'keys.noApiKeyInfo': 'xAI 没有返回密钥信息', 'keys.probe': '检测请求',
   'keys.noProbe': '未做完整检测', 'keys.modelsAvailable': '可用模型', 'keys.testResult': '上游密钥检测结果',
   'keys.testAll': '全部快速检测', 'keys.bulkImport': '批量导入', 'keys.add': '添加上游密钥', 'keys.searchPh': '搜索名称或密钥后缀…',
-  'keys.allStatuses': '全部状态', 'keys.prioWeight': '优先级', 'keys.priorityHint': '数字越小越优先', 'keys.limits': '并发 / 每分钟请求上限',
+  'keys.allStatuses': '全部状态', 'keys.prioWeight': '优先级', 'keys.priorityHint': '数字越小越优先', 'keys.limits': '最大并发 / 每分钟请求上限',
   'keys.reqErr': '请求数 / 失败数', 'keys.lastTest': '最近检测', 'keys.disable': '禁用', 'keys.enable': '启用', 'keys.enabled': '已启用上游密钥', 'keys.disabled': '已禁用上游密钥',
   'keys.maxConcurrency': '最大并发', 'keys.rpmLimit': '每分钟请求上限', 'keys.inflight': '进行中', 'keys.inflightN': '{n} 个进行中',
   'keys.test': '完整检测', 'keys.testNoProbe': '快速检测', 'keys.reset': '恢复',
