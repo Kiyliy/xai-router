@@ -455,6 +455,7 @@ export function render(el, ctx) {
   let pendingTab = null;
   /** "$7.6200019" — every tick (up to 7 decimals here), at least 2 decimals. */
   const exactUsd = (ticks) => {
+    if (!(ticks > 0)) return '$0';
     let s = (Math.max(0, ticks) / TPU).toFixed(7).replace(/0+$/, '');
     if (s.endsWith('.')) s += '00'; else if (s.split('.')[1].length < 2) s += '0';
     return `$${s}`;

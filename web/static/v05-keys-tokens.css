@@ -75,6 +75,7 @@ button.kl-test:hover .kl-test-l > span:first-child { text-decoration: underline;
 }
 
 /* ---------- detail drawers (key 123-3982, token 124-8167) ---------- */
+.drawer-panel.detail-drawer.drawer-lg { max-width: 720px; }
 .detail-drawer .modal-heading { min-width: 0; }
 .detail-drawer .entity-title { font-size: 17px; font-weight: 600; }
 .detail-drawer .entity-sub { margin-top: 6px; }
