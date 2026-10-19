@@ -1335,16 +1335,17 @@ a.btn:hover { text-decoration: none; }
 .hairline-grid { display: grid; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .hairline-grid > * { border-left: 1px solid var(--border); min-width: 0; }
 .hairline-grid > :first-child { border-left: 0; }
-/* log type tag: request = neutral, audit = brand, system = light grey */
-.type-tag { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border-radius: var(--radius-xs); font-size: 12px; font-weight: 500; white-space: nowrap; color: var(--tag-request); background: var(--tag-request-soft); }
-.type-tag-audit { color: var(--tag-audit); background: var(--tag-audit-soft); }
-.type-tag-system { color: var(--tag-system); background: var(--tag-system-soft); }
+/* log type tag (events.js typeTag: .type-tag.type-request|audit|system = level dot + label): the label is a small pill; request = neutral, audit = brand, system = light grey */
+.type-tag { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.type-tag > span:not(.lv), .type-tag-pill { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border-radius: var(--radius-xs); font-size: 12px; font-weight: 500; color: var(--tag-request); background: var(--tag-request-soft); }
+.type-tag.type-audit > span:not(.lv), .type-tag-pill.type-audit { color: var(--tag-audit); background: var(--tag-audit-soft); }
+.type-tag.type-system > span:not(.lv), .type-tag-pill.type-system { color: var(--tag-system); background: var(--tag-system-soft); }
 /* level dot: info / warning / error */
 .level-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); flex-shrink: 0; vertical-align: middle; }
 .level-dot.is-warning { background: var(--warning-solid); } .level-dot.is-error, .level-dot.is-danger { background: var(--danger-solid); } .level-dot.is-success { background: var(--success-solid); }
-/* token kinds: square swatch + mono number */
-.tok4 { display: inline-flex; align-items: center; gap: 10px; font-family: var(--font-mono); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text); }
-.tok4 > span { display: inline-flex; align-items: center; gap: 4px; }
+/* token kinds inline: square swatch + mono number (.tok4 is the 4-column grid in logs-v041.css) */
+.tok-inline { display: inline-flex; align-items: center; gap: 10px; font-family: var(--font-mono); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text); }
+.tok-inline > span { display: inline-flex; align-items: center; gap: 4px; }
 .tok-sw { display: inline-block; width: 6px; height: 6px; border-radius: 1px; flex-shrink: 0; background: var(--tok-in); }
 .tok-sw.in { background: var(--tok-in); } .tok-sw.cw { background: var(--tok-cw); } .tok-sw.cr { background: var(--tok-cr); } .tok-sw.out { background: var(--tok-out); }
 .tok-bar { display: flex; gap: 2px; height: 4px; }
