@@ -1,14 +1,13 @@
-import { h, fmtInt, fmtPrice, fmtUSD, timeEl, fmtCompact, debounce } from '../util.js';
+import { h, fmtInt, fmtPrice, fmtUSD, timeEl, relTime, fmtCompact, debounce } from '../util.js';
 import { icon } from '../icons.js';
 import { t } from '../i18n.js';
 import { get, post, patch, del } from '../api.js';
 import {
-  card, toast, toastError, openModal, confirmDialog, menuButton, badge, switchEl, searchInput, segmented,
+  toast, toastError, openModal, confirmDialog, menuButton, switchEl, searchInput, segmented,
   skeletonRows, tableEmptyRow, tableWrap, field, input, select, checkbox, button, busy, tagInput, tapToMenu, errorMessage,
 } from '../ui.js';
 
 const KINDS = ['language', 'image', 'video', 'embedding'];
-const SOURCE_VARIANT = { sync: 'info', manual: 'accent', builtin: 'neutral' };
 
 export function render(el, ctx) {
   const st = { kind: KINDS.includes(ctx.params.kind) ? ctx.params.kind : '', q: ctx.params.q || '', data: [], lastSync: null };
@@ -17,101 +16,116 @@ export function render(el, ctx) {
     button(t('models.add'), { icon: 'plus', variant: 'primary', onClick: () => openForm() }),
   );
 
-  const kindSel = segmented({
-    options: [{ value: '', label: t('common.all') }, ...KINDS.map((k) => ({ value: k, label: t(`kind.${k}`) }))], value: st.kind,
-    onChange: (v) => { st.kind = v; ctx.setParams({ kind: v, q: st.q }); draw(); },
-  });
-  const search = searchInput({ value: st.q, placeholder: t('models.searchPh'), onInput: debounce((v) => { st.q = v.trim().toLowerCase(); ctx.setParams({ kind: st.kind, q: st.q }); draw(); }, 150) });
-  const syncInfo = h('div', { class: 'sync-info' });
-  let COLS = 10;
-  let showCtx = false;
+  el.classList.add('pg-models');
+  const kindBox = h('div', { class: 'models-kinds' });
+  const search = searchInput({ value: st.q, placeholder: t('models.searchPh'), width: '200px', onInput: debounce((v) => { st.q = v.trim().toLowerCase(); ctx.setParams({ kind: st.kind, q: st.q }); draw(); }, 150) });
+  const syncInfo = h('div', { class: 'models-meta' });
+  const COLS = 9;
+  let selectedId = null;
   const tbody = h('tbody', null, skeletonRows(COLS));
-  const ctxTh = h('th', { class: 'num col-ctx' }, t('models.context'));
+  const th = (text, cls = '', tip = '') => h('th', { class: cls, title: tip || null }, text);
   const table = h('table', { class: 'table table-models table-cards' },
     h('thead', null, h('tr', null,
-      h('th', null, t('common.model')), ctxTh,
-      h('th', { class: 'num' }, t('models.thInput')), h('th', { class: 'num' }, t('models.thCached')), h('th', { class: 'num' }, t('models.thOutput')),
-      h('th', { class: 'num', title: t('models.longCtxHint') }, t('models.longCtx')), h('th', { class: 'num' }, t('models.image')), h('th', { class: 'num' }, t('models.video')),
-      h('th', null, t('models.source')), h('th', { class: 'col-actions' }, h('span', { class: 'sr-only' }, t('common.actions'))))),
+      th(t('common.model')), th(t('models.kind'), 'col-kind'),
+      th(t('models.thInput'), 'num'), th(t('models.thCached'), 'num'), th(t('models.thOutput'), 'num'),
+      th(t('models.thLongTiers'), 'col-long', t('models.longCtxHint')),
+      th(t('models.source'), 'col-src', t('models.sourceTip')), th(t('models.thEnabled'), 'col-enabled', t('models.disabledHint')),
+      h('th', { class: 'col-actions' }, h('span', { class: 'sr-only' }, t('common.actions'))))),
     tbody);
-  el.append(card({ flush: true, body: [h('div', { class: 'toolbar' }, kindSel, search, h('div', { class: 'toolbar-spacer' }), syncInfo), tableWrap(table)] }));
+  el.append(h('div', { class: 'models-bar' }, syncInfo, h('div', { class: 'toolbar-spacer' }), search, kindBox), tableWrap(table));
 
+  let syncHours = null;
+  const metaItem = (label, ...value) => h('span', { class: 'models-meta-item' }, h('span', { class: 'l' }, label), h('span', { class: 'v' }, ...value));
   function renderSyncInfo() {
     const s = st.lastSync;
-    if (!s) { syncInfo.replaceChildren(h('span', { class: 'muted small' }, t('models.neverSynced'))); return; }
-    syncInfo.replaceChildren(h('span', { class: 'small muted sync-pill', title: s.error || '' },
-      s.ok ? icon('checkCircle', 14, 'text-success') : icon('xCircle', 14, 'text-danger'),
-      h('span', { class: 'sync-text' }, t('models.lastSync'), ' ', timeEl(s.at), s.ok ? ` · ${t('models.syncCounts', { a: (s.added || []).length, u: (s.updated || []).length })}` : ` · ${s.error || t('common.error')}`)));
+    const manual = st.data.filter((m) => m.source === 'manual').length;
+    const items = [];
+    if (!s) items.push(metaItem(t('models.lastSync'), t('models.neverSynced')));
+    else if (s.ok) items.push(metaItem(t('models.lastSync'), timeEl(s.at), t('models.syncOkSuffix')));
+    else items.push(h('span', { class: 'models-meta-item', title: s.error || '' }, h('span', { class: 'l' }, t('models.lastSync')), h('span', { class: 'v status-dot is-danger' }, h('span', null, timeEl(s.at), t('models.syncFailSuffix')))));
+    if (syncHours != null) items.push(metaItem(t('models.autoSync'), syncHours > 0 ? t('models.everyNHours', { n: fmtInt(syncHours) }) : t('models.manualOnly')));
+    if (manual) items.push(metaItem(t('models.manualEdits'), t('models.manualN', { n: fmtInt(manual) })));
+    syncInfo.replaceChildren(...items);
+  }
+  function renderKinds() {
+    const count = (k) => (k ? st.data.filter((m) => m.kind === k).length : st.data.length);
+    const kinds = KINDS.filter((k) => count(k) > 0 || k === st.kind);
+    kindBox.replaceChildren(segmented({
+      options: [{ value: '', label: [t('common.all'), h('span', { class: 'seg-count' }, String(count('')))] },
+        ...kinds.map((k) => ({ value: k, label: [t(`kind.${k}`), h('span', { class: 'seg-count' }, String(count(k)))] }))],
+      value: st.kind,
+      onChange: (v) => { st.kind = v; ctx.setParams({ kind: v, q: st.q }); draw(); },
+    }));
   }
 
-  function aliasesEl(m) {
-    const a = m.aliases || [];
-    if (!a.length) return null;
-    if (a.length <= 2) return h('div', { class: 'chips chips-tight' }, a.map((x) => h('span', { class: 'chip chip-sm mono' }, x)));
-    const det = h('details', { class: 'aliases' },
-      h('summary', null, t('models.aliasesN', { n: a.length })),
-      h('div', { class: 'chips chips-tight' }, a.map((x) => h('span', { class: 'chip chip-sm mono' }, x))));
-    return det;
-  }
-
-  function priceCell(v, sub, label) {
-    return h('td', { class: `num mono ${v > 0 ? 'm-meta' : 'm-hide'}`, 'data-label': label }, fmtPrice(v), sub ? h('div', { class: 'cell-sub' }, sub) : null);
-  }
-
-  // Media input prices (per input image, per second of input video), as a cell sub-line.
-  function inputSub(m) {
-    const parts = [];
-    if (m.input_image_price > 0) parts.push(`${t('models.inImg')} ${fmtUSD(m.input_image_price)}${t('models.perImage')}`);
-    if (m.input_video_price_per_second > 0) parts.push(`${t('models.inVid')} ${fmtUSD(m.input_video_price_per_second)}${t('models.perSec')}`);
-    return parts.length ? h('div', { class: 'cell-sub nowrap' }, parts.join(' · ')) : null;
+  const range = (vals, unit) => {
+    const v = vals.filter((x) => x > 0);
+    if (!v.length) return null;
+    const lo = Math.min(...v), hi = Math.max(...v);
+    return `${lo === hi ? fmtUSD(lo) : `${fmtUSD(lo)}–${fmtUSD(hi)}`} / ${unit}`;
+  };
+  const dash = () => h('td', { class: 'num muted m-hide' }, '—');
+  const priceTd = (v, label) => (v > 0 ? h('td', { class: 'num mono m-meta', 'data-label': label }, fmtPrice(v)) : dash());
+  // Long-context rule or the media tiers, as one short line.
+  function longOrTiers(m) {
+    if (m.kind === 'image' || m.kind === 'video') {
+      const tiers = (m.kind === 'image' ? m.image_tiers : m.video_tiers) || [];
+      if (!tiers.length) return h('td', { class: 'muted m-hide' }, '—');
+      const quality = tiers.some((x) => x.quality);
+      const res = [...new Set(tiers.map((x) => x.resolution))];
+      return h('td', { class: 'm-meta nowrap', 'data-label': t('models.thLongTiers') }, quality ? t('models.tiersQR', { n: tiers.length }) : res.join(t('models.listSep')));
+    }
+    if (!(m.long_context_threshold > 0)) return h('td', { class: 'muted m-hide' }, '—');
+    const n = fmtCompact(m.long_context_threshold);
+    const ratio = (a, b) => (b > 0 ? Math.round((a / b) * 100) / 100 : 0);
+    const ri = ratio(m.long_input_price, m.input_price), ro = ratio(m.long_output_price, m.output_price);
+    const text = ri > 0 && ri === ro ? t('models.longX', { n, x: ri }) : t('models.longPrices', { n, i: fmtPrice(m.long_input_price), o: fmtPrice(m.long_output_price) });
+    const tip = `${t('models.longTip', { n })}\n${t('models.input')}: ${fmtPrice(m.long_input_price)}\n${t('models.cached')}: ${fmtPrice(m.long_cached_input_price)}\n${t('models.output')}: ${fmtPrice(m.long_output_price)}`;
+    return h('td', { class: 'nowrap m-meta', 'data-label': t('models.longShort'), title: tip }, text);
   }
 
   function row(m) {
-    const long = m.long_context_threshold > 0
-      ? h('td', { class: 'num mono m-meta', 'data-label': t('models.longShort'), title: `${t('models.input')}: ${fmtPrice(m.long_input_price)}\n${t('models.cached')}: ${fmtPrice(m.long_cached_input_price)}\n${t('models.output')}: ${fmtPrice(m.long_output_price)}` },
-        h('div', { class: 'nowrap' }, `${fmtPrice(m.long_input_price)} / ${fmtPrice(m.long_output_price)}`), h('div', { class: 'cell-sub nowrap' }, `> ${fmtCompact(m.long_context_threshold)} ${t('models.tok')}`))
-      : h('td', { class: 'num muted m-hide' }, '—');
-    const tiers = m.image_tiers || [];
-    const vtiers = m.video_tiers || [];
-    const img = m.image_price > 0 || tiers.length
-      ? h('td', { class: 'num mono m-meta', 'data-label': t('models.image') }, m.image_price > 0 ? `${fmtUSD(m.image_price)}${t('models.perImage')}` : '—',
-        tiers.length ? h('div', { class: 'cell-sub', 'data-tip': tiers.map((x) => `${x.quality || '*'} ${x.resolution || ''}: ${fmtUSD(x.price)}`).join(' · ') }, t('models.tiersN', { n: tiers.length })) : null,
-        m.kind === 'image' ? inputSub(m) : null)
-      : h('td', { class: 'num muted m-hide' }, '—');
-    // Only mention the image-input price when it differs from the text input price.
-    const imgIn = m.image_input_price > 0 && m.image_input_price !== m.input_price ? `${t('models.imgIn')} ${fmtPrice(m.image_input_price)}` : null;
+    const media = m.kind === 'image' || m.kind === 'video';
     const disabled = m.enabled === false;
     const menu = menuButton(() => [
+      media ? { label: t('models.editTiers'), icon: 'layers', onClick: () => openTiers(m) } : null,
       { label: t('common.edit'), icon: 'edit', onClick: () => openForm(m) },
-      { label: disabled ? t('common.enable') : t('models.disableBlock'), icon: disabled ? 'checkCircle' : 'xCircle', onClick: () => patch(`/api/v1/models/${encodeURIComponent(m.id)}`, { enabled: disabled }).then(() => { toast(disabled ? t('models.enabledToast', { id: m.id }) : t('models.disabledToast', { id: m.id }), 'success'); load(); }, toastError) },
       { label: t('models.viewLogs'), icon: 'logs', onClick: () => ctx.navigate(`#/logs?model=${encodeURIComponent(m.id)}`) },
       '-',
       { label: t('common.delete'), icon: 'trash', danger: true, onClick: () => remove(m) },
-    ]);
-    const tr = h('tr', { class: disabled ? 'row-muted' : '' },
+    ].filter(Boolean));
+    const unitImg = t('models.perImageU'), unitSec = t('models.perSecU');
+    const vt = m.video_tiers || [];
+    const mediaPrice = m.kind === 'image' ? range([m.image_price, ...(m.image_tiers || []).map((x) => x.price)], unitImg)
+      : m.kind === 'video' ? range(vt.length ? vt.map((x) => x.price_per_second) : [m.video_price_per_second], unitSec) : null;
+    const aliases = m.aliases || [];
+    const nameTip = [m.id, aliases.length ? `${t('models.aliases')}: ${aliases.join(', ')}` : '', m.context_length ? `${t('models.context')}: ${fmtCompact(m.context_length)}` : ''].filter(Boolean).join('\n');
+    let tr;
+    const toggle = switchEl({
+      checked: !disabled, title: t('models.disabledHint'),
+      onChange: (on) => patch(`/api/v1/models/${encodeURIComponent(m.id)}`, { enabled: on }).then(() => {
+        toast(on ? t('models.enabledToast', { id: m.id }) : t('models.disabledToast', { id: m.id }), 'success');
+        m.enabled = on; tr.classList.toggle('row-muted', !on);
+      }, (e) => { toastError(e); return false; }),
+    });
+    tr = h('tr', { class: `${disabled ? 'row-muted' : ''} ${selectedId === m.id ? 'is-selected' : ''}`, 'data-id': m.id },
       h('td', { class: 'cell-model m-title' },
-        h('div', { class: 'model-id' }, h('span', { class: 'mono strong model-name', title: m.id }, m.id), disabled ? badge(t('common.disabled'), 'neutral', { title: t('models.disabledHint') }) : null),
-        aliasesEl(m)),
-      showCtx ? h('td', { class: `num mono ${m.context_length ? 'm-meta' : 'm-hide'}`, 'data-label': t('models.context') }, m.context_length ? fmtCompact(m.context_length) : '—') : null,
-      priceCell(m.input_price, imgIn, t('models.input')),
-      priceCell(m.cached_input_price, null, t('models.cached')),
-      priceCell(m.output_price, null, t('models.output')),
-      long, img,
-      h('td', { class: `num mono ${m.video_price_per_second > 0 ? 'm-meta' : 'm-hide'}`, 'data-label': t('models.video') }, m.video_price_per_second > 0 ? `${fmtUSD(m.video_price_per_second)}${t('models.perSec')}` : h('span', { class: 'muted' }, '—'),
-        vtiers.length ? h('div', { class: 'cell-sub', 'data-tip': vtiers.map((x) => `${x.resolution}: ${fmtUSD(x.price_per_second)}${t('models.perSec')}`).join(' · ') }, t('models.tiersN', { n: vtiers.length })) : null,
-        m.kind === 'video' ? inputSub(m) : null),
-      h('td', { class: 'm-badge' }, badge(t(`source.${m.source}`) || m.source || '—', SOURCE_VARIANT[m.source] || 'neutral'), m.synced_at ? h('div', { class: 'cell-sub nowrap hide-m' }, timeEl(m.synced_at)) : null),
-      h('td', { class: 'col-actions m-menu' }, h('div', { class: 'row-actions' },
-        h('button', { class: 'btn btn-ghost btn-icon btn-sm hide-m', title: t('common.edit'), 'aria-label': t('common.edit'), onclick: () => openForm(m) }, icon('edit', 15)),
-        menu)));
+        h('span', { class: 'mono model-name', title: nameTip }, m.id),
+        aliases.length ? h('span', { class: 'model-alias', title: aliases.join('\n') }, t('models.aliasesN', { n: aliases.length })) : null),
+      h('td', { class: 'col-kind m-hide' }, t(`kind.${m.kind}`) || m.kind),
+      media ? h('td', { class: 'num mono m-meta nowrap', 'data-label': t('models.price') }, mediaPrice || '—') : priceTd(m.input_price, t('models.input')),
+      media ? dash() : priceTd(m.cached_input_price, t('models.cached')),
+      media ? dash() : priceTd(m.output_price, t('models.output')),
+      longOrTiers(m),
+      h('td', { class: 'col-src m-badge' }, h('span', { class: `src-tag src-${m.source || 'builtin'}`, title: m.synced_at ? `${t('models.synced')}: ${relTime(m.synced_at)}` : null }, t(`source.${m.source}`) || m.source || '—')),
+      h('td', { class: 'col-enabled' }, toggle),
+      h('td', { class: 'col-actions m-menu' }, h('div', { class: 'row-actions' }, menu)));
+    if (media) tr.addEventListener('dblclick', () => openTiers(m));
     return tapToMenu(tr, menu);
   }
 
   function draw() {
-    // The context column only earns its width when at least one model reports a context length.
-    showCtx = st.data.some((m) => m.context_length > 0);
-    ctxTh.hidden = !showCtx;
-    COLS = showCtx ? 10 : 9;
+    renderKinds();
     let rows = st.data;
     if (st.kind) rows = rows.filter((m) => m.kind === st.kind);
     if (st.q) rows = rows.filter((m) => m.id.toLowerCase().includes(st.q) || (m.aliases || []).some((a) => a.toLowerCase().includes(st.q)));
@@ -119,22 +133,19 @@ export function render(el, ctx) {
       tbody.replaceChildren(tableEmptyRow(COLS, st.data.length ? { icon: 'search', title: t('common.noMatches') } : { icon: 'cpu', title: t('models.empty'), desc: t('models.emptyDesc'), action: button(t('models.sync'), { icon: 'refresh', variant: 'primary', onClick: openSync }) }));
       return;
     }
-    const out = [];
-    for (const kind of KINDS) {
-      const group = rows.filter((m) => m.kind === kind);
-      if (!group.length) continue;
-      if (!st.kind) out.push(h('tr', { class: 'group-row' }, h('td', { colspan: COLS }, h('span', { class: `kind-tag kind-${kind}` }, t(`kind.${kind}`)), h('span', { class: 'muted small' }, ` ${group.length}`))));
-      group.forEach((m) => out.push(row(m)));
-    }
-    const other = rows.filter((m) => !KINDS.includes(m.kind));
-    other.forEach((m) => out.push(row(m)));
-    tbody.replaceChildren(...out);
+    const order = (k) => { const i = KINDS.indexOf(k); return i < 0 ? KINDS.length : i; };
+    rows = rows.slice().sort((a, b) => order(a.kind) - order(b.kind) || a.id.localeCompare(b.id));
+    tbody.replaceChildren(...rows.map(row));
   }
 
   async function load() {
     try {
-      const res = await get('/api/v1/models', null, { signal: ctx.signal });
-      st.data = (res.data || []).slice().sort((a, b) => a.id.localeCompare(b.id));
+      const [res, set] = await Promise.all([
+        get('/api/v1/models', null, { signal: ctx.signal }),
+        syncHours == null ? get('/api/v1/settings', null, { signal: ctx.signal }).catch(() => null) : null,
+      ]);
+      if (set && set.model_sync_interval_hours != null) syncHours = set.model_sync_interval_hours;
+      st.data = (res.data || []).slice();
       st.lastSync = res.last_sync || null;
       renderSyncInfo();
       draw();
@@ -142,6 +153,71 @@ export function render(el, ctx) {
       if (e.name === 'AbortError') return;
       toastError(e);
       tbody.replaceChildren(tableEmptyRow(COLS, { icon: 'alert', title: t('common.loadFailed'), desc: errorMessage(e) }));
+    }
+  }
+
+  // Resolution tier editor (frame 125-12826): a drawer per image or video model.
+  function openTiers(m) {
+    const video = m.kind === 'video';
+    const priceKey = video ? 'price_per_second' : 'price';
+    const unit = video ? t('models.perSecU') : t('models.perImageU');
+    const norm = (r) => { const x = String(r || '').trim().toLowerCase(); return video && /^\d+$/.test(x) ? `${x}p` : x; };
+    const isDefault = (r) => norm(r) === (video ? '480p' : '1k');
+    const rows = ((video ? m.video_tiers : m.image_tiers) || []).map((x) => ({ ...x }));
+    const withQuality = !video && rows.some((x) => x.quality);
+    const money = (value, onInput, u, attrs = {}) => h('div', { class: 'input-affix tier-money' },
+      h('span', { class: 'affix' }, '$'),
+      input({ type: 'number', step: 'any', min: 0, value: value ?? '', class: 'input mono', oninput: (e) => onInput(e.target.value === '' ? null : Number(e.target.value)), ...attrs }),
+      h('span', { class: 'tier-unit' }, `/ ${u}`));
+    const defTag = (r) => (isDefault(r) ? h('span', { class: 'tag-outline' }, t('models.defaultTier')) : '');
+    const list = h('div', { class: 'tier-list' });
+    const note = h('div', { class: 'tier-note' });
+    function paintNote() {
+      const valid = rows.filter((x) => String(x.resolution || '').trim() && x[priceKey] != null);
+      const top = valid.slice().sort((a, b) => b[priceKey] - a[priceKey])[0];
+      note.replaceChildren(icon('info', 14), h('span', null, t('models.tierRule', { d: video ? '480p' : '1k', top: top ? top.resolution : '—' })));
+    }
+    function paint() {
+      list.replaceChildren(...rows.map((tier, i) => {
+        const def = h('span', { class: 'tier-def' }, defTag(tier.resolution));
+        return h('div', { class: `tier-line ${withQuality ? 'has-q' : ''}` },
+          withQuality ? input({ value: tier.quality || '', class: 'input tier-q', placeholder: t('models.qualityOpt'), 'aria-label': t('models.quality'), oninput: (e) => { tier.quality = e.target.value; } }) : null,
+          input({ value: tier.resolution || '', class: 'input mono tier-res', placeholder: video ? '720p' : '2k', 'aria-label': t('models.resolution'), oninput: (e) => { tier.resolution = e.target.value; def.replaceChildren(defTag(tier.resolution)); paintNote(); } }),
+          money(tier[priceKey], (v) => { tier[priceKey] = v; paintNote(); }, unit, { 'aria-label': t('models.price') }),
+          def,
+          h('button', { type: 'button', class: 'btn btn-ghost btn-icon btn-sm', 'aria-label': t('common.remove'), title: t('common.remove'), onclick: () => { rows.splice(i, 1); paint(); } }, icon('trash', 14)));
+      }),
+      h('button', { type: 'button', class: 'btn btn-ghost btn-sm tier-add', onclick: () => { rows.push(video ? { resolution: '', price_per_second: null } : { quality: '', resolution: '', price: null }); paint(); const r = list.querySelectorAll('.tier-res'); r[r.length - 1]?.focus(); } }, icon('plus', 14), h('span', null, t('models.addTier'))));
+      paintNote();
+    }
+    paint();
+    const media = { input_image_price: m.input_image_price || 0, input_video_price_per_second: m.input_video_price_per_second || 0 };
+    const inLine = (label, v, set, u) => h('div', { class: 'tier-line tier-line-in' }, h('span', { class: 'tier-in-l' }, label), money(v || null, (x) => set(x ?? 0), u, { placeholder: '0' }), h('span', { class: 'tier-def' }), h('span'));
+    const inputs = [inLine(t('models.inImage'), media.input_image_price, (x) => { media.input_image_price = x; }, t('models.perImageU'))];
+    if (video) inputs.push(inLine(t('models.inVideo'), media.input_video_price_per_second, (x) => { media.input_video_price_per_second = x; }, t('models.perSecU')));
+    const saveBtn = h('button', { class: 'btn btn-primary', type: 'button', onclick: () => save() }, h('span', null, t('common.save')));
+    const mark = (on) => tbody.querySelectorAll('tr[data-id]').forEach((x) => x.classList.toggle('is-selected', on && x.dataset.id === m.id));
+    selectedId = m.id; mark(true);
+    const src = m.source === 'manual' ? h('span', { class: 'src-tag src-manual' }, t('models.manualKept')) : h('span', { class: `src-tag src-${m.source || 'builtin'}` }, t(`source.${m.source}`) || '');
+    const dr = openModal({
+      kind: 'drawer', size: 'md',
+      title: h('span', { class: 'tier-title' }, h('span', { class: 'mono' }, m.id), src),
+      subtitle: video ? t('models.tierSubVideo') : t('models.tierSubImage'),
+      body: h('div', { class: 'tier-editor' },
+        h('div', { class: 'tier-sec' }, t('models.tiersSection')), list,
+        h('div', { class: 'tier-sec' }, t('models.inputMedia')), ...inputs,
+        note),
+      footer: [h('button', { class: 'btn', type: 'button', onclick: () => dr.close() }, t('common.cancel')), saveBtn],
+      onClose: () => { selectedId = null; mark(false); },
+    });
+    dr.el.classList.add('tier-drawer');
+    async function save() {
+      const clean = rows.filter((x) => String(x.resolution || '').trim() && x[priceKey] != null).map((x) => ({ ...x, resolution: String(x.resolution).trim() }));
+      const body = { [video ? 'video_tiers' : 'image_tiers']: clean, input_image_price: media.input_image_price };
+      if (video) body.input_video_price_per_second = media.input_video_price_per_second;
+      await busy(saveBtn, async () => {
+        try { await patch(`/api/v1/models/${encodeURIComponent(m.id)}`, body); toast(t('common.saved'), 'success'); dr.close(); load(); } catch (e) { toastError(e); }
+      });
     }
   }
 

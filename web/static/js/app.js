@@ -362,8 +362,10 @@ function showLogin(message) {
   const label = h('label', { class: 'field-label' }, t('auth.password'));
   const hint = h('div', { class: 'field-hint' }, '');
   const submit = h('button', { class: 'btn btn-primary btn-lg btn-block', type: 'submit' }, h('span', null, t('auth.signIn')));
+  const forgot = h('div', { class: 'login-forgot' }, icon('info', 14), h('span', null, t('login.forgot'), ' ', h('code', null, 'docker exec xai-router xai-router reset-password'), ' ', t('login.forgotTail')));
   const setMode = (m) => {
     mode = m;
+    forgot.hidden = m !== 'password';
     err.hidden = true;
     label.textContent = m === 'password' ? t('auth.password') : t('auth.adminToken');
     inp.placeholder = m === 'password' ? t('auth.passwordPlaceholder') : 'xra-…';
@@ -400,14 +402,15 @@ function showLogin(message) {
       });
     },
   },
-  segmented({ options: [{ value: 'password', label: t('auth.password'), icon: 'lock' }, { value: 'token', label: t('auth.adminToken'), icon: 'key' }], value: 'password', onChange: setMode, size: 'seg-block' }),
+  segmented({ options: [{ value: 'password', label: t('login.modePassword') }, { value: 'token', label: t('auth.adminToken') }], value: 'password', onChange: setMode, size: 'seg-block' }),
   h('div', { class: 'field' }, label, pw, hint),
   err,
-  submit);
+  submit,
+  forgot);
   mount(app, h('div', { class: 'login' },
-    h('div', { class: 'login-bg' }),
     h('div', { class: 'login-card' },
-      h('div', { class: 'login-brand' }, logo(40), h('div', null, h('div', { class: 'login-title' }, 'xai-router'), h('div', { class: 'login-sub' }, t('auth.consoleTitle')))),
+      h('div', { class: 'login-brand' }, logo(24), h('span', { class: 'login-title' }, 'xai-router')),
+      h('h1', { class: 'login-heading' }, t('login.heading')),
       form),
     h('div', { class: 'login-tools' }, prefsButtons())));
   setTimeout(() => inp.focus(), 30);

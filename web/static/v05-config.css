@@ -1,1 +1,88 @@
 /* v0.5 page styles: config (owned by one page agent). Uses the variables in style.css. */
+
+/* ---------- login (frame 22-2 / 127-8414) ---------- */
+.login .login-card { max-width: 380px; padding: 28px; gap: 0; border-radius: var(--radius-lg); background: var(--surface); }
+.login .login-brand { gap: 10px; }
+.login .login-title { font-family: var(--font-sans); font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+.login-heading { margin: 20px 0 22px; font-size: 20px; font-weight: 600; letter-spacing: -.01em; line-height: 28px; }
+.login .login-form { gap: 20px; }
+.login .login-form .seg-block .seg-btn { justify-content: flex-start; padding: 0 12px; font-weight: 400; }
+.login .login-form .field { gap: 8px; }
+.login-forgot { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; background: var(--surface-2); border-radius: var(--radius-sm); color: var(--text-2); font-size: 12px; line-height: 18px; }
+.login-forgot .icon { flex: none; margin-top: 2px; color: var(--text-3); }
+.login-forgot code { font-family: var(--font-sans); background: none; padding: 0; color: inherit; font-size: inherit; }
+.login-forgot[hidden] { display: none; }
+.login .login-form .input-lg { height: 32px; font-size: 13px; }
+.login .login-form .btn-lg { height: 32px; font-size: 13px; }
+.login .login-form .field-label { font-weight: 400; }
+.login .login-form .input:focus { box-shadow: 0 0 0 1px var(--accent-ring); }
+
+/* ---------- shared: full-bleed page body under the top bar ---------- */
+.pg-models, .pg-access, .pg-settings, .pg-data, .pg-docs { margin: -16px -32px -48px; gap: 0; }
+.tag-outline { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border: 1px solid var(--border-strong); border-radius: var(--radius-xs); font-size: 11.5px; color: var(--text-2); white-space: nowrap; }
+.src-tag { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; color: var(--text-2); font-size: 12.5px; }
+.src-tag::before { content: ""; width: 4px; height: 4px; border-radius: 50%; background: var(--text-3); flex: none; }
+.src-tag.src-manual { color: var(--text); }
+.src-tag.src-manual::before { width: 5px; height: 5px; background: var(--accent); }
+
+/* ---------- models & pricing (frames 64-3021 / 127-17813) ---------- */
+.models-bar { display: flex; align-items: center; gap: 12px; min-height: 64px; padding: 12px 32px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.models-meta { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; font-size: 13px; }
+.models-meta-item { display: inline-flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+.models-meta-item .l { font-size: 12px; color: var(--text-3); }
+.models-meta-item .v { color: var(--text); }
+.models-meta-item .v.status-dot { align-self: center; }
+.models-meta-item time { color: inherit; }
+.models-bar .search-input { min-width: 0; }
+.models-bar .search-input .input { height: 32px; }
+.models-kinds .segmented { padding: 3px; }
+.models-kinds .seg-btn { height: 26px; padding: 0 12px; font-weight: 400; gap: 8px; }
+.pg-models .table-wrap { max-height: none; }
+.pg-models .table-models th, .pg-models .table-models td { padding-left: 16px; padding-right: 16px; }
+.pg-models .table-models th:first-child, .pg-models .table-models td:first-child { padding-left: 32px; }
+.pg-models .table-models th { background: var(--bg); }
+.pg-models .table-models td { border-bottom-color: var(--border); }
+.pg-models .table .col-actions { background: var(--bg); box-shadow: none; width: 56px; padding-right: 24px; text-align: right; }
+.pg-models .table tbody tr:hover td.col-actions { background: var(--bg); background-image: linear-gradient(var(--hover), var(--hover)); }
+.table-models .cell-model { white-space: nowrap; }
+.table-models .model-name { max-width: 320px; font-size: 12.5px; color: var(--text); vertical-align: middle; }
+.table-models .model-alias { margin-left: 10px; font-size: 12px; color: var(--text-3); vertical-align: middle; }
+.table-models .col-kind { color: var(--text-2); white-space: nowrap; }
+.table-models td.col-kind { font-size: 12.5px; }
+.table-models td.num.mono { font-size: 12.5px; }
+.table-models td.m-meta:not(.num) { font-size: 12.5px; color: var(--text-2); }
+.table-models .col-enabled { width: 72px; }
+.table-models tr.row-muted .model-name, .table-models tr.row-muted td { color: var(--text-3); }
+.table-models tr.is-selected td { background: var(--hover); }
+.table-models tr.is-selected td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+
+/* tier editor drawer */
+.tier-title { display: inline-flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.tier-title .mono { font-size: 16px; font-weight: 500; }
+.tier-title .src-tag { font-size: 12px; font-family: var(--font-sans); font-weight: 400; }
+.tier-editor { display: flex; flex-direction: column; }
+.tier-sec { font-size: 12px; color: var(--text-3); padding: 0 0 12px; border-bottom: 1px solid var(--border); }
+.tier-sec:not(:first-child) { margin-top: 28px; }
+.tier-list { display: flex; flex-direction: column; }
+.tier-line { display: grid; grid-template-columns: 96px 150px minmax(0, 1fr) 32px; align-items: center; gap: 12px; min-height: 52px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.tier-line.has-q { grid-template-columns: 96px 80px 150px minmax(0, 1fr) 32px; }
+.tier-line .tier-res { height: 32px; font-weight: 500; color: var(--text); background: transparent; border-color: transparent; padding: 0 6px; margin-left: -6px; }
+.tier-line .tier-res:hover { border-color: var(--border); }
+.tier-line .tier-res:focus { border-color: var(--accent); background: var(--surface); }
+.tier-line .tier-q { height: 32px; }
+.tier-money { position: relative; display: flex; align-items: center; height: 32px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); }
+.tier-money:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-ring); }
+.tier-money .affix { background: none; border: 0; padding: 0 0 0 10px; color: var(--text-3); }
+.tier-money .input { border: 0; background: transparent; height: 30px; padding: 0 4px 0 6px; box-shadow: none !important; min-width: 0; -moz-appearance: textfield; }
+.tier-money .input::-webkit-outer-spin-button, .tier-money .input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.tier-unit { padding: 0 10px 0 4px; font-size: 12px; color: var(--text-3); white-space: nowrap; }
+.tier-def { justify-self: end; }
+.tier-in-l { font-size: 13px; color: var(--text); }
+.tier-line-in { grid-template-columns: 96px 150px minmax(0, 1fr) 32px; }
+.tier-add { align-self: flex-start; margin-top: 8px; color: var(--text-2); }
+.tier-note { display: flex; align-items: flex-start; gap: 8px; margin-top: 24px; padding: 12px 14px; background: var(--surface-2); border-radius: var(--radius-sm); font-size: 12.5px; line-height: 20px; color: var(--text-2); }
+.tier-note .icon { flex: none; margin-top: 3px; color: var(--text-3); }
+.tier-drawer .modal-footer { justify-content: flex-end; }
+.models-meta-item .v, .models-meta-item .v * { font-weight: 400; }
+.table-models .model-name, .table-models td { font-weight: 400; }
+.tier-in-l { font-weight: 400; }
