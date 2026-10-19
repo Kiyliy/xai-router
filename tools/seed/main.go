@@ -283,7 +283,9 @@ func seedEvents(ctx context.Context, db *store.DB, n, days int) {
 		case p < 45:
 			e.Action = "token.quota_increase"
 			tok()
-			e.Detail = map[string]any{"amount_ticks": 10_000_000_000, "reason": "top-up"}
+			before := int64(5+r.IntN(20)) * 10_000_000_000
+			e.Detail = map[string]any{"amount_ticks": int64(10_000_000_000), "before_ticks": before,
+				"after_ticks": before + 10_000_000_000, "used_ticks": before / 2, "reason": "月度充值"}
 		case p < 55:
 			e.Action = "key.test"
 			key()
@@ -312,6 +314,14 @@ func seedEvents(ctx context.Context, db *store.DB, n, days int) {
 				log.Fatal(err)
 			}
 			buf = buf[:0]
+		}
+	}
+	// Keys whose checks were recorded show a matching last check.
+	for _, k := range keys {
+		at := time.Now().Add(-time.Duration(r.IntN(240)) * time.Minute).UTC().Format(time.RFC3339)
+		res := fmt.Sprintf(`{"key_id":%d,"key_name":%q,"ok":true,"status":"ok","message":"OK","latency_ms":%d,"tested_at":%q}`, k.ID, k.Name, 250+r.IntN(150), at)
+		if err := db.SetKeyTest(ctx, k.ID, res); err != nil {
+			log.Fatal(err)
 		}
 	}
 	log.Printf("added %d events", n)
