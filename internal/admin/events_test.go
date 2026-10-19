@@ -163,6 +163,9 @@ func TestQuotaAdjust(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := h.must(h.call(http.MethodPost, path, `{"action":"increase","amount_usd":2.5,"reason":"monthly top-up"}`), 200)
+	// Amounts whose float value is not an exact multiple of 0.0001 (8.63) are fine.
+	h.must(h.call(http.MethodPost, path, `{"action":"increase","amount_usd":8.63,"reason":"r"}`), 200)
+	h.must(h.call(http.MethodPost, path, `{"action":"decrease","amount_usd":8.63,"reason":"r"}`), 200)
 	if got["quota_usd"] != 7.5 || got["remaining_usd"] != 5.5 {
 		t.Fatalf("after +2.5: %v", got)
 	}
@@ -199,10 +202,10 @@ func TestQuotaAdjust(t *testing.T) {
 		}
 	}
 
-	// History: initial + 4 adjustments; the amounts add up to the quota.
+	// History: initial + 6 adjustments; the amounts add up to the quota.
 	hist := h.must(h.call(http.MethodGet, "/api/v1/tokens/"+id+"/quota-history", ""), 200)
 	recs := list(hist)
-	if num(hist["total"]) != 5 || len(recs) != 5 || hist["granted_total_usd"] != 5.0 {
+	if num(hist["total"]) != 7 || len(recs) != 7 || hist["granted_total_usd"] != 5.0 {
 		t.Fatalf("history %v", hist)
 	}
 	last := recs[len(recs)-1]

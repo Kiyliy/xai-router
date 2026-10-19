@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -220,7 +221,7 @@ func (s *Server) adjustQuota(w http.ResponseWriter, r *http.Request) {
 	}
 	var amount int64
 	if in.AmountUSD != nil {
-		if v := *in.AmountUSD * 1e4; v != float64(int64(v)) {
+		if v := *in.AmountUSD * 1e4; math.Abs(v-math.Round(v)) > 1e-6 { // 8.63*1e4 is not exactly an integer
 			writeErr(w, http.StatusBadRequest, "invalid_quota", "amount_usd has at most 4 decimal places")
 			return
 		}
