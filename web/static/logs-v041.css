@@ -41,10 +41,10 @@
 .ld-h { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; font-weight: 600; color: var(--text); }
 .ld-summary { display: flex; flex-direction: column; gap: 12px; }
 .ld-hero { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--surface-2); border: 1px solid var(--border); }
-.ld-hero.ld-success { background: var(--success-soft); border-color: transparent; }
-.ld-hero.ld-warning { background: var(--warning-soft); border-color: transparent; }
-.ld-hero.ld-danger { background: var(--danger-soft); border-color: transparent; }
-.ld-hero.ld-info { background: var(--info-soft); border-color: transparent; }
+.ld-hero.ld-success { background: transparent; border-color: var(--border); box-shadow: inset 2px 0 0 var(--success-solid); }
+.ld-hero.ld-warning { background: transparent; border-color: var(--border); box-shadow: inset 2px 0 0 var(--warning-solid); }
+.ld-hero.ld-danger { background: transparent; border-color: var(--border); box-shadow: inset 2px 0 0 var(--danger-solid); }
+.ld-hero.ld-info { background: transparent; border-color: var(--border); box-shadow: inset 2px 0 0 var(--border-strong); }
 .ld-conclusion { font-weight: 500; }
 .ld-raw { display: flex; flex-direction: column; gap: 4px; }
 .ld-raw code, .log-detail code.break { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--code-bg); border: 1px solid var(--border-subtle); border-radius: var(--radius-xs); padding: 6px 8px; }
