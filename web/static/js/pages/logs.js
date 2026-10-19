@@ -3,7 +3,7 @@
 // selected types, everything in the URL. type=request alone pages by number; any other
 // selection is merged newest first and pages with a cursor.
 import {
-  h, fmtInt, fmtUSD, fmtMs, fmtCompact, fmtDateTime, relTime, debounce, toLocalInput, fromLocalInput, downloadText,
+  h, fmtInt, fmtUSD, fmtMs, fmtCompact, fmtDateTime, fmtTimeShort, relTime, debounce, toLocalInput, fromLocalInput, downloadText,
   fmtTotal, latestSignal,
 } from '../util.js';
 import { icon } from '../icons.js';
@@ -20,8 +20,10 @@ import {
 } from '../events.js';
 
 const TYPES = ['request', 'audit', 'system'];
-const PRESETS = ['15m', '1h', '24h', '7d', 'all', 'custom'];
-const PRESET_MS = { '15m': 15 * 60e3, '1h': 3600e3, '24h': 86400e3, '7d': 7 * 86400e3 };
+// Shown: 1 小时 / 24 小时 / 7 天 / 30 天 / 自定义 (pm-spec 10.8 G6). 15m and "all" still work in links.
+const PRESETS = ['1h', '24h', '7d', '30d', 'custom'];
+const URL_PRESETS = [...PRESETS, '15m', 'all'];
+const PRESET_MS = { '15m': 15 * 60e3, '1h': 3600e3, '24h': 86400e3, '7d': 7 * 86400e3, '30d': 30 * 86400e3 };
 const STATUS_OPTS = ['', 'success', 'error', '2xx', '4xx', '5xx', '429', 'custom'];
 const PATHS = ['/v1/chat/completions', '/v1/responses', '/v1/messages', '/v1/realtime', '/v1/tts', '/v1/stt', '/v1/completions', '/v1/embeddings', '/v1/images/generations', '/v1/images/edits', '/v1/videos/generations', '/v1/models'];
 const TARGET_TYPES = ['key', 'token', 'admin_token', 'model', 'settings', 'logs', 'database', 'disk'];
@@ -52,7 +54,7 @@ function stateFromParams(p) {
   return {
     types: types.length ? TYPES.filter((x) => types.includes(x)) : [...TYPES],
     problems: p.problems === '1',
-    preset: PRESETS.includes(p.range) ? p.range : (p.from || p.to ? 'custom' : '24h'),
+    preset: URL_PRESETS.includes(p.range) ? p.range : (p.from || p.to ? 'custom' : '24h'),
     from: p.from || '', to: p.to || '', q: p.q || '',
     model: p.model || '', status: p.status || '', key_id: p.key_id || '', token_id: p.token_id || '', path: p.path || '',
     target_type: p.target_type || '', target_id: p.target_id || '', action: p.action || '', actor: p.actor || '',
@@ -78,7 +80,6 @@ export function render(el, ctx) {
   // --- top actions ---
   const autoSw = switchEl({ checked: st.auto, label: t('logs.autoRefresh'), onChange: (v) => { st.auto = v; lsSet('xr.logs.auto', v ? '1' : '0'); setupAuto(); } });
   const refreshBtn = button('', { icon: 'refresh', variant: 'ghost', size: 'icon', attrs: { title: t('common.refresh'), 'aria-label': t('common.refresh') }, onClick: () => load() });
-  ctx.setActions(autoSw, refreshBtn);
 
   // Discrete filter changes add a history entry; typing replaces the current one.
   const changed = (push = true) => { st.page = 1; st.cursors = []; syncParams(push); paintControls(); load({ keepScroll: false }); };
@@ -96,25 +97,25 @@ export function render(el, ctx) {
     },
   });
   const typeBtns = TYPES.map((ty) => h('button', {
-    type: 'button', class: 'seg-btn', 'data-type': ty, 'aria-pressed': 'false',
+    type: 'button', class: 'filter-chip', 'data-type': ty, 'aria-pressed': 'false',
     onclick: () => {
       const on = has(ty);
       if (on && st.types.length === 1) return; // at least one type
       st.types = on ? st.types.filter((x) => x !== ty) : TYPES.filter((x) => x === ty || has(x));
       changed();
     },
-  }, t(`lg.type.${ty}`)));
-  const typeSel = h('div', { class: 'segmented seg-sm type-multi', role: 'group', 'aria-label': t('lg.types') }, typeBtns);
+  }, icon('check', 13), h('span', null, t(`lg.type.${ty}`))));
+  const typeSel = h('div', { class: 'lg-types', role: 'group', 'aria-label': t('lg.types') }, h('span', { class: 'lg-label' }, t('lg5.typeLabel')), typeBtns);
   const problemsSw = switchEl({ checked: st.problems, label: t('lg.problems'), onChange: (v) => { st.problems = v; changed(); } });
   const qIn = input({ type: 'search', placeholder: t('lg.qPh'), oninput: debounce((e) => { st.q = e.target.value.trim(); changed(false); }, 350) });
 
   // --- row 2: per-type filters ---
-  const lbl = (text, ctl) => h('label', { class: 'filter' }, h('span', { class: 'filter-label' }, text), ctl);
+  const lbl = (text, ctl) => h('label', { class: 'filter lg-chipctl', title: text }, h('span', { class: 'sr-only' }, text), ctl);
   const dlModels = h('datalist', { id: 'dl-log-models' });
-  const modelIn = input({ placeholder: t('logs.anyModel'), list: 'dl-log-models', class: 'input mono', oninput: debounce((e) => { st.model = e.target.value.trim(); changed(false); }, 400) });
+  const modelIn = input({ placeholder: t('common.model'), list: 'dl-log-models', class: 'input mono', oninput: debounce((e) => { st.model = e.target.value.trim(); changed(false); }, 400) });
   const customStatus = input({ type: 'number', min: 100, max: 599, placeholder: '503', class: 'input input-status',
     oninput: debounce((e) => { st.status = e.target.value.trim(); changed(false); }, 400) });
-  const statusSel = select(STATUS_OPTS.map((v) => ({ value: v, label: t(`logs.status.${v || 'all'}`) })), '', {
+  const statusSel = select(STATUS_OPTS.map((v) => ({ value: v, label: v ? t(`logs.status.${v}`) : t('common.status') })), '', {
     onchange: (e) => {
       const v = e.target.value;
       customStatus.hidden = v !== 'custom';
@@ -122,21 +123,21 @@ export function render(el, ctx) {
       changed();
     },
   });
-  const keySel = select([{ value: '', label: t('logs.anyKey') }], '', { onchange: (e) => { st.key_id = e.target.value; changed(); } });
-  const tokenSel = select([{ value: '', label: t('logs.anyToken') }], '', { onchange: (e) => { st.token_id = e.target.value; changed(); } });
+  const keySel = select([{ value: '', label: t('common.key') }], '', { onchange: (e) => { st.key_id = e.target.value; changed(); } });
+  const tokenSel = select([{ value: '', label: t('common.token') }], '', { onchange: (e) => { st.token_id = e.target.value; changed(); } });
   const dlPaths = h('datalist', { id: 'dl-log-paths' }, PATHS.map((x) => h('option', { value: x })));
-  const pathIn = input({ placeholder: t('logs.anyPath'), list: 'dl-log-paths', class: 'input mono', oninput: debounce((e) => { st.path = e.target.value.trim(); changed(false); }, 400) });
-  const ttSel = select([{ value: '', label: t('lg.anyTargetType') }, ...TARGET_TYPES.map((x) => ({ value: x, label: targetTypeLabel(x) }))], '', {
+  const pathIn = input({ placeholder: t('logs.path'), list: 'dl-log-paths', class: 'input mono', oninput: debounce((e) => { st.path = e.target.value.trim(); changed(false); }, 400) });
+  const ttSel = select([{ value: '', label: t('lg.col.targetType') }, ...TARGET_TYPES.map((x) => ({ value: x, label: targetTypeLabel(x) }))], '', {
     onchange: (e) => { st.target_type = e.target.value; st.target_id = ''; fillTargetList(); changed(); },
   });
   const dlTargets = h('datalist', { id: 'dl-log-targets' });
-  const targetIn = input({ placeholder: t('lg.anyTarget'), list: 'dl-log-targets', class: 'input', oninput: debounce((e) => { st.target_id = e.target.value.trim(); changed(false); }, 400) });
+  const targetIn = input({ placeholder: t('lg.col.target'), list: 'dl-log-targets', class: 'input', oninput: debounce((e) => { st.target_id = e.target.value.trim(); changed(false); }, 400) });
   const actionSel = h('select', { class: 'input select', onchange: (e) => { st.action = e.target.value; changed(); } },
-    h('option', { value: '' }, t('lg.anyAction')),
+    h('option', { value: '' }, t('lg.col.action')),
     ACTION_GROUPS.map(([grp, acts]) => h('optgroup', { label: t(`lg.ag.${grp.slice(0, -1)}`) },
       h('option', { value: grp }, t('lg.allIn', { g: t(`lg.ag.${grp.slice(0, -1)}`) })),
       acts.map((a) => h('option', { value: a }, a.endsWith('_') ? t('lg.allQuota') : actionLabel(a))))));
-  const actorSel = select([{ value: '', label: t('lg.anyActor') }, { value: 'password', label: t('ev.actor.password') }, { value: 'system', label: t('ev.actor.system') }, { value: 'anonymous', label: t('ev.actor.anonymous') }], '', {
+  const actorSel = select([{ value: '', label: t('lg.col.actor') }, { value: 'password', label: t('ev.actor.password') }, { value: 'system', label: t('ev.actor.system') }, { value: 'anonymous', label: t('ev.actor.anonymous') }], '', {
     onchange: (e) => { st.actor = e.target.value; changed(); },
   });
   const resetBtn = button(t('logs.resetFilters'), { icon: 'x', variant: 'ghost', size: 'sm', onClick: () => {
@@ -153,9 +154,9 @@ export function render(el, ctx) {
     filterBar.classList.toggle('open', open);
     filterToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
   } });
-  const grid = h('div', { class: 'filters-row filters-grid lg-grid' });
-  const filterBar = h('div', { class: 'filters' },
-    h('div', { class: 'filters-row' }, presetSel, customRange, typeSel, problemsSw,
+  const grid = h('div', { class: 'filters-row lg-grid' });
+  const filterBar = h('div', { class: 'filters lg-filters' },
+    h('div', { class: 'filters-row lg-row1' }, presetSel, customRange, typeSel, problemsSw,
       h('div', { class: 'filters-q-row' }, h('div', { class: 'search-input filters-q' }, icon('search', 15), qIn), filterToggle)),
     grid, hintEl, dlModels, dlPaths, dlTargets);
 
@@ -182,7 +183,8 @@ export function render(el, ctx) {
     const items = [];
     if (m !== 'events') items.push(fModel, fStatus, fToken, fKey, fPath);
     if (m !== 'request') items.push(fTT, fTarget, fAction, fActor);
-    grid.replaceChildren(...items, h('div', { class: 'filter filter-reset' }, resetBtn));
+    const reset = h('div', { class: 'filter filter-reset' }, resetBtn);
+    grid.replaceChildren(h('span', { class: 'lg-label' }, t('lg5.filter')), ...items, reset);
     let hint = '';
     if (m === 'mixed' && REQ_FILTERS.some((k) => st[k])) hint = t('lg.hintReqOnly');
     else if (m === 'mixed' && EV_FILTERS.some((k) => st[k])) hint = t('lg.hintEvOnly');
@@ -190,6 +192,8 @@ export function render(el, ctx) {
     const n = [st.preset !== '24h', st.problems, ...(m !== 'events' ? [st.model, st.status, st.key_id, st.token_id, st.path] : []), ...(m !== 'request' ? EV_FILTERS.map((k) => st[k]) : [])].filter(Boolean).length;
     filterToggle.replaceChildren(icon('filter', 14), h('span', null, n ? t('logs.filtersN', { n }) : t('logs.filters')));
     filterToggle.classList.toggle('btn-active', n > 0);
+    reset.hidden = n === 0;
+    [modelIn, pathIn, targetIn, statusSel, keySel, tokenSel, ttSel, actionSel, actorSel].forEach((x) => x.classList.toggle('is-set', !!x.value));
     paintHead();
   }
 
@@ -204,11 +208,16 @@ export function render(el, ctx) {
     const th = (label, cls, title) => h('th', { class: cls || null, title: title || null }, label);
     let cells;
     if (m === 'request') {
-      cells = [th(t('logs.time'), 'col-time'), th(t('logs.request')), th(t('common.status'), 'col-status'), th(t('lg.col.tokenKey'), 'col-who'),
-        th(h('span', { class: 'tok4 tok4-head' }, h('span', null, t('lg.tok.input')), h('span', { title: t('lg.tok.cacheWriteTip') }, t('lg.tok.cacheWrite')), h('span', null, t('lg.tok.cacheRead')), h('span', null, t('lg.tok.output'))), 'num col-tok'),
-        th(t('common.cost'), 'num col-cost'), th(t('common.latency'), 'num col-lat', t('logs.ttfbClientHint'))];
+      // Four token columns under one "Token 数" group header (pm-spec 10.8 #66).
+      const span = (label, cls, title) => h('th', { class: cls || null, title: title || null, rowspan: 2 }, label);
+      cols = 10;
+      thead.replaceChildren(
+        h('tr', { class: 'lg-head-group' }, span(t('logs.time'), 'col-time'), span(t('logs.request'), 'col-req'), span(t('common.status'), 'col-status'), span(t('lg.col.tokenKey'), 'col-who'),
+          h('th', { colspan: 4, class: 'num col-tokgroup' }, t('lg5.tokGroup')), span(t('common.cost'), 'num col-cost'), span(t('common.latency'), 'num col-lat', t('logs.ttfbClientHint'))),
+        h('tr', { class: 'lg-head-sub' }, th(t('lg.tok.input'), 'num col-tk'), th(t('lg.tok.cacheWrite'), 'num col-tk', t('lg.tok.cacheWriteTip')), th(t('lg.tok.cacheRead'), 'num col-tk'), th(t('lg.tok.output'), 'num col-tk')));
+      return;
     } else if (m === 'mixed') {
-      cells = [th(t('logs.time'), 'col-time'), th(t('lg.col.typeLevel'), 'col-type'), th(t('lg.col.subject')), th(t('lg.col.summary')), th(t('lg.col.who')), th(t('lg.col.costLat'), 'num col-cost')];
+      cells = [th(t('logs.time'), 'col-time'), th(t('lg.col.type'), 'col-type'), th(t('lg.col.target'), 'col-subj'), th(t('lg.col.summary')), th(t('lg.col.who'), 'col-who'), th(t('lg.col.costLat'), 'num col-cost')];
     } else {
       cells = [th(t('logs.time'), 'col-time'), th(t('lg.col.level'), 'col-type'), th(t('lg.col.target')), th(t('lg.col.action')), th(t('lg.col.summary')), th(t('lg.col.actor')), th(t('lg.col.ip'))];
     }
@@ -232,17 +241,18 @@ export function render(el, ctx) {
   const cSize = select(PAGE_SIZES.map((s) => ({ value: s, label: t('common.perPage', { n: s }) })), st.pageSize, {
     class: 'input select select-sm', 'aria-label': t('common.pageSize'), onchange: (e) => { st.pageSize = Number(e.target.value); lsSet('xr.logs.ps', st.pageSize); st.cursors = []; syncParams(true); load({ keepScroll: false }); },
   });
-  const cursorPager = h('div', { class: 'pagination' }, cInfo, h('div', { class: 'page-controls' }, cSize, cFirst, cPrev, cNum, cNext));
+  void cFirst; void cInfo; void cNum; void cSize;
+  // Merged views page by cursor: just "较新" / "较早" (pm-spec 10.8 #65).
+  const cNewer = button(t('logs.newer'), { icon: 'chevronLeft', size: 'sm', onClick: () => cPrev.click() });
+  const cOlder = button(t('logs.older'), { icon: 'chevronRight', size: 'sm', onClick: () => cNext.click() });
+  const cursorPager = h('div', { class: 'pagination lg-cursor' }, h('div', { class: 'page-controls' }, cNewer, cOlder));
   function paintCursorPager() {
-    const pg = st.cursors.length + 1;
-    cInfo.replaceChildren(h('span', null, t('lg.pageInfo', { p: fmtInt(pg), n: fmtInt(st.rows.length), total: fmtTotal(st.total, st.totalKind) })));
-    cNum.textContent = fmtInt(pg);
-    cFirst.disabled = cPrev.disabled = pg <= 1;
-    cNext.disabled = !st.next;
-    cSize.value = String(st.pageSize);
+    cNewer.disabled = st.cursors.length === 0;
+    cOlder.disabled = !st.next;
+    cursorPager.hidden = cNewer.disabled && cOlder.disabled;
   }
 
-  const countEl = h('span', { class: 'toolbar-count' });
+  const countEl = h('span', { class: 'topbar-meta lg-count' });
   const liveDot = h('span', { class: 'live-dot', hidden: !st.auto, title: t('logs.autoRefresh') });
   const exportBtn = button(t('logs.exportJson'), { icon: 'download', size: 'sm', variant: 'ghost', attrs: { title: t('logs.exportHint') }, onClick: () => {
     if (!st.rows.length) { toast(t('logs.exportEmpty'), 'info'); return; }
@@ -251,10 +261,13 @@ export function render(el, ctx) {
     downloadText(name, JSON.stringify({ exported_at: d.toISOString(), filters: query(), total: st.total, total_kind: st.totalKind, data: st.rows }, null, 2));
     toast(t('logs.exported', { n: st.rows.length }), 'success', 2500);
   } });
-  const wrap = tableWrap(table, { maxHeight: 'calc(100vh - 300px)' });
+  const wrap = tableWrap(table, { maxHeight: 'calc(100vh - 240px)' });
   const region = h('div', { class: 'table-region' }, h('div', { class: 'loading-bar', 'aria-hidden': 'true' }), wrap);
-  const pagerSlot = h('div');
-  el.append(card({ flush: true, cls: 'card-logs', body: [filterBar, h('div', { class: 'toolbar toolbar-thin' }, countEl, liveDot, h('div', { class: 'toolbar-spacer' }), h('span', { class: 'muted small hide-sm' }, t('logs.clickHint')), exportBtn), region, pagerSlot] }));
+  const pagerSlot = h('div', { class: 'lg-pager' });
+  void card;
+  ctx.setActions(countEl, liveDot, autoSw, exportBtn);
+  el.classList.add('lg5');
+  el.append(filterBar, region, pagerSlot);
   paintControls();
 
   // --- cells ---
@@ -263,16 +276,34 @@ export function render(el, ctx) {
   const tokenLink = (r) => (r.token_name
     ? (r.token_id != null ? h('a', { class: 'link cell-link', href: `#/tokens?open=${r.token_id}`, title: `${t('lg.openToken')}: ${credText(r.token_name, tokPfx(r))}`, onclick: stop }, cred(r.token_name, tokPfx(r))) : cred(r.token_name, tokPfx(r)))
     : h('span', { class: 'muted' }, '—'));
-  const keyLink = (r) => (r.key_name
-    ? (r.key_id != null ? h('a', { class: 'link cell-link', href: `#/keys?open=${r.key_id}`, title: `${t('lg.openKey')}: ${r.key_name}`, onclick: stop }, icon('key', 10), ' ', r.key_name) : h('span', null, icon('key', 10), ' ', r.key_name))
-    : h('span', { class: 'muted' }, icon('key', 10), ' —'));
-  // List time "10月18日 14:02" (pm-spec 10.3); the relative time below only within the last day.
+  // "上游密钥 prod-01"; requests the gateway answered itself or rejected say so instead.
+  const keyLink = (r) => {
+    if (!r.key_name) return h('span', { class: 'muted' }, r.status && r.status < 400 ? t('lg5.local') : t('lg5.notForwarded'));
+    const text = t('lg5.keyLine', { name: r.key_name });
+    return r.key_id != null ? h('a', { class: 'link cell-link', href: `#/keys?open=${r.key_id}`, title: `${t('lg.openKey')}: ${r.key_name}`, onclick: stop }, text) : h('span', null, text);
+  };
+  // Today: "14:02:41", earlier: "10月18日 14:02" (pm-spec 10.3). Mixed views add the relative time below.
   const timeCell = (r) => {
-    const recent = Date.now() - new Date(r.created_at).getTime() < 86400e3;
-    return h('td', { class: 'nowrap m-meta m-time' }, h('div', { title: fmtDateTime(r.created_at) }, fmtDateTime(r.created_at, { seconds: false })),
+    const d = new Date(r.created_at);
+    const today = d.toDateString() === new Date().toDateString();
+    const recent = Date.now() - d.getTime() < 86400e3;
+    return h('td', { class: 'nowrap m-meta m-time col-time' }, h('div', { class: 'lg-time', title: fmtDateTime(r.created_at) }, today ? fmtTimeShort(r.created_at) : fmtDateTime(r.created_at, { seconds: false })),
       recent ? h('div', { class: 'cell-sub', 'data-rel': r.created_at }, relTime(r.created_at)) : null);
   };
-  const isErr = (r) => (r.type === 'request' ? (r.status >= 400 || !r.status) : r.level === 'error');
+  // Error rows get the 2px red line: server-side failures and error-level records, not client 4xx.
+  const isErr = (r) => (r.type === 'request' || r.type === undefined ? (!r.status || r.status >= 500) : r.level === 'error');
+  const okText = (r) => ((r.attempts || 0) > 1 ? t('lg5.okAttempt', { n: r.attempts })
+    : r.images ? t('lg5.images', { n: r.images }) : r.video_seconds ? t('lg5.video', { n: r.video_seconds })
+      : r.total_tokens ? t('lg5.okTokens', { n: fmtInt(r.total_tokens) }) : t('lg5.ok'));
+  function tokCells(r) {
+    const td = (cls, ...kids) => h('td', { class: `num col-tk ${cls || ''}` }, ...kids);
+    if (r.images || r.video_seconds) return [td(), td(), td(), td('muted small nowrap', t(r.images ? 'lg5.perImage' : 'lg5.perSecond'))];
+    if (!r.total_tokens && !r.prompt_tokens) return [td(), td(), td(), td('muted', '—')];
+    const c = tokenCats(r);
+    const v = (n, cls) => (n == null ? h('span', { class: 'muted', title: t('lg.tok.cacheWriteTip') }, '—') : h('span', { class: 'tk' }, h('span', { class: `tok-sw ${cls}` }), fmtInt(n)));
+    return [td('', v(c.input + c.image, 'in')), td('', v(c.cacheWrite, 'cw')), td('', v(c.cacheRead, 'cr')),
+      td('', h('div', null, v(c.output, 'out')), h('div', { class: 'cell-sub nowrap' }, c.reasoningKnown ? t('lg.inclReasoning', { n: fmtInt(c.reasoning) }) : t('lg5.reasoningUnknown')))];
+  }
   function tok4(r) {
     if (r.images) return h('span', null, `${r.images} ${t('logs.imgShort')}`);
     if (r.video_seconds) return h('span', null, t('lg.seconds', { n: r.video_seconds }));
@@ -319,28 +350,29 @@ export function render(el, ctx) {
     const tr = h('tr', { class: `clickable ${isErr(r) ? 'row-err' : ''} ${active ? 'row-active' : ''}`, 'data-id': r.id, 'data-type': isReq ? 'request' : 'event', onclick: () => (isReq ? openDetail(r.id) : openEvent(r.id)) });
     const m = mode();
     if (m === 'request') {
+      const rr = requestReason(r);
       tr.append(timeCell(r),
         h('td', { class: 'cell-req m-title' }, reqLine(r)),
-        h('td', { class: 'col-status m-badge' }, h('div', { class: 'nowrap' }, statusBadge(r.status), tries(r)), reasonLine(r)),
+        h('td', { class: 'col-status m-badge' }, h('div', { class: 'lg-sum' }, statusBadge(r.status), tries(r),
+          h('span', { class: 'lg-sum-text', title: rr ? (rr.raw || rr.text) : null }, rr ? rr.text : okText(r)))),
         h('td', { class: 'truncate-cell m-meta m-who' }, h('div', { class: 'truncate' }, tokenLink(r)), h('div', { class: 'cell-sub truncate' }, keyLink(r))),
-        h('td', { class: 'num mono m-meta col-tok' }, tok4(r)),
-        h('td', { class: 'num mono m-meta col-cost' }, r.cost_usd ? fmtUSD(r.cost_usd) : h('span', { class: 'muted' }, '$0')),
+        ...tokCells(r),
+        h('td', { class: 'num mono m-meta col-cost' }, r.cost_usd ? fmtUSD(r.cost_usd) : h('span', { class: 'muted' }, r.status >= 400 || !r.status ? '—' : '$0')),
         h('td', { class: `num mono m-meta col-lat ${r.latency_ms > 30000 ? 'text-warning' : ''}` }, h('div', null, fmtMs(r.latency_ms)), r.ttfb_ms ? h('div', { class: 'cell-sub', title: t('logs.ttfbClientHint') }, t('lg.ttfb', { v: fmtMs(r.ttfb_ms) })) : null));
     } else if (m === 'mixed') {
       if (isReq) {
         const rr = requestReason(r);
         tr.append(timeCell(r), h('td', { class: 'col-type' }, typeTag('request', r.level)),
           h('td', { class: 'cell-req m-title' }, reqLine(r)),
-          h('td', { class: 'cell-sum' }, h('div', { class: 'nowrap' }, statusBadge(r.status), tries(r), ' ',
-            rr ? h('span', { class: `small ${r.status >= 500 || !r.status ? 'text-danger' : 'text-warning'}`, title: rr.raw || rr.text }, rr.text) : null),
-            !rr && (r.total_tokens || r.prompt_tokens) ? h('div', { class: 'cell-sub' }, tokCompact(r)) : null),
+          h('td', { class: 'cell-sum' }, h('div', { class: 'lg-sum' }, statusBadge(r.status), tries(r),
+            h('span', { class: 'lg-sum-text', title: rr ? (rr.raw || rr.text) : null }, rr ? rr.text : okText(r)))),
           h('td', { class: 'truncate-cell m-meta' }, h('div', { class: 'truncate' }, tokenLink(r)), h('div', { class: 'cell-sub truncate' }, keyLink(r))),
-          h('td', { class: 'num mono m-meta col-cost' }, h('div', null, r.cost_usd ? fmtUSD(r.cost_usd) : '$0'), h('div', { class: 'cell-sub' }, fmtMs(r.latency_ms))));
+          h('td', { class: 'num mono m-meta col-cost' }, h('div', null, r.cost_usd ? fmtUSD(r.cost_usd) : h('span', { class: 'muted' }, '—')), h('div', { class: 'cell-sub' }, fmtMs(r.latency_ms))));
       } else {
         tr.append(timeCell(r), h('td', { class: 'col-type' }, typeTag(r.type, r.level)),
           h('td', { class: 'm-title' }, h('div', { class: 'truncate' }, targetCell(r)), h('div', { class: 'cell-sub' }, actionLabel(r.action))),
           h('td', { class: 'cell-sum' }, h('div', { class: 'clamp-2', title: eventSentence(r) }, eventSentence(r))),
-          h('td', { class: 'truncate-cell m-meta' }, h('div', { class: 'truncate' }, actorLabel(r))),
+          h('td', { class: 'truncate-cell m-meta' }, ...actorCell(r)),
           h('td', { class: 'num muted' }, '—'));
       }
     } else {
@@ -353,6 +385,11 @@ export function render(el, ctx) {
     }
     return tr;
   }
+  function actorCell(e) {
+    if ((e.actor === 'anonymous' || !e.actor) && e.ip) return [h('div', { class: 'truncate' }, t('lg5.anonIp', { ip: e.ip }))];
+    return [h('div', { class: 'truncate' }, actorLabel(e)), e.ip && e.actor !== 'system' ? h('div', { class: 'cell-sub mono' }, e.ip) : null];
+  }
+  void tok4; void reasonLine;
   function tokCompact(r) {
     const c = tokenCats(r);
     return [`${t('lg.tok.input')} ${fmtCompact(c.input + c.image)}`, `${t('lg.tok.cacheRead')} ${fmtCompact(c.cacheRead)}`, `${t('lg.tok.output')} ${fmtCompact(c.output)}`].join(t('lg.sep'));
@@ -384,7 +421,7 @@ export function render(el, ctx) {
       if (res.total != null) { st.total = res.total || 0; st.totalKind = res.total_kind || (res.total_exact === false ? 'approx' : 'exact'); }
       st.next = res.next_cursor || '';
       st.loaded = true;
-      countEl.textContent = t('logs.matchN', { n: fmtTotal(st.total, st.totalKind) });
+      countEl.textContent = PRESET_MS[st.preset] ? t('lg5.countRange', { r: t(`logs.preset.${st.preset}`), n: fmtTotal(st.total, st.totalKind) }) : t('lg5.count', { n: fmtTotal(st.total, st.totalKind) });
       countEl.title = st.totalKind === 'approx' ? t('common.totalApproxHint') : st.totalKind === 'at_least' ? t('common.totalAtLeastHint') : '';
       const filtered = st.problems || st.q || REQ_FILTERS.some((k) => st[k]) || EV_FILTERS.some((k) => st[k]) || st.key_id || st.token_id;
       let empty;

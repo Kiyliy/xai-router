@@ -3,6 +3,13 @@
 export const en = {
   // page & overrides of older log strings
   'nav.logs': 'Logs', 'lg.sep': ', ',
+  // logs (v0.5)
+  'logs.preset.15m': '15 minutes', 'logs.preset.1h': '1 hour', 'logs.preset.24h': '24 hours', 'logs.preset.7d': '7 days', 'logs.preset.30d': '30 days', 'logs.preset.all': 'All', 'logs.preset.custom': 'Custom',
+  'lg5.countRange': '{n} in the last {r}', 'lg5.count': '{n} in total', 'lg5.filter': 'Filter', 'lg5.typeLabel': 'Type',
+  'lg5.okTokens': 'Succeeded, {n} tokens', 'lg5.ok': 'Succeeded', 'lg5.okAttempt': 'Succeeded on attempt {n}',
+  'lg5.notForwarded': 'Not forwarded', 'lg5.local': 'Answered by the gateway', 'lg5.keyLine': 'Upstream key {name}',
+  'lg5.tokGroup': 'Tokens', 'lg5.reasoningUnknown': 'reasoning not reported', 'lg5.perImage': 'Billed per image', 'lg5.perSecond': 'Billed per second',
+  'lg5.images': '{n} images', 'lg5.video': '{n}-second video', 'lg5.anonIp': 'Not signed in ({ip})',
   // overview (v0.5)
   'ov5.keysPill': 'Upstream keys {a} / {n} available', 'ov5.vs': '{d} on the previous {r}', 'ov5.noPrev': 'No requests in the previous {r}',
   'ov5.rateUp': 'Up {d} points on the previous {r}', 'ov5.rateDown': 'Down {d} points on the previous {r}', 'ov5.rateSame': 'Same as the previous {r}',
@@ -147,6 +154,13 @@ export const en = {
 
 export const zh = {
   'nav.logs': '日志', 'lg.sep': '，',
+  // 日志（v0.5）
+  'logs.preset.30d': '30 天',
+  'lg5.countRange': '最近 {r}共 {n} 条', 'lg5.count': '共 {n} 条', 'lg5.filter': '筛选', 'lg5.typeLabel': '类型',
+  'lg5.okTokens': '成功，共 {n} Token', 'lg5.ok': '成功', 'lg5.okAttempt': '第 {n} 次尝试成功',
+  'lg5.notForwarded': '未转发', 'lg5.local': '网关直接返回', 'lg5.keyLine': '上游密钥 {name}',
+  'lg5.tokGroup': 'Token 数', 'lg5.reasoningUnknown': '推理数未知', 'lg5.perImage': '按张计费', 'lg5.perSecond': '按秒计费',
+  'lg5.images': '{n} 张图片', 'lg5.video': '{n} 秒视频', 'lg5.anonIp': '未登录（{ip}）',
   // 概览（v0.5）
   'ov5.keysPill': '上游密钥 {a} / {n} 可用', 'ov5.vs': '比前 {r} {d}', 'ov5.noPrev': '前 {r}没有请求',
   'ov5.rateUp': '比前 {r}上升 {d} 个百分点', 'ov5.rateDown': '比前 {r}下降 {d} 个百分点', 'ov5.rateSame': '与前 {r}持平',
