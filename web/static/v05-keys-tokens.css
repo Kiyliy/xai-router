@@ -19,11 +19,13 @@
 .table-keys .col-status { width: 15%; }
 .table-keys .col-prio, .table-keys .col-weight { width: 64px; }
 .table-keys .col-test { width: 15%; }
-/* actions follow 最近检测 directly: not a sticky column, no divider or own background; the whole row highlights */
-.table-keys .col-actions, .table-keys thead .col-actions { position: static; box-shadow: none; background: transparent; background-image: none; }
-.table-keys tbody tr:hover td.col-actions { background: var(--hover); background-image: none; }
-.table-keys tr.row-selected td.col-actions { background: var(--accent-soft); background-image: none; }
-.table-keys tr.row-active td.col-actions { background: var(--accent-soft) !important; background-image: none !important; }
+/* keys and tokens lists: the actions follow the last column directly: not a sticky column,
+   no divider or own background; the whole row highlights */
+.table-keys .col-actions, .table-keys thead .col-actions,
+.table-tokens .col-actions, .table-tokens thead .col-actions { position: static; box-shadow: none; background: transparent; background-image: none; }
+.table-keys tbody tr:hover td.col-actions, .table-tokens tbody tr:hover td.col-actions { background: var(--hover); background-image: none; }
+.table-keys tr.row-selected td.col-actions, .table-tokens tr.row-selected td.col-actions { background: var(--accent-soft); background-image: none; }
+.table-keys tr.row-active td.col-actions, .table-tokens tr.row-active td.col-actions { background: var(--accent-soft) !important; background-image: none !important; }
 .table-keys .title-line { gap: 10px; }
 .table-keys .name-link { font-weight: 400; color: var(--text); font-size: 13px; }
 .kl-mask { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
@@ -282,3 +284,6 @@ button.kd-test:hover { background: var(--active); }
 .kl-imp-line.is-bad .t, .kl-imp-line.is-bad .icon { color: var(--danger); }
 .kl-imp-line.is-warn .t, .kl-imp-line.is-warn .icon { color: var(--warning); }
 @media (max-width: 640px) { .kl-imp-row { grid-template-columns: 1fr 1fr; } .kl-imp-row .field:first-child { grid-column: 1 / -1; } .kl-imp-line { grid-template-columns: 16px minmax(0, 1fr); } .kl-imp-line .k, .kl-imp-line .n { display: none; } }
+
+/* client snippets (token drawer 接入示例 tab, one-time secret dialog): long lines wrap instead of clipping */
+.detail-drawer .code-block pre.code, .secret-modal .code-block pre.code { white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: auto; }
