@@ -98,6 +98,7 @@ function route() {
   closeAllModals();
   const sh = state.shell;
   markNav(name, params);
+  setCrumbs([]);
   sh.title.textContent = t(titleKey(name, params));
   document.title = `${t(titleKey(name, params))} · xai-router`;
   sh.actions.replaceChildren();
@@ -112,6 +113,9 @@ function route() {
     signal: controller.signal,
     alive: () => seq === state.routeSeq,
     setActions: (...nodes) => sh.actions.replaceChildren(...nodes.flat().filter(Boolean)),
+    // Breadcrumbs between "xai-router" and the page title, e.g. [{ label: '日志', href: '#/logs' }];
+    // pass `title` to replace the last crumb (the page title) as well.
+    setCrumbs: (items, title) => { if (seq === state.routeSeq) { setCrumbs(items); if (title != null) sh.title.textContent = title; } },
     navigate: (hash) => { location.hash = hash; },
     // push: true adds a history entry (page / filter changes) so back/forward restores the view;
     // otherwise the current entry is replaced (typing, drawer state).
@@ -164,12 +168,16 @@ function renderShell() {
       : h('a', { class: 'nav-item', href: it.tab ? `#/${it.route}?tab=${it.tab}` : `#/${it.route}`, 'data-route': it.route, 'data-tab': it.tab || '' },
         icon(it.icon, 17), h('span', null, t(it.label || `nav.${it.route}`))))));
   const sidebar = h('aside', { class: 'sidebar' },
-    h('div', { class: 'brand' }, logo(28), h('div', { class: 'brand-text' }, h('div', { class: 'brand-name' }, 'xai-router'), h('div', { class: 'brand-sub' }, t('app.tagline')))),
+    h('div', { class: 'brand' }, logo(24), h('div', { class: 'brand-text' }, h('div', { class: 'brand-name' }, 'xai-router'), h('div', { class: 'brand-sub' }, t('app.tagline')))),
     nav,
-    h('div', { class: 'sidebar-foot' },
-      accountButton(),
-      h('div', { class: 'sidebar-tools' }, prefsButtons())));
-  const title = h('h1', { class: 'topbar-title' });
+    // Theme and language live in the account menu (v0.5 design: the sidebar foot is just the account).
+    h('div', { class: 'sidebar-foot' }, accountButton()));
+  const title = h('h1', { class: 'topbar-title crumb-current' });
+  const crumbsMid = h('span', { class: 'crumbs-mid', style: { display: 'contents' } });
+  const crumbs = h('nav', { class: 'crumbs', 'aria-label': 'breadcrumb' },
+    h('a', { class: 'crumb crumb-root', href: '#/overview' }, 'xai-router'),
+    h('span', { class: 'crumb-sep', 'aria-hidden': 'true' }),
+    crumbsMid, title);
   const actions = h('div', { class: 'topbar-actions' });
   const banner = h('div', { class: 'banner-slot' });
   const content = h('div', { class: 'content' });
@@ -178,12 +186,12 @@ function renderShell() {
     banner,
     h('header', { class: 'topbar' },
       h('button', { class: 'btn btn-ghost btn-icon hamburger', 'aria-label': t('nav.menu'), onclick: () => shell.classList.toggle('sidebar-open') }, icon('menu', 20)),
-      h('div', { class: 'topbar-heading' }, title),
+      h('div', { class: 'topbar-heading' }, crumbs),
       actions),
     content);
   mount(shell, sidebar, h('div', { class: 'sidebar-backdrop', onclick: () => shell.classList.remove('sidebar-open') }), main);
   mount(app, shell);
-  state.shell = { shell, nav, title, actions, content, banner, main };
+  state.shell = { shell, nav, title, crumbsMid, actions, content, banner, main };
   const topbar = main.querySelector('.topbar');
   const setTopVar = () => document.documentElement.style.setProperty('--topbar-real', `${topbar.offsetHeight}px`);
   if (state.topRO) state.topRO.disconnect();
@@ -191,6 +199,16 @@ function renderShell() {
   state.topRO.observe(topbar);
   setTopVar();
   renderBanner();
+}
+
+/** Middle breadcrumbs: [{ label, href? }] rendered as "xai-router / a / b / <title>". */
+function setCrumbs(items) {
+  const mid = state.shell && state.shell.crumbsMid;
+  if (!mid) return;
+  mid.replaceChildren(...(items || []).flatMap((it) => [
+    it.href ? h('a', { class: 'crumb', href: it.href }, it.label) : h('span', { class: 'crumb' }, it.label),
+    h('span', { class: 'crumb-sep', 'aria-hidden': 'true' }),
+  ]));
 }
 
 function markNav(name, params) {
@@ -231,6 +249,10 @@ function openAccountMenu(btn) {
   openMenu(btn, [
     !id.isToken ? { icon: 'lock', label: t('account.changePassword'), onClick: () => openPasswordDialog({ onDone: () => loadInfo() }) } : null,
     { icon: 'shield', label: t('nav.access'), onClick: () => { location.hash = '#/access'; } },
+    '-',
+    // Cycles dark -> light -> follow system; the label shows the current choice.
+    { icon: themeIcon(), label: t(`theme.${getThemePref()}`), onClick: () => cycleTheme() },
+    { icon: 'languages', label: getLang() === 'zh' ? 'English' : '中文', onClick: () => { setLang(getLang() === 'zh' ? 'en' : 'zh'); rerender(); } },
     '-',
     { icon: 'logout', label: t('auth.logout'), danger: true, onClick: logout },
   ]);

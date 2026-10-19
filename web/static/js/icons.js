@@ -92,10 +92,9 @@ export function logo(size = 28) {
   svg.setAttribute('aria-hidden', 'true');
   svg.setAttribute('class', 'logo-mark');
   const mk = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); svg.appendChild(e); return e; };
-  mk('rect', { x: 1, y: 1, width: 30, height: 30, rx: 8, class: 'logo-tile' });
-  mk('path', { d: 'M10 10 L22 22', stroke: 'currentColor', 'stroke-width': 2.6, 'stroke-linecap': 'round', class: 'logo-stroke' });
-  mk('path', { d: 'M22 10 L17.5 14.5 M14.5 17.5 L10 22', stroke: 'currentColor', 'stroke-width': 2.6, 'stroke-linecap': 'round', class: 'logo-stroke' });
-  mk('circle', { cx: 22, cy: 10, r: 2.2, class: 'logo-dot' });
-  mk('circle', { cx: 10, cy: 22, r: 2.2, class: 'logo-dot' });
+  // v0.5 "route line" mark: outlined rounded square, one diagonal, a brand-colour dot at its end.
+  mk('rect', { x: 2, y: 2, width: 28, height: 28, rx: 7, class: 'logo-tile', fill: 'none', stroke: 'currentColor', 'stroke-width': 2 });
+  mk('path', { d: 'M9.5 22.5 L20 12', fill: 'none', stroke: 'currentColor', 'stroke-width': 2.2, 'stroke-linecap': 'round', class: 'logo-route' });
+  mk('circle', { cx: 22, cy: 10, r: 2.6, class: 'logo-dot' });
   return svg;
 }
