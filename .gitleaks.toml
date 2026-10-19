@@ -9,3 +9,8 @@ regexes = [
   '''xai-abc123def456''',
   '''xai-second-key-0002''',
 ]
+# UI string dictionaries: keys such as 'lg5.tokReasoningNone' look like
+# generic API keys to the entropy rule. They hold no secrets.
+paths = [
+  '''web/static/js/i18n[-a-z]*\.js''',
+]
