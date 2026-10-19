@@ -10,7 +10,9 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"time"
 
@@ -63,10 +65,41 @@ func main() {
 		}
 		tokIDs, tokNames = append(tokIDs, t.ID), append(tokNames, t.Name)
 	}
-	models := []string{"grok-4.3", "grok-build-0.1", "grok-4.20-0309-non-reasoning", "grok-4.7", "grok-4.5",
-		"grok-4.20-0309-reasoning", "grok-imagine-image", "grok-4.6"}
-	paths := []string{"/v1/chat/completions", "/v1/chat/completions", "/v1/chat/completions", "/v1/responses",
-		"/v1/messages", "/v1/images/generations", "/v1/models"}
+	table := billing.NewTable()
+	if err := table.Reload(ctx, db); err != nil {
+		log.Fatal(err)
+	}
+	// Realistic traffic: each endpoint with the models it serves, its streaming
+	// share and the shape of its usage. Costs come from the price table, the
+	// same way the gateway prices a request.
+	type endpoint struct {
+		path, method string
+		weight       int
+		models       []string
+		stream       float64 // share of streamed requests
+		kind         string  // text, image, video, list
+	}
+	endpoints := []endpoint{
+		{"/v1/chat/completions", "POST", 50, []string{"grok-4.3", "grok-4.3", "grok-4.20-0309-non-reasoning", "grok-4.20-0309-reasoning", "grok-4.6", "grok-4.7", "grok-build-0.1"}, 0.45, "text"},
+		{"/v1/responses", "POST", 14, []string{"grok-4.3", "grok-4.20-0309-reasoning", "grok-4.6"}, 0.3, "text"},
+		{"/v1/messages", "POST", 10, []string{"grok-4.3", "grok-4.20-0309-non-reasoning", "grok-4.5"}, 0.5, "text"},
+		{"/v1/images/generations", "POST", 6, []string{"grok-imagine-image", "grok-imagine-image-2.0"}, 0, "image"},
+		{"/v1/videos/generations", "POST", 2, []string{"grok-imagine-video-1.5", "grok-imagine-video-1.5-lite"}, 0, "video"},
+		{"/v1/models", "GET", 8, nil, 0, "list"},
+	}
+	totalW := 0
+	for _, e := range endpoints {
+		totalW += e.weight
+	}
+	pickEndpoint := func(r *rand.Rand) endpoint {
+		x := r.IntN(totalW)
+		for _, e := range endpoints {
+			if x -= e.weight; x < 0 {
+				return e
+			}
+		}
+		return endpoints[0]
+	}
 	words := strings.Fields("the quick brown fox jumps over the lazy dog gateway router stream token model price " +
 		"reasoning cache answer question hello world summary report data value request response log")
 	text := func(r *rand.Rand, bytes int) string {
@@ -80,58 +113,117 @@ func main() {
 	r := rand.New(rand.NewPCG(1, 2))
 	end := time.Now().UnixMilli()
 	start := end - int64(*days)*86400_000
-	step := float64(end-start) / float64(*n)
+	// A daily curve (busy afternoons, quiet nights) with some noise; the times
+	// are drawn from it and sorted, so the newest log is a few seconds old.
+	times := make([]int64, *n)
+	for i := range times {
+		for {
+			t := start + r.Int64N(end-start)
+			h := float64(time.UnixMilli(t).Hour()) + float64(time.UnixMilli(t).Minute())/60
+			w := 0.35 + 0.65*(0.5+0.5*math.Sin((h-9)/24*2*math.Pi))
+			if r.Float64() < w {
+				times[i] = t
+				break
+			}
+		}
+	}
+	slices.Sort(times)
+	times[len(times)-1] = end - 3000
 	t0 := time.Now()
 	buf := make([]*store.Log, 0, *batch)
 	for i := 0; i < *n; i++ {
-		created := start + int64(float64(i)*step)
+		created := times[i]
 		ki, ti := r.IntN(len(keyIDs)), r.IntN(len(tokIDs))
+		ep := pickEndpoint(r)
 		l := &store.Log{
-			RequestID: secret.Random(24), CreatedAt: created, Method: "POST", Path: paths[r.IntN(len(paths))],
-			Model: models[r.IntN(len(models))], ClientIP: fmt.Sprintf("203.0.113.%d", r.IntN(250)+1),
+			RequestID: secret.Random(24), CreatedAt: created, Method: ep.method, Path: ep.path,
+			ClientIP:  fmt.Sprintf("203.0.113.%d", r.IntN(250)+1),
 			UserAgent: "OpenAI/Python 3.31.0", TokenID: tokIDs[ti], TokenName: tokNames[ti],
-			KeyID: keyIDs[ki], KeyName: keyNames[ki], Stream: r.IntN(10) < 4, CostSource: "upstream",
-			TTFBMs: int64(200 + r.IntN(2000)), HasBodies: true, ReqHeaders: `{"Content-Type":"application/json"}`,
-			RespHeaders: `{"Content-Type":"application/json"}`,
+			KeyID: keyIDs[ki], KeyName: keyNames[ki], CostSource: "none", HasBodies: true,
+			ReqHeaders: `{"Content-Type":"application/json"}`, RespHeaders: `{"Content-Type":"application/json"}`,
 		}
-		l.LatencyMs = l.TTFBMs + int64(r.IntN(5000))
-		switch p := r.IntN(100); {
-		case p < 90:
-			l.Status = 200
-		case p < 93:
-			l.Status, l.Error = 429, "rate limited (429): slow down"
-		case p < 96:
-			l.Status, l.Error = 400, "HTTP 400: invalid request"
-		case p < 98:
-			l.Status, l.Error = 500, "HTTP 500: internal"
-		case p < 99:
-			l.Status, l.Error = 499, "client closed request"
+		if len(ep.models) > 0 {
+			l.Model = ep.models[r.IntN(len(ep.models))]
+		}
+		l.Stream = r.Float64() < ep.stream
+		switch ep.kind {
+		case "list":
+			l.TTFBMs = int64(80 + r.IntN(200))
+			l.LatencyMs = l.TTFBMs + int64(r.IntN(40))
+		case "image":
+			l.TTFBMs = int64(4000 + r.IntN(8000))
+			l.LatencyMs = l.TTFBMs + int64(r.IntN(500))
+		case "video":
+			l.TTFBMs = int64(300 + r.IntN(600))
+			l.LatencyMs = l.TTFBMs + int64(r.IntN(200))
 		default:
-			l.Status, l.Error = 401, "invalid API key"
+			l.TTFBMs = int64(300 + r.IntN(1500))
+			l.LatencyMs = l.TTFBMs + int64(r.IntN(6000))
 		}
-		if l.Path == "/v1/models" {
-			l.Method, l.Model = "GET", ""
+		switch p := r.IntN(100); {
+		case p < 92 || ep.kind == "list":
+			l.Status = 200
+		case p < 95:
+			l.Status, l.Error = 429, "rate limited (429): slow down"
+		case p < 97:
+			l.Status, l.Error = 400, "HTTP 400: invalid request"
+		case p < 99:
+			l.Status, l.Error = 500, "HTTP 500: internal"
+		default:
+			l.Status, l.Error = 499, "client closed request"
 		}
-		l.ReqBody = `{"model":"` + l.Model + `","messages":[{"role":"user","content":"` + text(r, 500+r.IntN(2500)) + `"}]}`
-		if l.Status == 200 {
-			l.PromptTokens = int64(100 + r.IntN(3000))
-			l.CachedTokens = l.PromptTokens / int64(1+r.IntN(4))
-			l.CompletionTokens = int64(10 + r.IntN(800))
-			l.ReasoningTokens = int64(r.IntN(600))
-			l.TotalTokens = l.PromptTokens + l.CompletionTokens + l.ReasoningTokens
-			l.CostTicks = l.PromptTokens*12500 + l.CompletionTokens*25000
+		if ep.kind == "video" && l.Status == 200 {
+			l.Status = 202
+		}
+		var u billing.Usage
+		var req billing.Request
+		ok := l.Status == 200 || l.Status == 202
+		switch {
+		case ep.kind == "list":
+			l.RespBody = `{"object":"list","data":[{"id":"grok-4.3","object":"model"}]}`
+		case !ok:
+			l.RespBody = `{"error":"` + l.Error + `"}`
+		case ep.kind == "image":
+			u = billing.Usage{Found: true, Images: int64(1 + r.IntN(3))}
+			req.Resolution = []string{"1k", "1k", "2k"}[r.IntN(3)]
+			l.ReqBody = `{"model":"` + l.Model + `","prompt":"` + text(r, 120) + `","n":` + fmt.Sprint(u.Images) + `}`
+			l.RespBody = `{"data":[{"url":"https://example.invalid/image.png"}]}`
+		case ep.kind == "video":
+			u = billing.Usage{Found: true, VideoSeconds: float64(4 + r.IntN(7))}
+			req.Resolution = []string{"480p", "480p", "720p"}[r.IntN(3)]
+			l.ReqBody = `{"model":"` + l.Model + `","prompt":"` + text(r, 120) + `"}`
+			l.RespBody = `{"request_id":"` + secret.Random(16) + `"}`
+		default:
+			u = billing.Usage{Found: true, PromptTokens: int64(200 + r.IntN(4000))}
+			if r.IntN(3) > 0 { // most repeated prompts hit the cache
+				u.CachedTokens = u.PromptTokens * int64(40+r.IntN(50)) / 100
+			}
+			u.CompletionTokens = int64(20 + r.IntN(900))
+			if strings.Contains(l.Model, "reasoning") || l.Model == "grok-4.6" || l.Model == "grok-4.7" {
+				u.ReasoningTokens = int64(50 + r.IntN(1200))
+			}
+			if ep.path == "/v1/messages" {
+				zero := int64(0)
+				u.CacheWriteTokens = &zero
+			}
+			u.TotalTokens = u.PromptTokens + u.CompletionTokens + u.ReasoningTokens
+			l.ReqBody = `{"model":"` + l.Model + `","messages":[{"role":"user","content":"` + text(r, 500+r.IntN(2500)) + `"}]}`
 			size := 500 + r.IntN(3500)
 			if r.Float64()*100 < *bigPct {
 				size = 100_000 + r.IntN(100_000)
 			}
 			l.RespText = text(r, size/2)
 			l.RespBody = `{"choices":[{"message":{"content":"` + l.RespText + `"}}]}`
-		} else {
-			l.CostSource = "none"
-			l.RespBody = `{"error":"` + l.Error + `"}`
+		}
+		if u.Found {
+			l.PromptTokens, l.CompletionTokens, l.CachedTokens = u.PromptTokens, u.CompletionTokens, u.CachedTokens
+			l.ReasoningTokens, l.TotalTokens, l.Images, l.VideoSeconds = u.ReasoningTokens, u.TotalTokens, u.Images, u.VideoSeconds
+			l.CacheWriteTokens = u.CacheWriteTokens
+			l.CostTicks, l.CostSource = table.Cost(l.Model, u, req)
+			l.PriceSnapshot = table.PriceSnapshot(l.Model, u, req)
 		}
 		attempts := 1
-		if r.IntN(10) == 0 {
+		if r.IntN(12) == 0 && ep.kind != "list" {
 			attempts = 2 + r.IntN(2)
 		}
 		for a := 1; a <= attempts; a++ {
