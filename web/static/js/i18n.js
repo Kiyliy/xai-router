@@ -722,13 +722,6 @@ const zh = {
   'docs.adminAuth': '认证',
   'docs.adminAuthDesc': '把管理 API 令牌（xra-…）作为 Bearer 令牌发送。在“管理访问”页创建和吊销。',
   'docs.goAccess': '去管理访问 →',
-};
-
-// Page-specific dictionaries are kept in their own modules and merged here;
-// keys defined in this file win.
-const DICTS = {
-  en: { ...lists.en, ...en, ...logsI18n.en, ...miscI18n.en },
-  zh: { ...lists.zh, ...zh, ...logsI18n.zh, ...miscI18n.zh },
   'unit.s': '秒',
   'unit.h': '小时',
   'unit.d': '天',
@@ -737,6 +730,13 @@ const DICTS = {
   'models.thOutput': '输出（每百万）',
   'models.longCtxHint': '提示超过阈值时，整个请求按长上下文价格计费。',
   'data.commitParen': '（{c}）',
+};
+
+// Page-specific dictionaries are kept in their own modules and merged here;
+// keys defined in this file win.
+const DICTS = {
+  en: { ...lists.en, ...en, ...logsI18n.en, ...miscI18n.en },
+  zh: { ...lists.zh, ...zh, ...logsI18n.zh, ...miscI18n.zh },
 };
 
 function detect() {
