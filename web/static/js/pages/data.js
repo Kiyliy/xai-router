@@ -232,8 +232,9 @@ export function render(el, ctx) {
     const free = i.disk_free_bytes || 0;
     const used = Math.max(0, total - free);
     const pct = typeof i.disk_used_percent === 'number' ? i.disk_used_percent : (used / total) * 100;
+    // Rounded down, as in the low-disk banner and the disk.low record, so the page never shows two different numbers.
     const warnAt = i.disk_warn_percent || diskWarn || 85;
-    const text = t('data.diskLine', { p: pct.toFixed(pct < 10 ? 1 : 0), total: fmtBytes(total), free: fmtBytes(free) });
+    const text = t('data.diskLine', { p: pct < 10 ? pct.toFixed(1) : Math.floor(pct), total: fmtBytes(total), free: fmtBytes(free) });
     return h('span', { title: t('data.diskWarnAt', { p: warnAt }) }, i.disk_warning ? statusDot(text, 'warning') : text);
   }
   async function loadInfo() {
