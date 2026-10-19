@@ -430,10 +430,13 @@ func (db *DB) PurgeExpiredSessions(ctx context.Context) error {
 
 // Quota adjustment actions.
 const (
-	QuotaIncrease     = "increase"
-	QuotaDecrease     = "decrease"
-	QuotaSetLimited   = "set_limited"   // amount = balance left to spend: quota = used + amount
-	QuotaSetUnlimited = "set_unlimited" // the stored quota is kept (and ignored while unlimited)
+	QuotaIncrease = "increase"
+	QuotaDecrease = "decrease"
+	// QuotaToUsed as a decrease amount takes the quota down to exactly what
+	// has been used (at tick precision, which amount_usd cannot express).
+	QuotaToUsed       int64 = -1
+	QuotaSetLimited         = "set_limited"   // amount = balance left to spend: quota = used + amount
+	QuotaSetUnlimited       = "set_unlimited" // the stored quota is kept (and ignored while unlimited)
 )
 
 // ErrQuotaInvalid is an adjustment the rules forbid; the text says why.
@@ -484,6 +487,11 @@ WHERE id = ? AND deleted_at = 0`, id).Scan(&qc.BeforeTicks, &unl, &qc.UsedTicks,
 	case QuotaIncrease, QuotaDecrease:
 		if qc.BeforeUnlimited {
 			return qc, ErrQuotaInvalid{"the token is unlimited; switch it to limited first"}
+		}
+		if action == QuotaDecrease && amount == QuotaToUsed {
+			if amount = qc.BeforeTicks - qc.UsedTicks; amount <= 0 {
+				return qc, ErrQuotaInvalid{"the quota already equals what has been used"}
+			}
 		}
 		if amount <= 0 {
 			return qc, ErrQuotaInvalid{"amount must be greater than 0"}

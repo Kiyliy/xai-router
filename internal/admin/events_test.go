@@ -214,6 +214,23 @@ func TestQuotaAdjust(t *testing.T) {
 		inc["used_usd"] != 2.0 {
 		t.Fatalf("increase record %v", inc)
 	}
+	// "Down to what is used" is exact even when used has more than 4 decimals.
+	f := h.must(h.call(http.MethodPost, "/api/v1/tokens", `{"name":"fine","quota_usd":1}`), 201)
+	fid := itoa(num(f["id"]))
+	if _, err := h.db.W.Exec(`UPDATE tokens SET used_ticks = 1006000 WHERE id = ?`, num(f["id"])); err != nil {
+		t.Fatal(err)
+	}
+	h.s.Quota.Invalidate(int64(num(f["id"])))
+	got = h.must(h.call(http.MethodPost, "/api/v1/tokens/"+fid+"/quota", `{"action":"decrease","to_used":true,"reason":"close it"}`), 200)
+	if got["exhausted"] != true || got["quota_usd"] != got["used_usd"] {
+		t.Fatalf("to_used: %v", got)
+	}
+	if r := h.call(http.MethodPost, "/api/v1/tokens/"+fid+"/quota", `{"action":"decrease","to_used":true,"reason":"again"}`); r.status != 400 {
+		t.Fatalf("to_used twice: %d %s", r.status, r.body)
+	}
+	if r := h.call(http.MethodPost, "/api/v1/tokens/"+fid+"/quota", `{"action":"increase","to_used":true,"reason":"x"}`); r.status != 400 {
+		t.Fatalf("to_used on increase: %d", r.status)
+	}
 	// A limited quota of 0 blocks (it is not "unlimited").
 	z := h.must(h.call(http.MethodPost, "/api/v1/tokens", `{"name":"zero","quota_usd":0}`), 201)
 	if z["unlimited"] != false || z["exhausted"] != true {

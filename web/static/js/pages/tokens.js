@@ -424,8 +424,252 @@ export function render(el, ctx) {
     const okBtn = h('button', { class: 'btn btn-primary', type: 'button', onclick: () => submit() }, h('span'));
     const m = openModal({ title: t('q.title', { name: tk.name || `#${tk.id}` }), size: 'sm', body, footer: [h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, t('common.cancel')), okBtn] });
     const usedT = () => toTicks(tk.used_usd), quotaT = () => toTicks(tk.quota_usd);
-    // Largest decrease with at most 4 decimals that keeps quota >= used.
-    const maxDecT = () => Math.floor(Math.max(0, quotaT() - usedT()) / 1e6) * 1e6;
+    // Largest decrease that keeps quota >= used, at tick precision. A typed
+    // amount has at most 4 decimals; "down to what is used" is sent as
+    // to_used so the server removes exactly quota − used.
+    const maxDecT = () => Math.max(0, quotaT() - usedT());
+    const exactUsd = (ticks) => '
+    const action = () => (startUnl ? (mode === 'limited' ? 'set_limited' : null) : (mode === 'unlimited' ? 'set_unlimited' : dir));
+    const parseAmt = () => { if (toUsed) return maxDecT(); const v = amount.value.trim(); return /^\d+(\.\d{1,4})?$/.test(v) ? toTicks(Number(v)) : null; };
+    function validate(show) {
+      const a = action();
+      let err = '';
+      if (a === 'increase' || a === 'decrease' || a === 'set_limited') {
+        const v = parseAmt();
+        if (amount.value.trim() === '') err = show ? t('q.errAmountReq') : '';
+        else if (v == null) err = t('q.errAmountFmt');
+        else if (a !== 'set_limited' && v <= 0) err = t('q.errAmountPos');
+        else if (a === 'decrease' && quotaT() - v < usedT()) err = t('q.errMaxDec', { max: exactUsd(maxDecT()), used: exactUsd(usedT()) });
+      }
+      amountErr.textContent = err; amountErr.hidden = !err; amount.classList.toggle('invalid', !!err);
+      const r = reason.value.trim();
+      const rErr = show && !r ? t('q.errReason') : '';
+      reasonErr.textContent = rErr; reasonErr.hidden = !rErr; reason.classList.toggle('invalid', !!rErr);
+      return !err && !!a && !!r && (a === 'set_unlimited' || parseAmt() != null);
+    }
+    function paint() {
+      const a = action();
+      nowV.textContent = startUnl ? t('q.roUnlimited', { used: usd2(tk.used_usd) }) : t('q.ro', { q: usd2(tk.quota_usd), used: usd2(tk.used_usd), left: usd2(remainingOf(tk)) });
+      dirRow.hidden = a !== 'increase' && a !== 'decrease';
+      amountRow.hidden = !(a === 'increase' || a === 'decrease' || a === 'set_limited');
+      amountLabel.replaceChildren(a === 'set_limited' ? t('q.balance') : t('q.amount'), h('span', { class: 'req' }, '*'));
+      amount.placeholder = a === 'set_limited' ? '0.00' : '5.00';
+      maxBtn.hidden = a !== 'decrease' || maxDecT() <= 0;
+      maxBtn.textContent = t('q.toUsed', { v: exactUsd(maxDecT()) });
+      note.hidden = a !== 'set_unlimited' && a !== null;
+      note.lastChild.textContent = a === 'set_unlimited' ? t('q.unlimitedWarn') : t('q.alreadyUnlimited');
+      // Live preview: quota and remaining before → after.
+      const v = parseAmt();
+      let pv = '';
+      if ((a === 'increase' || a === 'decrease') && v != null && v > 0) {
+        const after = a === 'increase' ? quotaT() + v : quotaT() - v;
+        if (after >= usedT()) {
+          pv = t('q.preview', { a: money(quotaT()), b: money(after), ra: usd2(fromTicks(Math.max(0, quotaT() - usedT()))), rb: usd2(fromTicks(Math.max(0, after - usedT()))) });
+          if (after === usedT()) pv += t('q.willExhaust');
+        }
+      } else if (a === 'set_limited' && v != null) {
+        pv = t('q.previewLimited', { used: usd2(tk.used_usd), x: usd2(fromTicks(v)), q: usd2(fromTicks(usedT() + v)) });
+      } else if (a === 'set_unlimited') pv = t('q.previewUnlimited', { q: usd2(tk.quota_usd) });
+      preview.textContent = pv; preview.hidden = !pv;
+      const vs = v != null && v > 0 ? money(v) : '';
+      const lbl = a === 'increase' ? (vs ? t('q.btnIncreaseN', { v: vs }) : t('q.increase'))
+        : a === 'decrease' ? (vs ? t('q.btnDecreaseN', { v: vs }) : t('q.decrease'))
+          : a === 'set_limited' ? t('q.btnLimited') : a === 'set_unlimited' ? t('q.btnUnlimited') : t('q.adjust');
+      okBtn.lastChild.textContent = lbl;
+      okBtn.disabled = !a;
+      const danger = a === 'decrease' || a === 'set_unlimited';
+      okBtn.classList.toggle('btn-danger', danger);
+      okBtn.classList.toggle('btn-primary', !danger);
+      validate(false);
+    }
+    amount.addEventListener('input', () => { toUsed = false; paint(); });
+    reason.addEventListener('input', () => { reasonCount.textContent = `${[...reason.value].length} / 200`; validate(false); });
+    maxBtn.addEventListener('click', () => { toUsed = true; amount.value = exactUsd(maxDecT()).slice(1); paint(); });
+    async function submit() {
+      errBox.hidden = true;
+      if (!validate(true)) { (amountErr.hidden ? reason : amount).focus(); return; }
+      const a = action();
+      if (a === 'set_unlimited') {
+        const ok = await confirmDialog({ title: t('q.confirmUnlimitedTitle', { name: tk.name }), message: t('q.confirmUnlimitedMsg', { q: usd2(tk.quota_usd) }), confirmText: t('q.btnUnlimited'), danger: true });
+        if (!ok) return;
+      }
+      const payload = { action: a, reason: reason.value.trim() };
+      const amtT = parseAmt();
+      if (a === 'decrease' && toUsed) payload.to_used = true;
+      else if (a !== 'set_unlimited') payload.amount_usd = Number(amount.value.trim());
+      await busy(okBtn, async () => {
+        try {
+          const res = await post(`/api/v1/tokens/${tk.id}/quota`, payload);
+          const rec = res.record || {};
+          m.close();
+          const msg = a === 'increase' ? t('q.toastIncrease', { v: money(amtT), a: usd2(rec.before_usd), b: usd2(rec.after_usd) })
+            : a === 'decrease' ? t('q.toastDecrease', { v: money(amtT), a: usd2(rec.before_usd), b: usd2(rec.after_usd) })
+              : a === 'set_limited' ? t('q.toastLimited', { q: usd2(rec.after_usd) }) : t('q.toastUnlimited');
+          toast(msg, 'success');
+          load(); drawer.refresh();
+        } catch (e) {
+          errBox.replaceChildren(icon('xCircle', 16), h('span', null, errorMessage(e)));
+          errBox.hidden = false;
+        }
+      });
+    }
+    paint();
+    setTimeout(() => (amountRow.hidden ? reason : amount).focus(), 40);
+    // Work from fresh numbers (usage moves while the dialog is open).
+    get(`/api/v1/tokens/${tk.id}`).then((fresh) => { if (fresh && m.el.isConnected) { tk = fresh; paint(); } }).catch(() => {});
+  }
+
+  /** "Quota history" tab: every record, newest first; the amounts add up to the current quota. */
+  function quotaHistory(id, signal) {
+    const box = h('div', { class: 'entity-body q-history' }, h('div', { class: 'mini-empty' }, spinner(14), h('span', null, t('common.loading'))));
+    const actionText = (r) => (hasT(`q.act.${r.action}`) ? t(`q.act.${r.action}`) : r.action);
+    const amt = (r) => {
+      if (r.action === 'set_unlimited' || (r.unlimited && !r.amount_usd)) return h('span', { class: 'muted' }, '—');
+      const v = r.amount_usd || 0;
+      return h('span', { class: v > 0 ? 'text-success' : v < 0 ? 'text-danger' : '' }, `${v < 0 ? '−' : '+'}${usd2(Math.abs(v))}`);
+    };
+    const side = (unl, v) => (unl ? t('tokens.unlimitedState') : usd2(v));
+    const actor = (r) => (r.actor === 'system' ? t('q.actor.system') : r.actor === 'password' ? t('q.actor.password')
+      : r.actor && r.actor.startsWith('admin_token:') ? `${t('q.actor.adminToken')} · ${r.actor_name || ''}` : (r.actor_name || r.actor || '—'));
+    const reasonOf = (r) => (r.reason_code === 'pre_v0_4_1' ? t('q.code.pre') : r.reason_code === 'reset_folded' ? t('q.code.reset') : r.reason || '');
+    let rows = [], total = 0, granted = null;
+    async function fetchAll() {
+      rows = []; total = 0;
+      for (let page = 1; page <= 50; page++) {
+        const res = await get(`/api/v1/tokens/${id}/quota-history`, { page, page_size: 200 }, { signal });
+        rows.push(...(res.data || [])); total = res.total || rows.length; granted = res.granted_total_usd;
+        if (rows.length >= total || !(res.data || []).length) break;
+      }
+    }
+    async function render() {
+      try {
+        await fetchAll();
+        if (signal.aborted) return;
+        const tok = await get(`/api/v1/tokens/${id}`, null, { signal }).catch(() => null);
+        const cur = tok ? tok.quota_usd : null;
+        const equal = cur != null && granted != null && toTicks(cur) === toTicks(granted);
+        const heads = [t('q.h.time'), t('q.h.action'), t('q.h.amount'), t('q.h.beforeAfter'), t('q.h.used'), t('q.h.actor'), t('q.h.reason')];
+        box.replaceChildren(
+          rows.length ? h('div', { class: 'table-wrap q-table-wrap' }, h('table', { class: 'table q-table' },
+            h('thead', null, h('tr', null, heads.map((x, i) => h('th', { class: i === 2 || i === 4 ? 'num' : null }, x)))),
+            h('tbody', null, rows.map((r) => h('tr', null,
+              h('td', { class: 'nowrap', title: fmtDateTime(r.created_at) }, fmtDateTime(r.created_at, { seconds: false })),
+              h('td', { class: 'nowrap' }, actionText(r)),
+              h('td', { class: 'num mono nowrap' }, amt(r)),
+              h('td', { class: 'mono nowrap' }, r.action === 'initial' ? side(r.unlimited, r.after_usd) : `${side(r.before_unlimited, r.before_usd)} → ${side(r.unlimited, r.after_usd)}`),
+              h('td', { class: 'num mono nowrap' }, usd2(r.used_usd)),
+              h('td', null, h('div', null, actor(r)), r.ip ? h('div', { class: 'cell-sub mono' }, r.ip) : null),
+              h('td', { class: 'q-reason' }, reasonOf(r) || h('span', { class: 'muted' }, '—'))))))) : h('div', { class: 'mini-empty' }, t('q.noRecords')),
+          h('div', { class: `q-total ${equal ? '' : 'text-warning'}` }, icon(equal ? 'checkCircle' : 'alert', 14),
+            h('span', null, tok && isUnlimited(tok) ? t('q.totalUnlimited', { g: usd2(granted || 0) }) : t(equal ? 'q.total' : 'q.totalMismatch', { g: usd2(granted || 0), q: cur != null ? usd2(cur) : '—' }))),
+          h('div', { class: 'row-sm' }, h('span', { class: 'toolbar-spacer' }),
+            h('a', { class: 'link', href: `#/logs?type=audit&token_id=${id}&range=all` }, t('q.viewInLogs'))));
+      } catch (e) {
+        if (e.name === 'AbortError' || signal.aborted) return;
+        box.replaceChildren(h('div', { class: 'mini-empty mini-error' }, icon('alert', 15), h('span', null, `${t('common.loadFailed')} · ${errorMessage(e)}`)));
+      }
+    }
+    box.reload = render;
+    render();
+    return box;
+  }
+
+  function openForm(tk) {
+    const edit = !!tk;
+    const name = input({ value: tk?.name || '', placeholder: 'my-app', maxlength: 100 });
+    const dupWarn = h('div', { class: 'field-warn', hidden: true }, icon('alert', 13), h('span'));
+    let allNames = knownNames.slice();
+    const checkDup = () => {
+      const v = name.value.trim();
+      const clash = v && allNames.some((n) => n === v) && !(edit && v === tk.name);
+      dupWarn.hidden = !clash;
+      if (clash) dupWarn.lastChild.textContent = t('tokens.dupName', { name: v });
+      return clash;
+    };
+    name.addEventListener('input', checkDup);
+    // Create: the first quota (limited, $0 allowed) or unlimited. Edit: read-only, changed with "Adjust quota".
+    let quotaMode = 'unlimited';
+    const quota = input({ type: 'text', inputmode: 'decimal', placeholder: '10.00', class: 'input mono' });
+    const quotaErr = h('div', { class: 'field-error', hidden: true });
+    const quotaWrap = h('div', { class: 'input-affix', hidden: true }, h('span', { class: 'affix' }, '$'), quota);
+    const quotaSeg = segmented({ size: 'seg-sm', value: quotaMode, options: [{ value: 'limited', label: t('q.limited') }, { value: 'unlimited', label: t('q.unlimited') }],
+      onChange: (v) => { quotaMode = v; quotaWrap.hidden = v !== 'limited'; quotaErr.hidden = true; if (v === 'limited') quota.focus(); } });
+    const quotaField = edit
+      ? field(t('td.quota'), h('div', { class: 'quota-ro' },
+        h('span', null, isUnlimited(tk) ? t('q.roUnlimited', { used: usd2(tk.used_usd) }) : t('q.ro', { q: usd2(tk.quota_usd), used: usd2(tk.used_usd), left: usd2(remainingOf(tk)) })),
+        button(t('q.adjust'), { icon: 'dollar', size: 'sm', onClick: () => openAdjust(tk) })), { full: true })
+      : field(t('td.quota'), h('div', { class: 'stack-sm' }, quotaSeg, quotaWrap, quotaErr), { hint: t('q.createHint'), full: true });
+    const never = checkbox({ checked: !tk?.expires_at, label: t('tokens.neverExpires') });
+    const expires = input({ type: 'datetime-local', value: toLocalInput(tk?.expires_at), disabled: !tk?.expires_at });
+    never.input.addEventListener('change', () => {
+      expires.disabled = never.input.checked;
+      if (!never.input.checked && !expires.value) expires.value = toLocalInput(new Date(Date.now() + 30 * 86400e3).toISOString());
+    });
+    const presets = h('div', { class: 'preset-row' }, [7, 30, 90, 365].map((d) => h('button', { type: 'button', class: 'chip chip-btn', onclick: () => { never.input.checked = false; expires.disabled = false; expires.value = toLocalInput(new Date(Date.now() + d * 86400e3).toISOString()); } }, t('tokens.inDays', { n: d }))));
+    const models = tagInput({ values: tk?.allowed_models || [], suggestions: modelCache || [], placeholder: t('tokens.modelsPh') });
+    const modelsHint = h('div', { class: 'field-hint' }, modelCache ? t('tokens.modelsHint') : [spinner(11), ' ', t('tokens.loadingModels')]);
+    const notes = h('textarea', { class: 'input', rows: 2, placeholder: t('common.notesPh') }, tk?.notes || '');
+    const enabled = switchEl({ checked: tk ? tk.enabled : true, label: t('common.enabled') });
+    const body = h('form', { class: 'form-grid', onsubmit: (e) => { e.preventDefault(); save(); } },
+      h('div', { class: 'field' }, h('label', { class: 'field-label' }, t('common.name'), h('span', { class: 'req' }, '*')), name, dupWarn),
+      quotaField,
+      field(t('tokens.expiry'), h('div', { class: 'stack-sm' }, h('div', { class: 'row-sm' }, expires, never), presets), { full: true }),
+      h('div', { class: 'field field-full' }, h('label', { class: 'field-label' }, t('tokens.allowedModels')), models, modelsHint),
+      field(t('common.notes'), notes, { full: true }),
+      h('div', { class: 'field field-full checks' }, enabled),
+      h('button', { type: 'submit', hidden: true }));
+    const saveBtn = h('button', { class: 'btn btn-primary', onclick: () => save() }, h('span', null, edit ? t('common.save') : t('tokens.create')));
+    const m = openModal({ title: edit ? t('tokens.editTitle', { name: tk.name }) : t('tokens.createTitle'), size: 'md', body, footer: [h('button', { class: 'btn', onclick: () => m.close() }, t('common.cancel')), saveBtn] });
+    // Fill model suggestions and the full name list in the background; the dialog is already usable.
+    if (!modelCache) modelIds().then((ids) => { models.setSuggestions(ids); modelsHint.replaceChildren(t('tokens.modelsHint')); });
+    get('/api/v1/tokens', { page_size: 1000 }).then((r) => { allNames = (r.data || []).map((x) => x.name); checkDup(); }).catch(() => {});
+    async function save() {
+      if (!name.value.trim()) { name.focus(); name.classList.add('invalid'); return; }
+      if (checkDup() && !(await confirmDialog({ title: t('tokens.dupTitle'), message: t('tokens.dupConfirm', { name: name.value.trim() }), confirmText: t('tokens.dupContinue') }))) { name.focus(); return; }
+      let q;
+      if (!edit && quotaMode === 'limited') {
+        const v = quota.value.trim();
+        if (!/^\d+(\.\d{1,4})?$/.test(v)) { quotaErr.textContent = t('q.errAmountCreate'); quotaErr.hidden = false; quota.classList.add('invalid'); quota.focus(); return; }
+        q = Number(v);
+      }
+      const payload = {
+        name: name.value.trim(), enabled: enabled.input.checked, notes: notes.value,
+        allowed_models: models.getValues(),
+        expires_at: never.input.checked ? null : fromLocalInput(expires.value),
+      };
+      let body = payload;
+      if (!edit && q != null) body = { ...payload, quota_usd: q };
+      if (edit) {
+        body = {};
+        for (const [k, v] of Object.entries(payload)) {
+          const old = tk[k];
+          if (k === 'allowed_models') { if (JSON.stringify(v) !== JSON.stringify(old || [])) body[k] = v; }
+          else if (k === 'expires_at') { if ((v ? new Date(v).getTime() : null) !== (old ? Math.floor(new Date(old).getTime() / 60000) * 60000 : null)) body[k] = v; }
+          else if (v !== old) body[k] = v;
+        }
+        if (!Object.keys(body).length) { m.close(); return; }
+      }
+      await busy(saveBtn, async () => {
+        try {
+          if (edit) { await patch(`/api/v1/tokens/${tk.id}`, body); toast(t('common.saved'), 'success'); m.close(); }
+          else { const r = await post('/api/v1/tokens', body); m.close(); showSecret({ title: t('tokens.created', { name: r.name }), secret: r.token }); }
+          load(); drawer.refresh();
+        } catch (e) { toastError(e); }
+      });
+    }
+  }
+
+  if (ctx.params.new) openForm();
+  syncParams();
+  load();
+  if (ctx.params.open) {
+    if (ctx.params.adjust) pendingAdjust = Number(ctx.params.open);
+    drawer.open(ctx.params.open);
+  }
+}
+ + (ticks / 1e10).toFixed(7).replace(/0+$/, '').replace(/.$/, '');
+    const money = (ticks) => (toUsed ? exactUsd(ticks) : usd2(fromTicks(ticks)));
+    let toUsed = false;
     const action = () => (startUnl ? (mode === 'limited' ? 'set_limited' : null) : (mode === 'unlimited' ? 'set_unlimited' : dir));
     const parseAmt = () => { const v = amount.value.trim(); return /^\d+(\.\d{1,4})?$/.test(v) ? toTicks(Number(v)) : null; };
     function validate(show) {
