@@ -55,14 +55,27 @@ func (t *Table) Reload(ctx context.Context, db *store.DB) error {
 // Set replaces the table contents.
 func (t *Table) Set(models []*store.Model) {
 	by := make(map[string]*store.Model, len(models)*3)
-	for _, m := range models {
-		for _, a := range m.Aliases {
-			by[strings.ToLower(a)] = m
+	// Later passes win: an enabled model's alias beats a disabled model's
+	// id (a retired row must not capture a name upstream moved elsewhere),
+	// and within each group canonical ids beat aliases.
+	put := func(enabled, ids bool) {
+		for _, m := range models {
+			if m.Enabled != enabled {
+				continue
+			}
+			if ids {
+				by[strings.ToLower(m.ID)] = m
+				continue
+			}
+			for _, a := range m.Aliases {
+				by[strings.ToLower(a)] = m
+			}
 		}
 	}
-	for _, m := range models { // canonical ids win over aliases
-		by[strings.ToLower(m.ID)] = m
-	}
+	put(false, false)
+	put(false, true)
+	put(true, false)
+	put(true, true)
 	t.mu.Lock()
 	t.byName, t.all = by, models
 	t.mu.Unlock()
@@ -241,7 +254,7 @@ func (t *Table) PriceSnapshot(model string, u Usage, req Request) string {
 		in, cached, out, imgIn := m.InputTicks, m.CachedTicks, m.OutputTicks, m.ImageTokenTicks
 		long := m.LongThreshold > 0 && u.PromptTokens >= m.LongThreshold
 		if long {
-			in, cached, out = m.LongInputTicks, m.LongCachedTicks, m.LongOutputTicks
+			in, cached, out = longPrices(m)
 			if imgIn == m.InputTicks {
 				imgIn = in
 			}
@@ -260,11 +273,23 @@ func (t *Table) PriceSnapshot(model string, u Usage, req Request) string {
 	return string(b)
 }
 
+// longPrices returns the long-context prices, each falling back to its base
+// price when upstream reports 0 for it (a 0 is "not set", never "free").
+func longPrices(m *store.Model) (in, cached, out int64) {
+	pick := func(long, base int64) int64 {
+		if long > 0 {
+			return long
+		}
+		return base
+	}
+	return pick(m.LongInputTicks, m.InputTicks), pick(m.LongCachedTicks, m.CachedTicks), pick(m.LongOutputTicks, m.OutputTicks)
+}
+
 func tokenCost(m *store.Model, u Usage) int64 {
 	in, cached, out := m.InputTicks, m.CachedTicks, m.OutputTicks
 	imgIn := m.ImageTokenTicks
 	if m.LongThreshold > 0 && u.PromptTokens >= m.LongThreshold {
-		in, cached, out = m.LongInputTicks, m.LongCachedTicks, m.LongOutputTicks
+		in, cached, out = longPrices(m)
 		if imgIn == m.InputTicks { // image tokens follow the text input rate
 			imgIn = in
 		}
