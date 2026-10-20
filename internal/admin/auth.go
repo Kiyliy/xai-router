@@ -56,7 +56,9 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		}
 		s.recordEvent(r.Context(), e)
 	}
-	if s.limiter.blocked(ip) {
+	// The attempt is counted before the password is checked: concurrent
+	// attempts cannot all get past the limit (a success clears the count).
+	if !s.limiter.attempt(ip) {
 		loginEvent("auth.login_failed", store.LevelWarn, "locked out after too many failed attempts")
 		writeErr(w, http.StatusTooManyRequests, "too_many_attempts", "too many failed logins; try again in a few minutes")
 		return
@@ -73,7 +75,6 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.Password == "" || !s.checkPassword(r.Context(), in.Password, hash) {
-		s.limiter.fail(ip)
 		s.Log.Warn("failed admin login", "ip", ip)
 		reason := "wrong password"
 		if in.Password == "" {

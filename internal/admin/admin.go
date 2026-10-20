@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -318,6 +319,10 @@ func usd(ticks int64) float64 { return billing.TicksToUSD(ticks) }
 
 // ---- login rate limiting ----
 
+// loginLimiter allows loginMaxFails attempts per client per loginWindow.
+// An attempt is counted when it starts (before the password is checked) and
+// forgotten only after a successful login, so concurrent attempts cannot
+// all pass the check before the first failure is recorded.
 type loginLimiter struct {
 	mu       sync.Mutex
 	failures map[string][]time.Time
@@ -326,31 +331,69 @@ type loginLimiter struct {
 const (
 	loginWindow   = 10 * time.Minute
 	loginMaxFails = 10
+	// loginMaxClients bounds the map; past it expired entries are swept.
+	loginMaxClients = 10_000
 )
+
+// limiterKey groups IPv6 clients by /64 (one host usually has a whole /64).
+func limiterKey(ip string) string {
+	a, err := netip.ParseAddr(ip)
+	if err != nil || a.Is4() || a.Is4In6() {
+		return ip
+	}
+	p, err := a.Prefix(64)
+	if err != nil {
+		return ip
+	}
+	return p.String()
+}
+
+// attempt reserves one login attempt for ip. It reports false (and counts
+// nothing) when the limit is reached.
+func (l *loginLimiter) attempt(ip string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	k := limiterKey(ip)
+	if len(l.prune(k)) >= loginMaxFails {
+		return false
+	}
+	if l.failures == nil {
+		l.failures = map[string][]time.Time{}
+	}
+	if len(l.failures) >= loginMaxClients {
+		for other := range l.failures {
+			l.prune(other)
+		}
+	}
+	l.failures[k] = append(l.failures[k], time.Now())
+	return true
+}
 
 func (l *loginLimiter) blocked(ip string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return len(l.prune(ip)) >= loginMaxFails
+	return len(l.prune(limiterKey(ip))) >= loginMaxFails
 }
 
+// fail records a failed attempt that was not reserved with attempt.
 func (l *loginLimiter) fail(ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.failures == nil {
 		l.failures = map[string][]time.Time{}
 	}
-	l.failures[ip] = append(l.prune(ip), time.Now())
+	k := limiterKey(ip)
+	l.failures[k] = append(l.prune(k), time.Now())
 }
 
 func (l *loginLimiter) reset(ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	delete(l.failures, ip)
+	delete(l.failures, limiterKey(ip))
 }
 
-func (l *loginLimiter) prune(ip string) []time.Time {
-	f := l.failures[ip]
+func (l *loginLimiter) prune(k string) []time.Time {
+	f := l.failures[k]
 	cut := time.Now().Add(-loginWindow)
 	i := 0
 	for i < len(f) && f[i].Before(cut) {
@@ -358,9 +401,9 @@ func (l *loginLimiter) prune(ip string) []time.Time {
 	}
 	f = f[i:]
 	if len(f) == 0 {
-		delete(l.failures, ip)
+		delete(l.failures, k)
 	} else if l.failures != nil {
-		l.failures[ip] = f
+		l.failures[k] = f
 	}
 	return f
 }
