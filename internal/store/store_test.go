@@ -94,7 +94,7 @@ func TestLogsStatsAndCounters(t *testing.T) {
 		t.Fatalf("series: %+v %v", series, err)
 	}
 	// Retention keeps aggregates.
-	n, err := db.DeleteLogsBefore(ctx, now+1)
+	n, err := db.DeleteLogsBefore(ctx, now+1000) // the chain sorts at its end
 	if err != nil || n != 3 {
 		t.Fatalf("delete: %d %v", n, err)
 	}

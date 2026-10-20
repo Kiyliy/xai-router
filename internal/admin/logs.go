@@ -25,7 +25,7 @@ func logSummaryJSON(l *store.Log) map[string]any {
 	}
 	return map[string]any{
 		"id": l.ID, "request_id": l.RequestID, "created_at": msTime(l.CreatedAt), "method": l.Method,
-		"path": l.Path, "model": l.Model, "stream": l.Stream, "status": l.Status, "error": l.Error,
+		"path": l.Path, "model": l.Model, "stream": l.Stream, "started_at": msTime(l.StartedAt), "status": l.Status, "error": l.Error,
 		"client_ip": l.ClientIP, "token_id": tokID, "token_name": l.TokenName, "key_id": keyID,
 		"key_name": l.KeyName, "attempts": attempts, "ttfb_ms": l.TTFBMs, "latency_ms": l.LatencyMs,
 		"prompt_tokens": l.PromptTokens, "completion_tokens": l.CompletionTokens, "cached_tokens": l.CachedTokens,
@@ -62,7 +62,7 @@ func chainEntryJSON(l *store.Log) map[string]any {
 	return map[string]any{"id": l.ID, "attempt_index": l.AttemptIndex, "attempt_total": l.AttemptTotal,
 		"attempt_state": l.AttemptState(), "key_id": keyID, "key_name": l.KeyName, "status": l.Status,
 		"error": l.Error, "action": l.AttemptAction, "ttfb_ms": l.TTFBMs, "latency_ms": l.LatencyMs,
-		"created_at": msTime(l.CreatedAt), "cost_usd": usd(l.CostTicks)}
+		"created_at": msTime(l.CreatedAt), "started_at": msTime(l.StartedAt), "cost_usd": usd(l.CostTicks)}
 }
 
 func headersMap(s string) map[string]string {

@@ -45,7 +45,7 @@ func TestRetryChainIsOneRowPerAttempt(t *testing.T) {
 			r.TotalTokens != 15 || r.PriceSnapshot == "" {
 			t.Fatalf("final row: %+v", r)
 		}
-		if i > 0 && r.CreatedAt < chain[i-1].CreatedAt {
+		if i > 0 && (r.StartedAt < chain[i-1].StartedAt || r.CreatedAt != chain[0].CreatedAt) {
 			t.Fatalf("rows out of attempt order: %+v", chain)
 		}
 	}

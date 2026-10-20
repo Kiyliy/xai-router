@@ -469,9 +469,13 @@ const MetaStatsBasisSince = "stats_basis_since"
 // own request_logs row. The rows of one client request share request_id;
 // attempt_index (1-based) and attempt_total place a row in its chain,
 // attempt_final marks the row that holds the outcome (and the usage and
-// cost), attempt_action is what the pool did after the attempt. Existing
-// rows are single final attempts (the defaults). Stats count rows from now
-// on: when there are stats from before, the cutover time is kept in meta.
+// cost), attempt_action is what the pool did after the attempt, started_at
+// is when the row's attempt started (0 = created_at). The rows of a chain
+// share created_at, the list order: just past the end of the client
+// request, so the chain stays together and events it caused sort below it.
+// Existing rows are single final attempts (the defaults). Stats count rows
+// from now on: when there are stats from before, the cutover time is kept
+// in meta.
 func migrateV10(ctx context.Context, tx *sql.Tx) error {
 	have := map[string]bool{}
 	rows, err := tx.QueryContext(ctx, `SELECT name FROM pragma_table_info('request_logs')`)
@@ -495,6 +499,7 @@ func migrateV10(ctx context.Context, tx *sql.Tx) error {
 		{"attempt_total", "INTEGER NOT NULL DEFAULT 1"},
 		{"attempt_final", "INTEGER NOT NULL DEFAULT 1"},
 		{"attempt_action", "TEXT NOT NULL DEFAULT ''"},
+		{"started_at", "INTEGER NOT NULL DEFAULT 0"},
 	} {
 		if have[c[0]] {
 			continue

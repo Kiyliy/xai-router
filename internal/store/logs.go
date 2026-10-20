@@ -99,6 +99,13 @@ type Log struct {
 	AttemptTotal  int
 	AttemptFinal  bool
 	AttemptAction string // what the pool did after this row's attempt ("" before v0.6.0)
+	// StartedAt is when the row's attempt started (read: created_at for
+	// older rows). CreatedAt is the list order: for the rows of a chain the
+	// end of the client request (see rowsOf), else the request's start.
+	StartedAt int64
+	// EndAt is when the client request ended (writing; 0 = CreatedAt +
+	// LatencyMs).
+	EndAt int64
 	// ReqBodyFrom is the row the request body was read from when it is not
 	// this one (GetLog: the body is stored on the first row of a chain).
 	ReqBodyFrom int64
@@ -143,13 +150,14 @@ type keyUse struct {
 
 // logRow is one request_logs row of a client request.
 type logRow struct {
-	l        *Log // the row (a copy, except for a single row)
-	index    int
-	total    int
-	action   string
-	attempts int       // the attempts column
-	nested   []Attempt // written to log_attempts (WebSocket sessions)
-	keys     []keyUse
+	l         *Log // the row (a copy, except for a single row)
+	index     int
+	total     int
+	action    string
+	attempts  int       // the attempts column
+	nested    []Attempt // written to log_attempts (WebSocket sessions)
+	startedAt int64     // when the row's attempt started
+	keys      []keyUse
 }
 
 // failedAttempt reports whether an attempt's action counts as a key error.
@@ -160,15 +168,41 @@ func failedAttempt(action string) bool { return action != "success" && action !=
 // "retried" rows built from l.Attempts (their own key, status, error, timing
 // and response; no usage, and cost 0 unless the upstream reported one), and
 // the last is l itself, timed from the start of its attempt and carrying the
-// usage and cost. The request body is kept on the first row only. A
-// WebSocket session, or a request without attempts, is a single row as
-// before v0.6.0. l is not modified, so a failed batch can be expanded again.
+// usage and cost. The request body is kept on the first row only.
+//
+// The rows of a chain share created_at, the list's sort time: one
+// millisecond past the end of the client request. Listed newest first
+// (created_at DESC, id DESC, ids in attempt order) a chain is contiguous,
+// its final row on top, and the events it caused (a cooldown, an
+// auto-disable, written before it ended) sort below it. Each row's own start
+// is started_at. A WebSocket session, or a request without attempts, is a
+// single row as before v0.6.0, created at its start. l is not modified, so a
+// failed batch can be expanded again.
 func rowsOf(l *Log) []logRow {
 	n := len(l.Attempts)
-	if l.WS || n == 0 {
-		r := logRow{l: l, index: 1, total: 1, attempts: n, nested: l.Attempts}
+	if l.WS || n <= 1 {
+		r := logRow{l: l, index: 1, total: 1, attempts: n, nested: l.Attempts, startedAt: l.CreatedAt}
+		if !l.WS {
+			r.nested = nil // an HTTP request's attempt is the row itself
+		}
 		if n > 0 {
 			r.action = l.Attempts[n-1].Action
+		}
+		if !l.WS && n == 1 {
+			a := l.Attempts[0]
+			if l.KeyID == 0 && a.KeyID != 0 { // the row's own key, also when the client left early
+				c := *l
+				c.KeyID, c.KeyName = a.KeyID, a.KeyName
+				r.l = &c
+			}
+			if r.l.KeyID != 0 {
+				u := keyUse{keyID: r.l.KeyID, cost: l.CostTicks, at: a.StartedAt}
+				if failedAttempt(a.Action) {
+					u.isErr, u.lastErr = true, a.Error
+				}
+				r.keys = []keyUse{u}
+			}
+			return []logRow{r}
 		}
 		// Each dial attempt counts on its key; the session's cost goes to
 		// the key that served it.
@@ -187,16 +221,21 @@ func rowsOf(l *Log) []logRow {
 		}
 		return []logRow{r}
 	}
-	use := func(row *Log, a Attempt) []keyUse {
+	use := func(row *Log, a Attempt, at int64) []keyUse {
 		if row.KeyID == 0 {
 			return nil
 		}
-		u := keyUse{keyID: row.KeyID, cost: row.CostTicks, at: row.CreatedAt}
+		u := keyUse{keyID: row.KeyID, cost: row.CostTicks, at: at}
 		if failedAttempt(a.Action) {
 			u.isErr, u.lastErr = true, a.Error
 		}
 		return []keyUse{u}
 	}
+	end := l.EndAt
+	if end == 0 {
+		end = l.CreatedAt + l.LatencyMs
+	}
+	sortAt := max(end, l.CreatedAt+l.LatencyMs) + 1
 	rows := make([]logRow, 0, n)
 	for i, a := range l.Attempts[:n-1] {
 		start := a.StartedAt
@@ -210,7 +249,7 @@ func rowsOf(l *Log) []logRow {
 		if status == 0 {
 			status = http.StatusBadGateway
 		}
-		r := &Log{RequestID: l.RequestID, CreatedAt: start, Method: l.Method, Path: l.Path, Query: l.Query,
+		r := &Log{RequestID: l.RequestID, CreatedAt: sortAt, Method: l.Method, Path: l.Path, Query: l.Query,
 			Model: l.Model, Stream: l.Stream, Status: status, Error: a.Error, ClientIP: l.ClientIP,
 			UserAgent: l.UserAgent, TokenID: l.TokenID, TokenName: l.TokenName, TokenPrefix: l.TokenPrefix,
 			KeyID: a.KeyID, KeyName: a.KeyName, TTFBMs: a.TTFBMs, LatencyMs: a.LatencyMs, CostTicks: a.CostTicks,
@@ -227,17 +266,18 @@ func rowsOf(l *Log) []logRow {
 				r.ReqBody, r.Truncated = l.ReqBody, l.Truncated
 			}
 		}
-		rows = append(rows, logRow{l: r, index: i + 1, total: n, action: a.Action, attempts: 1, keys: use(r, a)})
+		rows = append(rows, logRow{l: r, index: i + 1, total: n, action: a.Action, attempts: 1, startedAt: start,
+			keys: use(r, a, start)})
 	}
 	last := l.Attempts[n-1]
 	f := *l
 	f.Attempts = nil
-	if n > 1 {
-		f.ReqBody = ""
-	}
-	if last.StartedAt > l.CreatedAt && n > 1 {
+	f.ReqBody = ""
+	f.CreatedAt = sortAt
+	start := l.CreatedAt
+	if last.StartedAt > l.CreatedAt {
+		start = last.StartedAt
 		off := last.StartedAt - l.CreatedAt
-		f.CreatedAt = last.StartedAt
 		f.LatencyMs = max(l.LatencyMs-off, 0)
 		if f.TTFBMs > 0 {
 			f.TTFBMs = max(l.TTFBMs-off, 0)
@@ -246,7 +286,8 @@ func rowsOf(l *Log) []logRow {
 	if f.KeyID == 0 {
 		f.KeyID, f.KeyName = last.KeyID, last.KeyName
 	}
-	rows = append(rows, logRow{l: &f, index: n, total: n, action: last.Action, attempts: 1, keys: use(&f, last)})
+	rows = append(rows, logRow{l: &f, index: n, total: n, action: last.Action, attempts: 1, startedAt: start,
+		keys: use(&f, last, start)})
 	return rows
 }
 
@@ -264,8 +305,8 @@ func (db *DB) InsertLogs(ctx context.Context, logs []*Log) error {
 stream, status, error, client_ip, user_agent, token_id, token_name, key_id, key_name, attempts, ttfb_ms, latency_ms,
 prompt_tokens, completion_tokens, cached_tokens, reasoning_tokens, image_tokens, total_tokens, images, video_seconds,
 cost_ticks, cost_source, upstream_id, truncated, ws, extra, token_prefix, cache_write_tokens, price_snapshot,
-attempt_index, attempt_total, attempt_final, attempt_action)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+attempt_index, attempt_total, attempt_final, attempt_action, started_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
@@ -316,7 +357,7 @@ cost_ticks = cost_ticks + excluded.cost_ticks, latency_ms_sum = latency_ms_sum +
 					nullID(l.KeyID), l.KeyName, r.attempts, l.TTFBMs, l.LatencyMs, l.PromptTokens, l.CompletionTokens,
 					l.CachedTokens, l.ReasoningTokens, l.ImageTokens, l.TotalTokens, l.Images, l.VideoSeconds, l.CostTicks,
 					l.CostSource, l.UpstreamID, boolInt(l.Truncated), boolInt(l.WS), l.Extra, l.TokenPrefix,
-					l.CacheWriteTokens, l.PriceSnapshot, r.index, r.total, boolInt(r.index == r.total), r.action)
+					l.CacheWriteTokens, l.PriceSnapshot, r.index, r.total, boolInt(r.index == r.total), r.action, r.startedAt)
 				if err != nil {
 					return err
 				}
@@ -468,7 +509,7 @@ const logCols = `id, request_id, created_at, method, path, query, model, stream,
 COALESCE(token_id,0), token_name, COALESCE(key_id,0), key_name, attempts, ttfb_ms, latency_ms, prompt_tokens,
 completion_tokens, cached_tokens, reasoning_tokens, image_tokens, total_tokens, images, video_seconds, cost_ticks,
 cost_source, upstream_id, truncated, ws, extra, token_prefix, cache_write_tokens, price_snapshot, attempt_index,
-attempt_total, attempt_final, attempt_action`
+attempt_total, attempt_final, attempt_action, started_at`
 
 func scanLog(s interface{ Scan(...any) error }) (*Log, error) {
 	var l Log
@@ -478,7 +519,7 @@ func scanLog(s interface{ Scan(...any) error }) (*Log, error) {
 		&l.Error, &l.ClientIP, &l.UserAgent, &l.TokenID, &l.TokenName, &l.KeyID, &l.KeyName, &l.AttemptCount, &l.TTFBMs,
 		&l.LatencyMs, &l.PromptTokens, &l.CompletionTokens, &l.CachedTokens, &l.ReasoningTokens, &l.ImageTokens,
 		&l.TotalTokens, &l.Images, &l.VideoSeconds, &l.CostTicks, &l.CostSource, &l.UpstreamID, &trunc, &ws, &l.Extra, &l.TokenPrefix, &cw, &l.PriceSnapshot,
-		&l.AttemptIndex, &l.AttemptTotal, &final, &l.AttemptAction)
+		&l.AttemptIndex, &l.AttemptTotal, &final, &l.AttemptAction, &l.StartedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -486,6 +527,9 @@ func scanLog(s interface{ Scan(...any) error }) (*Log, error) {
 		return nil, err
 	}
 	l.Stream, l.Truncated, l.WS, l.AttemptFinal = stream == 1, trunc == 1, ws == 1, final == 1
+	if l.StartedAt == 0 {
+		l.StartedAt = l.CreatedAt
+	}
 	if cw.Valid {
 		l.CacheWriteTokens = &cw.Int64
 	}
@@ -807,7 +851,7 @@ latency_ms, started_at FROM log_attempts WHERE log_id = ? ORDER BY seq`, id)
 // upstream attempts), in attempt order. It is an index lookup on request_id.
 func (db *DB) LogChain(ctx context.Context, requestID string) ([]*Log, error) {
 	rows, err := db.R.QueryContext(ctx, `SELECT `+logCols+` FROM request_logs WHERE request_id = ?
-ORDER BY attempt_index, created_at, id`, requestID)
+ORDER BY attempt_index, started_at, id`, requestID)
 	if err != nil {
 		return nil, err
 	}

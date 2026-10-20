@@ -79,7 +79,7 @@ func TestLogsAPI(t *testing.T) {
 		"q=exploded":           1,
 		"key_id=" + itoa(k.ID): 2,
 		"token_id=" + itoa(tok.ID) + "&from=" + itoa(logs[0].CreatedAt/1000-5): 3,
-		"to=" + itoa(logs[0].CreatedAt):                                        1,
+		"to=" + itoa(logs[0].CreatedAt+1):                                      2, // the chain ends (sorts) at +1
 		"from=2000-01-01":                                                      4,
 		"attempts=all":                                                         4,
 		"attempts=final":                                                       3,

@@ -64,6 +64,18 @@ func (m *mockXAI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(key, "-500"):
 		jsonResp(w, 500, `{"error":"internal"}`)
 		return
+	case strings.HasSuffix(key, "-500cost"):
+		// A failure the upstream nevertheless reports a cost for.
+		jsonResp(w, 500, `{"error":"internal after the prompt was read","usage":{"cost_in_usd_ticks":1230000}}`)
+		return
+	case strings.HasSuffix(key, "-partialerr"):
+		// Content, then an in-stream error: too late to fail over.
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, `data: {"id":"chat-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Hello there, partial"}}]}`+"\n\n")
+		w.(http.Flusher).Flush()
+		_, _ = io.WriteString(w, `data: {"code":"resource-exhausted","error":"The model is currently at capacity due to high demand."}`+"\n\ndata: [DONE]\n\n")
+		return
 	case strings.HasSuffix(key, "-streamerr"):
 		// Overloaded: 200, then an in-stream error instead of content.
 		w.Header().Set("Content-Type", "text/event-stream")

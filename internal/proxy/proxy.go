@@ -1125,6 +1125,7 @@ func (st *state) finish(r *http.Request) {
 	s := st.s
 	l := st.log
 	l.LatencyMs = time.Since(st.start).Milliseconds()
+	l.EndAt = time.Now().UnixMilli()
 	l.Attempts = st.attempts
 	if l.CostSource == "" {
 		l.CostSource = "none"
