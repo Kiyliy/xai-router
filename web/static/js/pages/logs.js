@@ -452,7 +452,7 @@ export function render(el, ctx) {
       const rr = requestReason(r);
       tr.append(timeCell(r),
         h('td', { class: 'cell-req m-title' }, reqLine(r)),
-        h('td', { class: 'col-status m-badge' }, h('div', { class: 'lg-sum' }, statusBadge(r.status), tries(r),
+        h('td', { class: 'col-status m-badge' }, h('div', { class: `lg-sum ${isChainRow(r) && rr ? 'is-stacked' : ''}` }, statusBadge(r.status), tries(r),
           h('span', { class: 'lg-sum-text', title: rr ? (rr.raw || rr.text) : null }, rr ? rr.text : okText(r, false)))),
         h('td', { class: 'truncate-cell m-meta m-who' }, h('div', { class: 'truncate' }, tokenLink(r)), h('div', { class: 'cell-sub truncate' }, keyLink(r))),
         ...tokCells(r),

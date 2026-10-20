@@ -5,7 +5,7 @@
 //	node tools/smoke/compare.mjs --design notes/xai-router-figma/pages --shots shots --out compare [--chrome path]
 //
 // Dark frames are named NN-*-dark.png and light frames LNN-*-light.png; a
-// screenshot NN-name-<theme>.png is paired with the frame of the same NN and
+// screenshot NN-name-<theme>.png (or NNb-…) is paired with the frame of the same NN and
 // theme.
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -23,7 +23,7 @@ mkdirSync(out, { recursive: true });
 const frames = readdirSync(design);
 const pairs = [];
 for (const f of readdirSync(shots).filter((f) => f.endsWith('.png')).sort()) {
-  const m = /^(\d\d)-.*-(dark|light)\.png$/.exec(f);
+  const m = /^(\d\d[a-z]?)-.*-(dark|light)\.png$/.exec(f);
   if (!m) continue;
   const [, nn, theme] = m;
   const frame = frames.find((d) => (theme === 'dark' ? new RegExp(`^${nn}-.*-dark\\.png$`) : new RegExp(`^L${nn}-.*-light\\.png$`)).test(d));

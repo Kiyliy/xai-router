@@ -433,6 +433,45 @@
 /* overview: the ⓘ by "请求数" when the range spans the counting-basis change */
 .ov-metric .eyebrow .ov-basis { display: inline-flex; vertical-align: -2px; margin-left: 4px; color: var(--text-3); cursor: help; }
 .lg5 .table-ulog tr.row-retried .col-status .lg-sum-text { white-space: nowrap; }
-/* v0.6.0: in the requests view a retried row's reason ("xAI 服务器错误，已重试") goes on a second line under the code and k/n */
-.lg5 .table-ulog[data-mode="request"] tr.row-retried .col-status .lg-sum { flex-wrap: wrap; row-gap: 2px; }
-.lg5 .table-ulog[data-mode="request"] tr.row-retried .col-status .lg-sum-text { flex-basis: 100%; font-size: 12px; }
+/* v0.6.0: in the requests view a chain row with a reason ("xAI 服务器错误，已重试") puts it on a second line under the code and k/n */
+.lg5 .table-ulog[data-mode="request"] .col-status .lg-sum.is-stacked { flex-wrap: wrap; row-gap: 2px; }
+.lg5 .table-ulog[data-mode="request"] .col-status .lg-sum.is-stacked .lg-sum-text { flex-basis: 100%; font-size: 12px; white-space: nowrap; }
+/* the basis hint opens from the icon to the right, so the first card does not push it off the page */
+.ov-metric .eyebrow .ov-basis { position: relative; }
+.ov-metric .eyebrow .ov-basis[data-tip]:hover::after, .ov-metric .eyebrow .ov-basis[data-tip]:focus-visible::after { left: -8px; transform: none; text-transform: none; letter-spacing: normal; font-weight: 400; }
+/* phones: the log table becomes one card per row (title and status, then time, key and cost, then the summary).
+   The desktop cell height, hairlines and four token columns do not apply there. */
+@media (max-width: 768px) {
+  .lg5 .table-ulog.table-cards td { order: 5; height: auto; padding: 0; border-bottom: 0; }
+  .lg5 .table-ulog.table-cards td:first-child, .lg5 .table-ulog.table-cards td:last-child { padding-left: 0; padding-right: 0; }
+  .lg5 .table-ulog.table-cards td.col-type { order: 0; }
+  .lg5 .table-ulog.table-cards td.m-title { order: 1; flex: 1 1 0; min-width: 0; }
+  .lg5 .table-ulog.table-cards td.m-badge { order: 2; margin-left: auto; }
+  .lg5 .table-ulog.table-cards td.cell-sum { order: 6; flex-basis: 100%; }
+  .lg5 .table-ulog.table-cards td.col-tk { display: none; }
+  .lg5 .table-ulog.table-cards td.m-time .cell-sub { display: none; }
+  .lg5 .table-ulog[data-mode="request"].table-cards .col-status .lg-sum-text { white-space: nowrap; }
+}
+/* phones: the chain line runs down the card's left edge and the node sits by the title (the first cell is not first there) */
+@media (max-width: 768px) {
+  .lg5 .table-ulog.table-cards tr.chain { padding-left: 30px; background-image: linear-gradient(var(--text-3), var(--text-3)); background-repeat: no-repeat; background-size: 2px 100%; background-position: 14px 0; }
+  .lg5 .table-ulog.table-cards tr.chain-top { background-size: 2px calc(100% - 22px); background-position: 14px 100%; }
+  .lg5 .table-ulog.table-cards tr.chain-bottom { background-size: 2px 22px; background-position: 14px 0; }
+  .lg5 .table-ulog.table-cards tr.chain > td:first-child::before, .lg5 .table-ulog.table-cards tr.chain > td:first-child::after { display: none; }
+  .lg5 .table-ulog.table-cards tr.chain > td.m-title::before {
+    content: ""; position: absolute; left: 15px; top: 22px; width: 9px; height: 9px; border-radius: 50%; transform: translate(-50%, -50%);
+    box-shadow: 0 0 0 2px var(--bg); pointer-events: none;
+  }
+  .lg5 .table-ulog.table-cards tr.node-ok > td.m-title::before { background: var(--success); }
+  .lg5 .table-ulog.table-cards tr.node-err > td.m-title::before { background: var(--danger); }
+  .lg5 .table-ulog.table-cards tr.node-retry > td.m-title::before { width: 7px; height: 7px; background: var(--warning); }
+}
+/* phones: the drawer's buttons get their own row above the title, so the title and facts use the full width */
+@media (max-width: 768px) {
+  .ld5-drawer .modal-header { flex-wrap: wrap; padding: 12px 16px; row-gap: 8px; }
+  .ld5-drawer .modal-header > .modal-heading { order: 2; flex: 1 1 100%; }
+  .ld5-drawer .modal-header > .modal-header-actions { order: 1; margin: 0 -6px 0 auto; }
+  .ld5-title { flex-wrap: wrap; row-gap: 4px; }
+  .ld5-tries, .ld5-method { white-space: nowrap; }
+  .ld5-ml { white-space: nowrap; flex-shrink: 0; }
+}
