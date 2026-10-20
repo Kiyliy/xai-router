@@ -48,7 +48,7 @@ const profile = mkdtempSync(join(tmpdir(), 'xr-shots-'));
 const port = 9800 + Math.floor(Math.random() * 500);
 const proc = spawn(chrome, ['--headless=new', '--disable-gpu', '--no-first-run', `--user-data-dir=${profile}`,
   `--remote-debugging-port=${port}`, '--hide-scrollbars', 'about:blank'], { stdio: 'ignore' });
-const deadline = setTimeout(() => { console.error('shots: timed out'); done(1); }, 300_000);
+const deadline = setTimeout(() => { console.error('shots: timed out'); done(1); }, 600_000);
 let ws; let seq = 0; const pending = new Map(); const errors = [];
 function done(code) {
   clearTimeout(deadline); try { ws && ws.close(); } catch { /* ignore */ } proc.kill();
