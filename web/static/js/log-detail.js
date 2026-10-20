@@ -504,7 +504,7 @@ function kpiBand(d) {
     attCls = '';
   }
   return h('div', { class: 'hairline-grid ld5-band' },
-    cell(t('common.latency'), big(fmtMs(lat)), d.ttfb_ms ? h('span', { title: t('logs.ttfbClientHint') }, t('lg.ttfb', { v: fmtMs(d.ttfb_ms) })) : null, lat ? latBar : null),
+    cell(t('common.latency'), big(fmtMs(lat)), d.ttfb_ms && !isRetriedRow(d) ? h('span', { title: t('logs.ttfbClientHint') }, t('lg.ttfb', { v: fmtMs(d.ttfb_ms) })) : null, lat ? latBar : null),
     cell(t('common.cost'), big(d.cost_usd ? fmtUSD(d.cost_usd) : (isOk(d.status) ? '$0' : '—')), d.cost_source ? t('ld5.costSrc', { s: t(`costsrc.${d.cost_source}`) || d.cost_source }) : null),
     cell(t('lg5.tokGroup'), tokVal, d.total_tokens ? t('ld5.inOut', { i: fmtInt(c.input + c.image + c.cacheRead + (c.cacheWrite || 0)), o: fmtInt(c.output) }) : null, tokBar),
     cell(t('logs.attemptsTimeline'), attVal, attSub, null, attCls));

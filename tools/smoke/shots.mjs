@@ -34,6 +34,9 @@ const shots = [
   ['12-logs-mixed-bottom', () => '#/logs?type=request,audit,system', 'window.scrollTo(0, document.body.scrollHeight)'],
   ['13-logs-requests-bottom', () => '#/logs?type=request', 'window.scrollTo(0, document.body.scrollHeight)'],
   ['14-log-detail-request', (ids) => `#/logs?type=request&open=${ids.log}`],
+  ['13b-logs-final-only', () => '#/logs?type=request&attempts=final'],
+  ['14b-log-detail-chain-final', (ids) => (ids.chainFinal ? `#/logs?type=request&open=${ids.chainFinal}` : '#/logs?type=request')],
+  ['15b-log-detail-chain-retried', (ids) => (ids.chainRetried ? `#/logs?type=request&open=${ids.chainRetried}` : '#/logs?type=request')],
   ['16-log-detail-audit', (ids) => `#/logs?type=audit,system&event=${ids.event}`],
   ['17-models', () => '#/models'],
   ['19-admin-access', () => '#/access'],
@@ -105,6 +108,7 @@ try {
     const first = async (p) => ((await j(p)).data || [])[0] || {};
     return { key: (await first('/api/v1/keys?page_size=1')).id, token: (((await j('/api/v1/tokens?page_size=200')).data || []).find((t) => !t.unlimited) || (await first('/api/v1/tokens?page_size=1'))).id,
       log: (await first('/api/v1/logs?type=request&page_size=1')).id,
+      ...(await (async () => { const rows = (await j('/api/v1/logs?type=request&page_size=200')).data || []; const f = rows.find((r) => r.attempt_total > 1 && r.attempt_final); const r = f && rows.find((x) => x.request_id === f.request_id && x.attempt_state === 'retried'); return { chainFinal: f && f.id, chainRetried: r && r.id }; })()),
       event: (await first('/api/v1/logs?type=audit&action=token.quota_&page_size=1')).id || (await first('/api/v1/logs?type=audit,system&page_size=1')).id };
   })()`);
   for (const theme of ['dark', 'light']) {

@@ -433,3 +433,6 @@
 /* overview: the ⓘ by "请求数" when the range spans the counting-basis change */
 .ov-metric .eyebrow .ov-basis { display: inline-flex; vertical-align: -2px; margin-left: 4px; color: var(--text-3); cursor: help; }
 .lg5 .table-ulog tr.row-retried .col-status .lg-sum-text { white-space: nowrap; }
+/* v0.6.0: in the requests view a retried row's reason ("xAI 服务器错误，已重试") goes on a second line under the code and k/n */
+.lg5 .table-ulog[data-mode="request"] tr.row-retried .col-status .lg-sum { flex-wrap: wrap; row-gap: 2px; }
+.lg5 .table-ulog[data-mode="request"] tr.row-retried .col-status .lg-sum-text { flex-basis: 100%; font-size: 12px; }
