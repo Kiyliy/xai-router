@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -458,11 +459,15 @@ func newWSSession(st *state, stats *wsStats, logLimit int) *wsSession {
 	ss := &wsSession{st: st, stats: stats, logLimit: logLimit}
 	inspect := 64 << 10
 	ss.clientObs = &wsObserver{maxInspect: inspect,
-		onMessage: func(op byte, p []byte, size int64, clip bool) { ss.message("client", op, p, size, clip) },
-		onClose:   func(code int, reason string) { ss.closed("client", code, reason) }}
+		onMessage: func(op byte, p []byte, size int64, clip bool) {
+			ss.message("client", op, p, size, clip, ss.clientObs.msgRunes)
+		},
+		onClose: func(code int, reason string) { ss.closed("client", code, reason) }}
 	ss.serverObs = &wsObserver{maxInspect: inspect,
-		onMessage: func(op byte, p []byte, size int64, clip bool) { ss.message("upstream", op, p, size, clip) },
-		onClose:   func(code int, reason string) { ss.closed("upstream", code, reason) }}
+		onMessage: func(op byte, p []byte, size int64, clip bool) {
+			ss.message("upstream", op, p, size, clip, ss.serverObs.msgRunes)
+		},
+		onClose: func(code int, reason string) { ss.closed("upstream", code, reason) }}
 	return ss
 }
 
@@ -520,13 +525,17 @@ type wsEvent struct {
 	} `json:"error"`
 }
 
-func (ss *wsSession) message(by string, op byte, p []byte, size int64, clipped bool) {
+// message handles one complete data message; runes is the number of
+// characters of a text message (all of it, also past the inspection cap).
+func (ss *wsSession) message(by string, op byte, p []byte, size int64, clipped bool, runes int64) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
-	if op == opText && !clipped {
+	if op == opText {
 		var ev wsEvent
-		if json.Unmarshal(p, &ev) == nil {
+		if !clipped && json.Unmarshal(p, &ev) == nil {
 			ss.account(by, &ev)
+		} else if by == "client" {
+			ss.accountUninspected(p, size, clipped, runes)
 		}
 	}
 	if ss.logged >= ss.logLimit || !ss.st.s.LogBodies {
@@ -576,6 +585,31 @@ func (ss *wsSession) account(by string, ev *wsEvent) {
 			ss.text.WriteString(ev.Delta)
 		}
 	}
+}
+
+// accountUninspected bills a client text message that could not be decoded
+// (larger than the inspection cap, or not valid JSON) conservatively, so
+// that skipping inspection never means billing nothing: on /v1/tts every
+// character of the message counts as text to speak (an upper bound on its
+// text.delta), on realtime a conversation.item.create counts as a text
+// input. Caller holds ss.mu.
+func (ss *wsSession) accountUninspected(p []byte, size int64, clipped bool, runes int64) {
+	path := ss.st.log.Path
+	switch {
+	case path == "/v1/tts":
+		ss.stats.TTSChars += runes
+	case strings.HasPrefix(path, "/v1/realtime") && bytes.Contains(p, []byte(`"conversation.item.create"`)):
+		ss.stats.TextInputs++
+	default:
+		return
+	}
+	why := "invalid JSON"
+	if clipped {
+		why = "over the inspection cap"
+	}
+	ss.st.h.Log.Warn("websocket message not inspected; billed conservatively", "path", path, "bytes", size,
+		"chars", runes, "reason", why, "request_id", ss.st.log.RequestID)
+	ss.appendLine("gateway", fmt.Sprintf("client message of %d bytes %s; billed conservatively", size, why))
 }
 
 // cost returns the session cost so far.

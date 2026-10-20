@@ -520,9 +520,9 @@ func TestWSSessionLogging(t *testing.T) {
 	hs := newHarness(t, func(s *config.Settings) { s.LogResponseBodyMaxKB = 1 })
 	st := &state{h: hs.h, s: hs.set.Get(), token: &store.Token{}, log: &store.Log{Path: "/v1/realtime"}}
 	ss := newWSSession(st, &wsStats{}, 2)
-	ss.message("upstream", opText, []byte(`{"type":"response.text.delta","delta":"a"}`), 40, false)
-	ss.message("upstream", opText, []byte(`{"type":"response.output_text.delta"`), 99999, true)
-	ss.message("client", opBinary, nil, 10, false) // over the message log limit
+	ss.message("upstream", opText, []byte(`{"type":"response.text.delta","delta":"a"}`), 40, false, 40)
+	ss.message("upstream", opText, []byte(`{"type":"response.output_text.delta"`), 99999, true, 99999)
+	ss.message("client", opBinary, nil, 10, false, 0) // over the message log limit
 	for i := 0; i < 50; i++ {
 		ss.note(strings.Repeat("x", 100))
 	}
@@ -556,5 +556,46 @@ func TestWSProtocolHelpers(t *testing.T) {
 	r.Header.Set("Connection", "keep-alive")
 	if isWebSocket(r) {
 		t.Fatal("upgrade token required")
+	}
+}
+
+// A TTS text message larger than the 64 KB inspection cap is still
+// billed, and so is one that is not valid JSON (review A H2).
+func TestWSTTSOversizedMessageBilled(t *testing.T) {
+	hs := newHarness(t, nil)
+	st := &state{h: hs.h, s: hs.set.Get(), token: &store.Token{}, log: &store.Log{Path: "/v1/tts"}}
+	ss := newWSSession(st, &wsStats{}, 10)
+	mask := []byte{1, 2, 3, 4}
+	small := `{"type":"text.delta","delta":"` + strings.Repeat("a", 1000) + `"}`
+	big := `{"type":"text.delta","delta":"` + strings.Repeat("中", 70000) + `"}`
+	frame := encodeFrame(true, opText, []byte(big), mask)
+	ss.clientObs.Feed(encodeFrame(true, opText, []byte(small), mask))
+	for len(frame) > 0 { // arrives in pieces, as from the network
+		n := min(len(frame), 7000)
+		ss.clientObs.Feed(frame[:n])
+		frame = frame[n:]
+	}
+	if got := ss.stats.TTSChars; got < 71000 || got > 71000+64 {
+		t.Fatalf("TTSChars = %d, want about 71000", got)
+	}
+	ss.clientObs.Feed(encodeFrame(true, opText, []byte("not json at all"), mask))
+	if got := ss.stats.TTSChars; got < 71015 {
+		t.Fatalf("invalid JSON message not billed: %d", got)
+	}
+	// Server messages and binary frames are not billed as TTS text.
+	ss.serverObs.Feed(encodeFrame(true, opText, []byte(big), nil))
+	ss.clientObs.Feed(encodeFrame(true, opBinary, []byte(big), mask))
+	if got := ss.stats.TTSChars; got > 71015+64 {
+		t.Fatalf("non-billable messages counted: %d", got)
+	}
+
+	// Realtime: an oversized conversation.item.create still counts as a
+	// text input.
+	st2 := &state{h: hs.h, s: hs.set.Get(), token: &store.Token{}, log: &store.Log{Path: "/v1/realtime"}}
+	rs := newWSSession(st2, &wsStats{}, 10)
+	item := `{"type":"conversation.item.create","item":{"content":[{"type":"input_text","text":"` + strings.Repeat("x", 70000) + `"}]}}`
+	rs.clientObs.Feed(encodeFrame(true, opText, []byte(item), mask))
+	if rs.stats.TextInputs != 1 {
+		t.Fatalf("TextInputs = %d", rs.stats.TextInputs)
 	}
 }

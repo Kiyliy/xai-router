@@ -36,6 +36,7 @@ type wsObserver struct {
 	msg       []byte
 	msgLen    int64
 	msgClip   bool
+	msgRunes  int64  // characters of a text message, counted past the inspection cap too
 	ctrl      []byte // control frame payload (<=125 bytes)
 	bytes     int64
 	messages  int64
@@ -118,7 +119,7 @@ func (o *wsObserver) readHeader(b []byte) []byte {
 		}
 		o.ctrl = o.ctrl[:0]
 	} else if o.opcode != opContinuation {
-		o.msgOp, o.msg, o.msgLen, o.msgClip = o.opcode, o.msg[:0], 0, false
+		o.msgOp, o.msg, o.msgLen, o.msgClip, o.msgRunes = o.opcode, o.msg[:0], 0, false, 0
 	}
 	if o.remaining == 0 {
 		o.endFrame()
@@ -134,11 +135,21 @@ func (o *wsObserver) consume(p []byte) {
 		return
 	}
 	o.msgLen += int64(len(p))
+	text := o.msgOp == opText
 	room := o.maxInspect - len(o.msg)
 	if room <= 0 {
-		// Past the inspection cap: only keep the mask position in step.
+		// Past the inspection cap: keep the mask position in step, and keep
+		// counting the characters of text messages (billed by length).
 		o.msgClip = true
-		o.maskPos += len(p)
+		if !text {
+			o.maskPos += len(p)
+			return
+		}
+		for _, c := range p {
+			if o.unmask(c)&0xC0 != 0x80 {
+				o.msgRunes++
+			}
+		}
 		return
 	}
 	if len(p) > room {
@@ -146,6 +157,9 @@ func (o *wsObserver) consume(p []byte) {
 	}
 	for i, c := range p {
 		v := o.unmask(c)
+		if text && v&0xC0 != 0x80 {
+			o.msgRunes++
+		}
 		if i < room {
 			o.msg = append(o.msg, v)
 		}
