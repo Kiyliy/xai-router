@@ -365,6 +365,19 @@ func TestSystemInfo(t *testing.T) {
 		info["go_version"] == "" || num(info["log_queue_length"]) != 0 {
 		t.Fatalf("info: %v", info)
 	}
+	// A new database has always counted log rows: no cutover.
+	if v, ok := info["stats_basis_since"]; !ok || v != nil {
+		t.Fatalf("stats_basis_since on a new database: %v", info["stats_basis_since"])
+	}
+	// After an upgrade from v9 it is the migration time.
+	at := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	if err := h.db.SetMeta(context.Background(), store.MetaStatsBasisSince, itoa(at.UnixMilli())); err != nil {
+		t.Fatal(err)
+	}
+	info = h.must(h.call(http.MethodGet, "/api/v1/system/info", ""), 200)
+	if info["stats_basis_since"] != "2026-10-20T12:00:00Z" {
+		t.Fatalf("stats_basis_since: %v", info["stats_basis_since"])
+	}
 }
 
 func TestParseTimeParam(t *testing.T) {

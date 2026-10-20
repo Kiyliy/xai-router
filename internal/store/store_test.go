@@ -151,3 +151,44 @@ func TestSessions(t *testing.T) {
 		t.Fatal("session not revoked")
 	}
 }
+
+// A retry chain whose rows are not stored (logging off, or reduced to an
+// accounting stub) is still accounted per row: stats, key and token
+// counters as if the rows had been written.
+func TestChainAccountingWithoutRecord(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	k1 := &Key{Name: "k1", Key: "xai-1", BaseURL: "https://api.x.ai", Weight: 1, Enabled: true}
+	k2 := &Key{Name: "k2", Key: "xai-2", BaseURL: "https://api.x.ai", Weight: 1, Enabled: true}
+	_ = db.CreateKey(ctx, k1)
+	_ = db.CreateKey(ctx, k2)
+	tok := &Token{Name: "t", Hash: "h", Prefix: "sk-xr-a", Enabled: true}
+	_ = db.CreateToken(ctx, tok)
+	now := time.Now().UnixMilli()
+	l := &Log{RequestID: "r", CreatedAt: now, Method: "POST", Path: "/v1/chat/completions", Status: 200, TokenID: tok.ID,
+		KeyID: k2.ID, CostTicks: 500, LatencyMs: 30, NoRecord: true,
+		Attempts: []Attempt{{Seq: 1, KeyID: k1.ID, Status: 500, Action: "retry", Error: "boom", StartedAt: now, LatencyMs: 10, CostTicks: 7},
+			{Seq: 2, KeyID: k2.ID, Status: 200, Action: "success", StartedAt: now + 10}}}
+	if err := db.InsertLogs(ctx, []*Log{l}); err != nil {
+		t.Fatal(err)
+	}
+	if _, n, _ := db.ListLogs(ctx, LogFilter{Limit: 10}); n != 0 {
+		t.Fatalf("rows stored: %d", n)
+	}
+	a, _ := db.StatsTotal(ctx, 0)
+	if a.Requests != 2 || a.Success != 1 || a.Errors != 1 || a.CostTicks != 507 {
+		t.Fatalf("stats: %+v", a)
+	}
+	g1, _ := db.GetKey(ctx, k1.ID)
+	g2, _ := db.GetKey(ctx, k2.ID)
+	if g1.Attempts != 1 || g1.AttemptErrors != 1 || g1.CostTicks != 7 || g2.Attempts != 1 || g2.AttemptErrors != 0 || g2.CostTicks != 500 {
+		t.Fatalf("keys: %+v %+v", g1, g2)
+	}
+	if tk, _ := db.GetToken(ctx, tok.ID); tk.Requests != 2 || tk.UsedTicks != 507 {
+		t.Fatalf("token: %+v", tk)
+	}
+}
