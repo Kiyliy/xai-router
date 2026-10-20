@@ -175,8 +175,8 @@ func TestWriterClosedDatabase(t *testing.T) {
 	w := newTestWriter(t, db, 10)
 	db.Close()
 	w.write([]*store.Log{mkLog("a", 0, 1), mkLog("b", 0, 1)}) // must not panic
-	if w.Dropped() != 2 {
-		t.Fatalf("failed count %d", w.Dropped())
+	if w.Dropped() != 2 || w.Lost() != 2 {
+		t.Fatalf("failed count %d lost %d", w.Dropped(), w.Lost())
 	}
 	w.Enqueue(mkLog("c", 0, 1))
 	if err := w.Flush(context.Background()); err == nil {
