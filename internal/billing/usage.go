@@ -3,6 +3,7 @@ package billing
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -253,6 +254,84 @@ type StreamState struct {
 	// usage chunk, a final response.* event, message_delta). message_start
 	// alone carries only the prompt.
 	Final bool
+	// Output is set once the stream carried any generated content: text,
+	// reasoning or tool-call deltas.
+	Output bool
+	// Err is the first error event of the stream (an upstream that failed
+	// after answering 200, e.g. resource-exhausted while overloaded).
+	Err *StreamError
+}
+
+// StreamError is an error the upstream reported inside an SSE stream: a chat
+// chunk with an "error" member (OpenAI or xAI shape), a Responses "error" or
+// "response.failed" event, or an Anthropic Messages "error" event.
+type StreamError struct {
+	Code    string `json:"code,omitempty"`
+	Type    string `json:"type,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+// String joins the code, type and message.
+func (e *StreamError) String() string {
+	var parts []string
+	for _, p := range []string{e.Code, e.Type, e.Message} {
+		if p != "" && !slices.Contains(parts, p) {
+			parts = append(parts, p)
+		}
+	}
+	if len(parts) == 0 {
+		return "unknown error"
+	}
+	return strings.Join(parts, ": ")
+}
+
+// parseStreamError reads an error member ({"message","type","code"} or a
+// plain string), completed by an event's top-level code and message.
+func parseStreamError(raw json.RawMessage, code json.RawMessage, message string) *StreamError {
+	e := &StreamError{Code: scalarString(code), Message: message}
+	if len(raw) > 0 {
+		var str string
+		var obj struct {
+			Code    json.RawMessage `json:"code"`
+			Type    string          `json:"type"`
+			Message string          `json:"message"`
+		}
+		switch {
+		case json.Unmarshal(raw, &str) == nil:
+			e.Message = firstNonEmpty(str, e.Message)
+		case json.Unmarshal(raw, &obj) == nil:
+			e.Code = firstNonEmpty(scalarString(obj.Code), e.Code)
+			e.Type = obj.Type
+			e.Message = firstNonEmpty(obj.Message, e.Message)
+		}
+	}
+	if *e == (StreamError{}) {
+		e.Message = "unknown error"
+	}
+	return e
+}
+
+// scalarString renders a JSON string or number ("code" is either).
+func scalarString(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	return string(raw)
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+func present(raw json.RawMessage) bool {
+	return len(raw) > 0 && string(raw) != "null"
 }
 
 // streamEvent covers chat chunks, Responses events and Messages events.
@@ -264,22 +343,33 @@ type streamEvent struct {
 	Usage       json.RawMessage `json:"usage"`
 	Choices     []struct {
 		Delta struct {
-			Content          *string `json:"content"`
-			ReasoningContent *string `json:"reasoning_content"`
+			Content          *string         `json:"content"`
+			ReasoningContent *string         `json:"reasoning_content"`
+			ToolCalls        json.RawMessage `json:"tool_calls"`
 		} `json:"delta"`
 	} `json:"choices"`
-	Delta    json.RawMessage `json:"delta"`
+	Delta json.RawMessage `json:"delta"`
+	// In-stream errors: {"error":{…}} or {"error":"…","code":"…"} (chat),
+	// {"type":"error","code":…,"message":…} (responses), {"type":"error",
+	// "error":{"type","message"}} (messages).
+	Error    json.RawMessage `json:"error"`
+	Code     json.RawMessage `json:"code"`
 	Response *struct {
 		ID          string          `json:"id"`
 		Model       string          `json:"model"`
 		ServiceTier string          `json:"service_tier"`
 		Usage       json.RawMessage `json:"usage"`
+		Error       json.RawMessage `json:"error"`
 	} `json:"response"`
-	Message *struct {
-		ID    string          `json:"id"`
-		Model string          `json:"model"`
-		Usage json.RawMessage `json:"usage"`
-	} `json:"message"`
+	// Message is message_start's message object, or an error event's text.
+	Message json.RawMessage `json:"message"`
+}
+
+// startMessage is message_start's "message".
+type startMessage struct {
+	ID    string          `json:"id"`
+	Model string          `json:"model"`
+	Usage json.RawMessage `json:"usage"`
 }
 
 // AddEvent processes one SSE "data:" payload.
@@ -295,6 +385,16 @@ func (s *StreamState) AddEvent(eventName string, data []byte) {
 	if typ == "" {
 		typ = eventName
 	}
+	if s.Err == nil {
+		switch {
+		case typ == "error" || present(ev.Error):
+			var msg string
+			_ = json.Unmarshal(ev.Message, &msg)
+			s.Err = parseStreamError(ev.Error, ev.Code, msg)
+		case typ == "response.failed" && ev.Response != nil && present(ev.Response.Error):
+			s.Err = parseStreamError(ev.Response.Error, nil, "")
+		}
+	}
 	switch {
 	case len(ev.Choices) > 0 || ev.Type == "": // chat completion chunk (no "type" field)
 		if s.ID == "" {
@@ -304,6 +404,9 @@ func (s *StreamState) AddEvent(eventName string, data []byte) {
 			s.Model = ev.Model
 		}
 		for _, c := range ev.Choices {
+			if present(c.Delta.ToolCalls) && string(c.Delta.ToolCalls) != "[]" {
+				s.Output = true
+			}
 			if c.Delta.Content != nil {
 				s.appendText(&s.Text, *c.Delta.Content)
 			}
@@ -339,16 +442,21 @@ func (s *StreamState) AddEvent(eventName string, data []byte) {
 				s.Usage.ServiceTier = ev.Response.ServiceTier
 			}
 		}
-		switch typ {
-		case "response.output_text.delta":
+		switch {
+		case typ == "response.output_text.delta":
 			s.appendText(&s.Text, deltaString(ev.Delta))
-		case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
+		case typ == "response.reasoning_summary_text.delta", typ == "response.reasoning_text.delta":
 			s.appendText(&s.Reasoning, deltaString(ev.Delta))
+		case strings.HasSuffix(typ, ".delta") && deltaString(ev.Delta) != "":
+			s.Output = true // tool-call arguments and other generated deltas
 		}
-	case typ == "message_start" && ev.Message != nil:
-		s.ID, s.Model = ev.Message.ID, ev.Message.Model
-		if u := parseUsage(ev.Message.Usage); u.Found {
-			s.Usage.Merge(u)
+	case typ == "message_start" && len(ev.Message) > 0 && ev.Message[0] == '{':
+		var m startMessage
+		if json.Unmarshal(ev.Message, &m) == nil {
+			s.ID, s.Model = m.ID, m.Model
+			if u := parseUsage(m.Usage); u.Found {
+				s.Usage.Merge(u)
+			}
 		}
 	case typ == "content_block_delta":
 		var d struct {
@@ -357,6 +465,9 @@ func (s *StreamState) AddEvent(eventName string, data []byte) {
 			Thinking string `json:"thinking"`
 		}
 		if json.Unmarshal(ev.Delta, &d) == nil {
+			if d.Type != "" && d.Type != "text_delta" && d.Type != "thinking_delta" {
+				s.Output = true // input_json_delta (tool use) and the like
+			}
 			switch d.Type {
 			case "text_delta":
 				s.appendText(&s.Text, d.Text)
@@ -392,6 +503,9 @@ func deltaString(raw json.RawMessage) string {
 }
 
 func (s *StreamState) appendText(b *strings.Builder, t string) {
+	if t != "" {
+		s.Output = true
+	}
 	if b == &s.Reasoning {
 		s.ReasoningBytes += int64(len(t))
 	} else {

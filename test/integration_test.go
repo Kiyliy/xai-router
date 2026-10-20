@@ -64,6 +64,12 @@ func (m *mockXAI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(key, "-500"):
 		jsonResp(w, 500, `{"error":"internal"}`)
 		return
+	case strings.HasSuffix(key, "-streamerr"):
+		// Overloaded: 200, then an in-stream error instead of content.
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, `data: {"code":"resource-exhausted","error":"The model is currently at capacity due to high demand."}`+"\n\ndata: [DONE]\n\n")
+		return
 	}
 	if r.Header.Get("X-Grok-Mock-Echo") != "" {
 		// Echo mode: report what arrived, with a large padding so truncation

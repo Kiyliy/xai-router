@@ -109,6 +109,9 @@ type state struct {
 	// stripUsage drops the usage-only chat chunk before it reaches a client
 	// that did not ask for it (usage is always requested upstream).
 	stripUsage bool
+	// moreKeys is set while an attempt is not on the last candidate key: a
+	// stream that failed before its first byte is then retried.
+	moreKeys bool
 }
 
 // echo lists client-supplied values that upstream errors may repeat back;
@@ -266,7 +269,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 7. Try keys in order.
 	var lastErr *upstreamError
 	tried, busy := 0, 0
-	for _, k := range candidates {
+	for i, k := range candidates {
 		if tried >= s.MaxAttempts {
 			break
 		}
@@ -277,6 +280,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		tried++
+		st.moreKeys = i < len(candidates)-1
 		done, uerr := st.attempt(w, r, lease, outBody, len(st.attempts)+1, tried < s.MaxAttempts)
 		lease.Release()
 		if done {
@@ -419,15 +423,25 @@ func (st *state) attempt(w http.ResponseWriter, r *http.Request, lease *pool.Lea
 	st.h.Pool.Report(k.ID, pool.Outcome{Status: resp.StatusCode})
 	st.log.KeyID, st.log.KeyName = k.ID, k.Name
 	isSSE := strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
-	copyResponseHeaders(w.Header(), resp.Header)
 	st.log.RespHeaders = reqlog.HeadersJSON(resp.Header)
 	st.log.Status = resp.StatusCode
 	if isSSE {
+		// The headers are copied when the stream is committed to the client.
 		st.log.Stream = true
 		timer.Stop()
-		record(resp.StatusCode, st.streamBody(ctx, r.Context(), cancel, w, resp), pool.ActionSuccess)
+		sr := st.streamBody(ctx, r.Context(), cancel, w, resp, k.ID, canRetry && st.moreKeys)
+		if sr.retry != nil {
+			record(resp.StatusCode, sr.retry.err, sr.action)
+			return false, sr.retry
+		}
+		action := pool.ActionSuccess
+		if sr.action != "" {
+			action = sr.action
+		}
+		record(resp.StatusCode, sr.errMsg, action)
 		return true, nil
 	}
+	copyResponseHeaders(w.Header(), resp.Header)
 	// Non-streaming: buffer the body so usage can be read, then forward it.
 	full, rerr := io.ReadAll(io.LimitReader(resp.Body, maxNonStreamBody+1))
 	if rerr == nil && len(full) > maxNonStreamBody {
@@ -507,18 +521,23 @@ var clientGoneDrain = 60 * time.Second
 // If the client disconnects, the rest of the stream is still read (but not
 // forwarded) so the usage at its end is billed; the log keeps status 499.
 // When no usage arrives at all, it is estimated from the content received.
-func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.CancelCauseFunc, w http.ResponseWriter, resp *http.Response) string {
+//
+// Token-billed streams are held back until their first generated content (at
+// most firstByteHold): an upstream that answers 200 and then only reports an
+// error (resource-exhausted while overloaded) is then retried on the next key
+// like an HTTP error, as nothing has reached the client yet. Once anything
+// was sent, the error event is passed through and the request is logged as
+// failed (see streamErrorLogStatus).
+func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.CancelCauseFunc, w http.ResponseWriter,
+	resp *http.Response, keyID int64, canRetry bool) streamResult {
 	s := st.s
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.WriteHeader(resp.StatusCode)
 	rc := http.NewResponseController(w)
-	_ = rc.Flush()
 
 	maxLog := s.LogResponseBodyMaxBytes()
 	capt := newCapture(maxLog)
 	ss := &billing.StreamState{MaxText: maxLog}
 	parser := &sseParser{onEvent: ss.AddEvent}
+	tokenStream := estimatedPaths[st.log.Path]
 
 	idle := s.StreamIdleTimeout()
 	watchdog := time.AfterFunc(idle, func() { cancel(errStreamIdle) })
@@ -545,17 +564,63 @@ func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.Cance
 		drainMu.Unlock()
 	}()
 
-	var fixer *messagesFixer
-	if s.AnthropicStreamFix && st.log.Path == "/v1/messages" {
-		fixer = &messagesFixer{}
+	// Writes to the client. Until the stream is committed, bytes are held
+	// and the status line is not sent; the hold timer commits from its own
+	// goroutine, so everything that touches w goes through wmu.
+	var wmu sync.Mutex
+	committed, finished, gone := false, false, false
+	var held []byte
+	commitLocked := func() {
+		if committed || finished {
+			return
+		}
+		committed = true
+		copyResponseHeaders(w.Header(), resp.Header)
+		w.Header().Set("X-Accel-Buffering", "no")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.WriteHeader(resp.StatusCode)
+		st.markTTFB()
+		if len(held) > 0 {
+			if _, err := w.Write(held); err != nil {
+				gone = true
+			}
+			held = nil
+		}
+		if !gone {
+			_ = rc.Flush()
+		}
 	}
-	var strip *usageStripper
-	if st.stripUsage {
-		strip = &usageStripper{}
+	commit := func() {
+		wmu.Lock()
+		commitLocked()
+		wmu.Unlock()
 	}
-	gone := false
+	// Registered first, run last: no write to w after streamBody returns.
+	defer func() {
+		wmu.Lock()
+		finished = true
+		wmu.Unlock()
+	}()
+	if tokenStream {
+		hold := time.AfterFunc(firstByteHold, commit)
+		defer hold.Stop()
+	} else {
+		commit()
+	}
 	toClient := func(b []byte) {
-		if len(b) == 0 || gone {
+		if len(b) == 0 {
+			return
+		}
+		wmu.Lock()
+		defer wmu.Unlock()
+		if gone || finished {
+			return
+		}
+		if !committed {
+			held = append(held, b...)
+			if len(held) > maxHeldBytes {
+				commitLocked()
+			}
 			return
 		}
 		st.markTTFB()
@@ -565,12 +630,66 @@ func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.Cance
 			_ = rc.Flush()
 		}
 	}
+
+	var fixer *messagesFixer
+	if s.AnthropicStreamFix && st.log.Path == "/v1/messages" {
+		fixer = &messagesFixer{}
+	}
+	var strip *usageStripper
+	if st.stripUsage {
+		strip = &usageStripper{}
+	}
+	var res streamResult
+	reported := false
+	// report tells the pool about the in-stream error as if the upstream
+	// had answered it with the matching HTTP status (cooldown, breaker).
+	report := func() pool.Verdict {
+		reported = true
+		body, _ := json.Marshal(map[string]any{"error": ss.Err})
+		return st.h.Pool.Report(keyID, pool.Outcome{Status: streamErrorStatus(ss.Err), Body: string(body),
+			RequestID: st.log.RequestID, Echo: st.echo()})
+	}
+	// decide runs after each upstream chunk while nothing was sent: it
+	// commits once content (or a final error) arrives, and abandons the
+	// attempt for the next key when the stream opened with a retryable error.
+	decide := func() (retry bool) {
+		wmu.Lock()
+		open := !committed && !finished
+		wmu.Unlock()
+		if !open {
+			return false
+		}
+		switch {
+		case ss.Err != nil && !ss.Output:
+			v := report()
+			res.action = v.Action
+			if v.Retry && canRetry {
+				wmu.Lock()
+				if !committed {
+					finished = true // the hold timer must not commit any more
+					wmu.Unlock()
+					body, _ := json.Marshal(map[string]any{"error": ss.Err})
+					res.retry = &upstreamError{status: streamErrorStatus(ss.Err), body: body,
+						header: http.Header{"Content-Type": {"application/json"}},
+						err:    "upstream error in stream before any byte was sent: " + v.Reason}
+					return true
+				}
+				wmu.Unlock()
+			}
+			commit()
+		case ss.Output || ss.Err != nil:
+			commit()
+		}
+		return false
+	}
 	forward := func(chunk []byte) {
 		if len(chunk) == 0 {
 			return
 		}
-		if !gone && clientCtx.Err() != nil {
+		if clientCtx.Err() != nil {
+			wmu.Lock()
 			gone = true
+			wmu.Unlock()
 		}
 		if strip != nil {
 			toClient(strip.Feed(chunk))
@@ -594,6 +713,9 @@ func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.Cance
 				chunk = fixer.Feed(chunk)
 			}
 			forward(chunk)
+			if tokenStream && decide() {
+				return res // retried on the next key; nothing reached the client
+			}
 		}
 		if err != nil {
 			if fixer != nil {
@@ -602,6 +724,11 @@ func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.Cance
 			if strip != nil {
 				toClient(strip.Flush())
 			}
+			parser.Close()
+			if tokenStream && decide() {
+				return res
+			}
+			commit()
 			if !errors.Is(err, io.EOF) {
 				switch {
 				case errors.Is(context.Cause(ctx), errStreamIdle):
@@ -615,13 +742,31 @@ func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.Cance
 			break
 		}
 	}
-	parser.Close()
+	wmu.Lock()
+	wasGone := gone
+	wmu.Unlock()
 	// Only a disconnect seen while data was still arriving counts: clients
 	// often close right after the last event, before the handler returns.
-	if gone || errors.Is(context.Cause(ctx), errClientGone) {
+	if wasGone || errors.Is(context.Cause(ctx), errClientGone) {
 		st.log.Status = 499
 		if errMsg == "" {
 			errMsg = "client went away"
+		}
+	}
+	streamFailed := tokenStream && ss.Err != nil
+	if streamFailed {
+		if !reported {
+			res.action = report().Action
+		}
+		// The client saw 200 and then the error event; the log records the
+		// request as failed so it counts in failure stats and filters.
+		msg := fmt.Sprintf("upstream error in stream (HTTP %d sent): %s", resp.StatusCode, ss.Err)
+		if errMsg != "" {
+			msg += "; " + errMsg
+		}
+		errMsg = msg
+		if st.log.Status != 499 {
+			st.log.Status = streamErrorLogStatus
 		}
 	}
 	if errMsg != "" {
@@ -637,7 +782,20 @@ func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.Cance
 		st.log.RespBody = string(capt.Bytes())
 		st.log.Truncated = st.log.Truncated || capt.truncated || ss.Truncated
 	}
-	if !ss.Final && (errMsg != "" || estimatedPaths[st.log.Path]) {
+	switch {
+	case streamFailed && !ss.Final && !ss.Output:
+		// The upstream failed before generating anything and reported no
+		// usage: xAI does not bill such a request. Bill 0 and keep the
+		// estimate the gateway would otherwise have charged, for audit.
+		st.applyEstimatedUsage(ss)
+		est, estPrompt := st.log.CostTicks, st.log.PromptTokens
+		st.applyUsage(billing.Usage{})
+		st.log.CostSource = "upstream_error"
+		extra, _ := json.Marshal(map[string]any{"stream_error": map[string]any{
+			"code": ss.Err.Code, "type": ss.Err.Type, "message": ss.Err.Message,
+			"client_status": resp.StatusCode, "estimated_cost_ticks": est, "estimated_prompt_tokens": estPrompt}})
+		st.log.Extra = string(extra)
+	case !ss.Final && (errMsg != "" || tokenStream):
 		// Cut short, or ended without the closing usage event (no chat
 		// usage chunk, no response.completed, no message_delta): never bill
 		// such a stream as free (or prompt-only); estimate what was received.
@@ -645,13 +803,61 @@ func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.Cance
 			st.h.Log.Info("stream ended without usage; cost estimated", "path", st.log.Path, "request_id", st.log.RequestID)
 		}
 		st.applyEstimatedUsage(ss)
-	} else {
+	default:
 		st.applyUsage(ss.Usage)
 	}
 	if ss.ID != "" && st.log.Path == "/v1/responses" {
 		st.bind(KindResponse, ss.ID)
 	}
-	return errMsg
+	res.errMsg = errMsg
+	return res
+}
+
+// streamResult is how a stream attempt ended.
+type streamResult struct {
+	errMsg string         // for the log and the attempt
+	action string         // pool action for an in-stream error ("" = success)
+	retry  *upstreamError // set when the attempt was abandoned for the next key
+}
+
+// firstByteHold bounds how long a token-billed stream is held back waiting
+// for its first content (see streamBody); maxHeldBytes bounds what is held.
+var firstByteHold = 3 * time.Second
+
+const maxHeldBytes = 256 << 10
+
+// streamErrorLogStatus is the log status of a stream that answered 200 and
+// then failed with an in-stream error: the upstream's response was an
+// error, so the request counts as failed (level error, "xAI server error"
+// in the console). The 200 the client saw stays on the attempt and in the
+// error text.
+const streamErrorLogStatus = http.StatusBadGateway
+
+// streamErrorStatus maps an in-stream error to the HTTP status the upstream
+// would have answered it with, so the pool classifies it the same way:
+// resource-exhausted is a 429 (capacity or rate limit), overload a 503.
+func streamErrorStatus(e *billing.StreamError) int {
+	if e == nil {
+		return http.StatusBadGateway
+	}
+	m := strings.ToLower(e.Code + " " + e.Type + " " + e.Message)
+	has := func(subs ...string) bool {
+		for _, sub := range subs {
+			if strings.Contains(m, sub) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("resource-exhausted", "resource_exhausted", "rate_limit", "rate limit", "too many requests", "at capacity", "high demand"):
+		return http.StatusTooManyRequests
+	case has("overloaded", "unavailable"):
+		return http.StatusServiceUnavailable
+	case has("invalid_request", "invalid-argument", "invalid_argument", "bad_request"):
+		return http.StatusBadRequest
+	}
+	return http.StatusInternalServerError
 }
 
 var errStreamIdle = errors.New("stream idle timeout")
