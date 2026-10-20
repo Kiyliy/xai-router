@@ -80,9 +80,30 @@ func (l *Ledger) Reserve(t *store.Token, amount int64) *Reservation {
 	return &Reservation{l: l, token: t.ID, amount: amount}
 }
 
+// Admit returns a zero-amount reservation for token t without checking its
+// quota. It is used for requests whose cost is already covered by a hold
+// (the poll of an async job the token created): such a poll must reach the
+// upstream even when the job's own hold fills the quota, otherwise the job
+// could never be delivered, billed or released.
+func (l *Ledger) Admit(t *store.Token) *Reservation {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if used, ok := l.used[t.ID]; !ok || t.UsedTicks > used {
+		l.used[t.ID] = t.UsedTicks
+	}
+	return &Reservation{l: l, token: t.ID}
+}
+
 // Settle releases the reservation and records the actual cost. It is safe
 // to call more than once; only the first call counts.
 func (r *Reservation) Settle(actual int64) {
+	r.SettleReleasing("", actual)
+}
+
+// SettleReleasing is Settle that also frees the hold of async job jobID (if
+// any) under the same lock, so no concurrent reservation can claim the freed
+// hold before the job's actual cost is recorded.
+func (r *Reservation) SettleReleasing(jobID string, actual int64) {
 	if r == nil {
 		return
 	}
@@ -93,6 +114,9 @@ func (r *Reservation) Settle(actual int64) {
 		return
 	}
 	r.settled = true
+	if jobID != "" {
+		l.releaseHoldLocked(jobID)
+	}
 	l.inflight[r.token] -= r.amount
 	l.used[r.token] += actual
 }
@@ -130,6 +154,10 @@ func (r *Reservation) Amount() int64 {
 func (l *Ledger) ReleaseHold(jobID string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.releaseHoldLocked(jobID)
+}
+
+func (l *Ledger) releaseHoldLocked(jobID string) {
 	if h, ok := l.holds[jobID]; ok {
 		l.inflight[h.token] -= h.amount
 		delete(l.holds, jobID)

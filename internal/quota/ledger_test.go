@@ -81,3 +81,42 @@ func TestDatabaseAheadIsTrusted(t *testing.T) {
 		t.Fatal("charge beyond quota reported as within quota")
 	}
 }
+
+// A poll covered by a job's hold is admitted even when the hold fills the
+// quota (review A M1); Reserve(0) alone would refuse it.
+func TestAdmitIgnoresQuota(t *testing.T) {
+	l := New()
+	tok := &store.Token{ID: 5, Limited: true, QuotaTicks: 400}
+	l.Reserve(tok, 400).Hold("job", 0, time.Hour)
+	if l.Reserve(tok, 0) != nil {
+		t.Fatal("Reserve(0) should refuse a full quota")
+	}
+	r := l.Admit(tok)
+	if r == nil || r.Amount() != 0 {
+		t.Fatalf("Admit: %+v", r)
+	}
+	r.Settle(0)
+	if l.inflight[5] != 400 {
+		t.Fatalf("hold changed: inflight %d", l.inflight[5])
+	}
+}
+
+// Releasing a job's hold and recording its cost happen under one lock
+// (review A L2): no state in between where the hold is gone and the cost is
+// not yet counted.
+func TestSettleReleasingIsAtomic(t *testing.T) {
+	l := New()
+	tok := &store.Token{ID: 6, Limited: true, QuotaTicks: 1000}
+	l.Reserve(tok, 600).Hold("job", 0, time.Hour)
+	poll := l.Admit(tok)
+	poll.SettleReleasing("job", 550)
+	if l.used[6] != 550 || l.inflight[6] != 0 || len(l.holds) != 0 {
+		t.Fatalf("used %d inflight %d holds %d", l.used[6], l.inflight[6], len(l.holds))
+	}
+	poll.SettleReleasing("job", 550) // second call is a no-op
+	if l.used[6] != 550 {
+		t.Fatalf("settled twice: %d", l.used[6])
+	}
+	var nilRes *Reservation
+	nilRes.SettleReleasing("job", 1) // must not panic
+}
