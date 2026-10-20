@@ -166,30 +166,58 @@ func TestSyncAddsUpdatesAndPreserves(t *testing.T) {
 
 func TestSyncErrors(t *testing.T) {
 	ctx := context.Background()
-	cases := []struct {
-		name   string
-		mutate func(f *fakeXAI)
-		want   string
+	// One failing endpoint does not abort the sync: it is reported per path
+	// and the other lists are applied.
+	partial := []struct {
+		name, path string
+		mutate     func(f *fakeXAI)
+		want       string
+		applied    string // a model from another list that must be synced
 	}{
-		{"http error", func(f *fakeXAI) {
+		{"http error", "/v1/embedding-models", func(f *fakeXAI) {
 			f.status["/v1/embedding-models"] = 500
 			f.bodies["/v1/embedding-models"] = strings.Repeat("e", 400)
-		}, "HTTP 500: eee"},
-		{"bad json", func(f *fakeXAI) { f.bodies["/v1/models"] = "{" }, "unexpected end of JSON"},
-		{"missing endpoint", func(f *fakeXAI) { delete(f.bodies, "/v1/language-models") }, "HTTP 404"},
+		}, "HTTP 500: eee", "grok-new"},
+		{"bad json", "/v1/models", func(f *fakeXAI) { f.bodies["/v1/models"] = "{" }, "unexpected end of JSON", "grok-new"},
+		{"missing endpoint", "/v1/language-models", func(f *fakeXAI) { delete(f.bodies, "/v1/language-models") }, "HTTP 404", "emb-1"},
 	}
-	for _, c := range cases {
+	for _, c := range partial {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFake()
 			c.mutate(f)
 			srv := httptest.NewServer(f)
 			defer srv.Close()
-			res := (&Syncer{DB: openDB(t), Table: NewTable(), Client: srv.Client()}).Sync(ctx, srv.URL, "k", false)
-			if res.OK || !strings.Contains(res.Error, c.want) {
+			db := openDB(t)
+			if err := SeedBuiltin(ctx, db); err != nil {
+				t.Fatal(err)
+			}
+			res := (&Syncer{DB: db, Table: NewTable(), Client: srv.Client()}).Sync(ctx, srv.URL, "k", false)
+			if !res.OK || res.Error != "" || !strings.Contains(res.Errors[c.path], c.want) || len(res.Errors) != 1 {
 				t.Fatalf("got %+v", res)
+			}
+			if m, err := db.GetModel(ctx, c.applied); err != nil || m.Source != "sync" {
+				t.Fatalf("%s not synced: %+v %v", c.applied, m, err)
+			}
+			// Models of a list that could not be read are not retired.
+			if c.path == "/v1/language-models" {
+				if m, _ := db.GetModel(ctx, "grok-4.7"); !m.Enabled || strings.Contains(strings.Join(res.Retired, ","), "grok-4") {
+					t.Fatalf("language models retired after a failed list: %+v", res.Retired)
+				}
 			}
 		})
 	}
+	t.Run("every list fails", func(t *testing.T) {
+		f := newFake()
+		for p := range f.bodies {
+			f.status[p] = 403
+		}
+		srv := httptest.NewServer(f)
+		defer srv.Close()
+		res := (&Syncer{DB: openDB(t), Table: NewTable(), Client: srv.Client()}).Sync(ctx, srv.URL, "k", false)
+		if res.OK || !strings.Contains(res.Error, "HTTP 403") || len(res.Errors) != 5 {
+			t.Fatalf("got %+v", res)
+		}
+	})
 	t.Run("network", func(t *testing.T) {
 		srv := httptest.NewServer(newFake())
 		url := srv.URL
@@ -211,7 +239,7 @@ func TestSyncErrors(t *testing.T) {
 		db := openDB(t)
 		db.Close()
 		res := (&Syncer{DB: db, Table: NewTable(), Client: srv.Client()}).Sync(ctx, srv.URL, "k", false)
-		if res.OK || res.Error == "" {
+		if res.OK || !strings.Contains(res.Error, "read models") {
 			t.Fatalf("got %+v", res)
 		}
 		if err := NewTable().Reload(ctx, db); err == nil {
