@@ -564,7 +564,7 @@ function chainView(d, ctx) {
     const v = ok ? 'ok' : retried ? 'warn' : 'err';
     const eff = retried ? attemptEffect(a) : '';
     const reason = ok ? t('lg.ok')
-      : retried ? t('lg6.retried', { r: `${attemptWhy(a)}${eff ? t('ld5.paren', { x: eff }) : ''}` })
+      : retried ? t('lg6.retried', { r: attemptWhy(a) })
         : ((requestReason({ status: a.status, error: a.error }) || {}).text || t('lg.failed'));
     const left = (offs[i] / span) * 100, width = Math.max(0.8, ((a.latency_ms || 0) / span) * 100);
     const ttfbW = ok && a.latency_ms ? Math.min(100, ((a.ttfb_ms || 0) / a.latency_ms) * 100) : 0;
@@ -579,7 +579,7 @@ function chainView(d, ctx) {
       h('span', { class: 'ld6-n' }, t('ld6.attemptItem', { k: a.attempt_index || i + 1 })),
       h('span', { class: 'ld6-key mono', title: a.key_name || null }, attKey(a)),
       statusCode(a.status),
-      h('span', { class: 'ld6-why', title: a.error || null }, reason),
+      h('span', { class: 'ld6-why', title: [eff, a.error].filter(Boolean).join(t('lg.sep')) || null }, reason),
       cur ? h('span', { class: 'ld6-cur' }, t('ld6.current')) : null,
       h('span', { class: 'ld6-ms mono' }, fmtMs(a.latency_ms))),
     h('div', { class: 'ld5-track' }, h('div', { class: `ld5-wf is-${v}`, style: { left: `${left}%`, width: `${width}%` } }, h('span', { class: 'ld5-wf-ttfb', style: { width: `${ttfbW}%` } }))));
@@ -613,7 +613,8 @@ export function requestDetailView(d, ctx = {}) {
     d.error && !isOk(d.status) ? h('div', { class: 'ld-raw' }, h('span', { class: 'muted small' }, t('lg.rawError')), h('code', { class: 'mono small break' }, d.error)) : null,
     d.truncated ? h('div', { class: 'callout callout-warning' }, icon('alert', 16), h('span', null, t('logs.truncatedNotice'))) : null,
     kpiBand(d),
-    section(t('lg.costTitle'), costSection(d)),
+    // A retried attempt is never billed and has no usage: no empty cost table (its KPI says "—").
+    isRetriedRow(d) && !d.cost_usd && !d.total_tokens ? null : section(t('lg.costTitle'), costSection(d)),
     d.websocket_session ? wsSessionView(d.websocket_session) : null,
     chain ? section(t('ld6.chainTitle', { n: chainOf(d).length }), chain) : null,
     attempts ? section(t('logs.attemptsTimeline'), attempts) : null,

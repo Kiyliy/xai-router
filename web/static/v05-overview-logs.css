@@ -211,7 +211,7 @@
 .lg5 .lg-sum-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .lg5 .table-ulog .col-cost, .lg5 .table-ulog .col-lat { font-family: var(--font-mono); }
 /* requests only: 10 columns, four token columns under one group header */
-.lg5 .table-ulog[data-mode="request"] .col-status { width: 180px; }
+.lg5 .table-ulog[data-mode="request"] .col-status { width: 208px; }
 .lg5 .table-ulog[data-mode="request"] .col-who { width: 196px; }
 .lg5 .table-ulog[data-mode="request"] .col-tk { width: 66px; padding-left: 4px; padding-right: 4px; }
 /* the token name stays readable; its prefix gives way first */
@@ -229,9 +229,9 @@
 .lg5 .col-tk .cell-sub { text-align: right; }
 /* requests only: token columns pinned narrow, the request column takes the rest (colgroup in logs.js) */
 .lg5 .table-ulog col.cg-time { width: 140px; }
-.lg5 .table-ulog col.cg-status { width: 174px; } /* v0.6.0: room for the k/n badge */
+.lg5 .table-ulog col.cg-status { width: 208px; } /* v0.6.0: room for the k/n badge */
 .lg5 .table-ulog col.cg-who { width: 184px; }
-.lg5 .table-ulog col.cg-tk { width: 64.5px; }
+.lg5 .table-ulog col.cg-tk { width: 61px; }
 .lg5 .table-ulog col.cg-cost { width: 84px; }
 .lg5 .table-ulog col.cg-lat { width: 112px; }
 /* request line: plain "POST /v1/…" text, method in the secondary color */
@@ -415,7 +415,7 @@
 
 /* detail: "全部尝试（n 次）", one clickable card per attempt */
 .ld6-chain { display: flex; flex-direction: column; gap: 6px; }
-.ld6-card { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 16px; align-items: center; padding: 10px 12px; border-radius: var(--radius); position: relative; }
+.ld6-card { display: grid; grid-template-columns: minmax(0, 1fr) 200px; gap: 16px; align-items: center; padding: 10px 12px; border-radius: var(--radius); position: relative; }
 .ld6-card[role="button"] { cursor: pointer; }
 .ld6-card[role="button"]:hover { background: var(--hover); }
 .ld6-card[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -423,8 +423,8 @@
 .ld6-axis { padding-top: 0; padding-bottom: 0; }
 .ld6-axis .ld5-track { height: 14px; }
 .ld6-card-info { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 13px; }
-.ld6-n { color: var(--text-3); font-size: 12px; white-space: nowrap; flex-shrink: 0; }
-.ld6-key { color: var(--text); flex-shrink: 0; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ld6-n { color: var(--text-3); font-size: 12px; white-space: nowrap; flex-shrink: 0; min-width: 40px; }
+.ld6-key { color: var(--text); flex-shrink: 0; width: 104px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ld6-card-info .status-code { flex-shrink: 0; }
 .ld6-why { color: var(--text-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ld6-cur { color: var(--accent-text, var(--accent)); font-size: 12px; white-space: nowrap; flex-shrink: 0; }
@@ -432,3 +432,4 @@
 @media (max-width: 760px) { .ld6-card { grid-template-columns: 1fr; gap: 6px; } }
 /* overview: the ⓘ by "请求数" when the range spans the counting-basis change */
 .ov-metric .eyebrow .ov-basis { display: inline-flex; vertical-align: -2px; margin-left: 4px; color: var(--text-3); cursor: help; }
+.lg5 .table-ulog tr.row-retried .col-status .lg-sum-text { white-space: nowrap; }
