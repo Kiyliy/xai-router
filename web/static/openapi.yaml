@@ -936,7 +936,7 @@ components:
         image_price: { type: number, description: "USD per generated image when no tier matches (the default tier's price)" }
         image_tiers:
           type: array
-          description: "Per-image price by resolution (1k, 1.5k, 2k) and, optionally, quality. Requests without a resolution use 1k."
+          description: "Per-image price by resolution (1k, 1.5k, 2k) and, optionally, quality. Requests without a resolution use 1k; without a quality (or with quality=auto), generations use low and edits use medium, as xAI bills them."
           items:
             type: object
             properties:
