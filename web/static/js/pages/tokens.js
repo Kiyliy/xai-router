@@ -84,6 +84,13 @@ const TPU = 1e10;
 const toTicks = (usd) => Math.round((Number(usd) || 0) * TPU);
 const fromTicks = (ticks) => ticks / TPU;
 const usd2 = (v) => fmtUSD(v);
+const usd4 = (ticks) => {
+  const v = ticks / 1e10;
+  if (!v) return '$0';
+  if (Math.abs(v) >= 1) return fmtUSD(v);
+  const str = v.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+  return str === '0' ? '<$0.0001' : '$' + str;
+};
 
 /** Exactly one status per token: 已禁用 → 已过期 → 额度用尽 → 已启用 (the list filter uses the same rule). */
 function tokenState(tk) {
@@ -509,7 +516,7 @@ export function render(el, ctx) {
         if (amount.value.trim() === '') err = show ? t('q.errAmountReq') : '';
         else if (v == null) err = t('q.errAmountFmt');
         else if (a !== 'set_limited' && v <= 0) err = t('q.errAmountPos');
-        else if (a === 'decrease' && quotaT() - v < usedT()) { err = t('q.errMaxDec', { max: exactUsd(maxDecT()), used: exactUsd(usedT()) }); over = true; }
+        else if (a === 'decrease' && quotaT() - v < usedT()) { err = t('q.errMaxDec', { max: usd4(maxDecT()), used: usd4(usedT()) }); over = true; }
       }
       amountErr.textContent = err; amountErr.hidden = !err; amount.classList.toggle('invalid', !!err);
       const r = reason.value.trim();
@@ -517,7 +524,7 @@ export function render(el, ctx) {
       reasonErr.textContent = rErr; reasonErr.hidden = !rErr; reason.classList.toggle('invalid', !!rErr);
       return !err && !!a && !!r && (a === 'set_unlimited' || parseAmt() != null);
     }
-    const money = (ticks) => (toUsed ? exactUsd(ticks) : usd2(fromTicks(ticks)));
+    const money = (ticks) => (toUsed ? usd4(ticks) : usd2(fromTicks(ticks)));
     const pvRow = (label, a, b) => [h('span', { class: 'l' }, label), h('span', { class: 'v mono' }, a, h('span', { class: 'arr' }, ' → '), h('b', null, b))];
     function paint() {
       const a = action();
@@ -526,7 +533,7 @@ export function render(el, ctx) {
       amountLabel.replaceChildren(a === 'set_limited' ? t('q.balance') : t('q.amount'), h('span', { class: 'req' }, '*'));
       amount.placeholder = a === 'set_limited' ? '0.00' : '5.00';
       maxBtn.textContent = t('q.toUsedBtn');
-      maxBtn.title = t('q.toUsed', { v: exactUsd(maxDecT()) });
+      maxBtn.title = t('q.toUsed', { v: usd4(maxDecT()) });
       note.hidden = a !== 'set_unlimited' && a !== null;
       note.lastChild.textContent = a === 'set_unlimited' ? t('q.unlimitedWarn') : t('q.alreadyUnlimited');
       validate(false);
