@@ -65,7 +65,8 @@ try {
   };
   await send('Runtime.enable'); await send('Log.enable'); await send('Page.enable');
   await send('Page.navigate', { url: `${base}/#/overview` });
-  await sleep(2500);
+  // The console loads many modules; over a slow link that can take several seconds.
+  for (let i = 0; i < 40 && !(await evaluate(`!!document.querySelector("input[type=password]")`)); i++) await sleep(500);
   const hasLogin = await evaluate(`!!document.querySelector('input[type=password]')`);
   if (!hasLogin) throw new Error('the login form did not render (the console failed to load)');
   await evaluate(`(async () => {

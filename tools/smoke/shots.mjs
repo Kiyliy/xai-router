@@ -81,7 +81,8 @@ try {
   await send('Runtime.enable'); await send('Page.enable');
   await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
   await send('Page.navigate', { url: `${base}/#/overview` });
-  await sleep(2500);
+  // The console loads many modules; over a slow link that can take several seconds.
+  for (let i = 0; i < 40 && !(await evaluate(`!!document.querySelector("input[type=password]")`)); i++) await sleep(500);
   await evaluate(`(async () => {
     const el = document.querySelector('input[type=password]');
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, ${JSON.stringify(password)});
