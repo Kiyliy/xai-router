@@ -51,8 +51,10 @@ func (h *Handler) admit(st *state, r *http.Request) *apiError {
 		return errf(http.StatusForbidden, "model_disabled", "the model %q is disabled on this gateway", model)
 	}
 	if m == nil && inference && !ep.modelOptional && tok.Limited && s.UnpricedModels != "allow" {
-		return errf(http.StatusForbidden, "model_not_priced",
-			"the model %q has no known price, so API keys with a spending limit cannot use it (sync models or add a price)", model)
+		// Not in the price table under any id or alias: since sync adds
+		// unpriced models (disabled), an unknown name is an unknown model, as
+		// xAI itself answers (acceptance round 7, N2).
+		return errf(http.StatusNotFound, "model_not_found", "the model %s does not exist", model)
 	}
 	return nil
 }

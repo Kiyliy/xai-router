@@ -243,7 +243,7 @@ func TestAdmit(t *testing.T) {
 		{"not allowed", limited, nil, "POST", "/v1/chat/completions", reqInfo{Model: "grok-4.3"}, "model_not_allowed"},
 		{"allowed", limited, nil, "POST", "/v1/chat/completions", reqInfo{Model: "grok-4.5"}, ""},
 		{"disabled model", open, nil, "POST", "/v1/chat/completions", reqInfo{Model: "off-model"}, "model_disabled"},
-		{"unpriced with quota", quotaTok, nil, "POST", "/v1/chat/completions", reqInfo{Model: "mystery"}, "model_not_priced"},
+		{"unpriced with quota", quotaTok, nil, "POST", "/v1/chat/completions", reqInfo{Model: "mystery"}, "model_not_found"},
 		{"unpriced allowed by settings", quotaTok, &allow, "POST", "/v1/chat/completions", reqInfo{Model: "mystery"}, ""},
 		{"unpriced without quota", open, nil, "POST", "/v1/chat/completions", reqInfo{Model: "mystery"}, ""},
 		{"unpriced on non-inference path", quotaTok, nil, "POST", "/v1/files", reqInfo{Model: "mystery"}, ""},

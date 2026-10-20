@@ -83,8 +83,8 @@ func TestDisabledAndUnpricedModels(t *testing.T) {
 	e.proxy("POST", "/v1/chat/completions", map[string]any{"model": "grok-4.3-latest", "messages": []any{}}, 403, nil)
 	var q struct{ Token string }
 	e.api("POST", "/api/v1/tokens", map[string]any{"name": "q", "quota_usd": 5}, 201, &q)
-	// No price known: quota tokens are refused, unlimited tokens pass.
-	e.do("POST", "/v1/chat/completions", q.Token, map[string]any{"model": "grok-future-9", "messages": []any{}}, 403, nil)
+	// Unknown to the price table: quota tokens get 404 (unknown model), unlimited tokens pass.
+	e.do("POST", "/v1/chat/completions", q.Token, map[string]any{"model": "grok-future-9", "messages": []any{}}, 404, nil)
 	e.proxy("POST", "/v1/chat/completions", map[string]any{"model": "grok-future-9", "messages": []any{}}, 200, nil)
 	e.api("PUT", "/api/v1/settings", map[string]any{"unpriced_models": "allow"}, 200, nil)
 	e.do("POST", "/v1/chat/completions", q.Token, map[string]any{"model": "grok-future-9", "messages": []any{}}, 200, nil)

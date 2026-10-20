@@ -193,7 +193,7 @@ ws.send(json.dumps({"type": "response.create"}))
 
 网关自身返回的错误采用 OpenAI 格式 `{"error": {"message", "type": "xai_router_error", "code"}}`，例如
 `invalid_api_key`、`insufficient_quota`（429：本次请求的预扣费用超过剩余额度）、`model_not_allowed`、`model_required`、
-`model_disabled`、`model_not_priced`、`no_upstream_keys`。上游的错误原样返回。
+`model_disabled`、`model_not_found`（404：设有额度的令牌请求了网关没有价格的模型）、`no_upstream_keys`。上游的错误原样返回。
 
 `GET /v1/api-key` 不会被转发：它返回的是上游密钥的信息（团队、用户、权限）。流式 chat 请求始终向 xAI 请求用量，保证每个流都能计费；客户端只有在设置 `stream_options.include_usage: true`（或打开 **设置 → 向流式客户端返回用量**）时，才会收到最后的用量块。
 

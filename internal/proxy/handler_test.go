@@ -236,9 +236,10 @@ func TestQuotaReservationRejects(t *testing.T) {
 	if resp.StatusCode != 429 || errCode(t, b) != "insufficient_quota" || !strings.Contains(b, "does not cover") {
 		t.Fatalf("got %d %s", resp.StatusCode, b)
 	}
-	// Unknown models cannot be priced, so limited tokens may not use them.
+	// Unknown models cannot be priced, so limited tokens may not use them:
+	// they are answered as unknown, as xAI does (404).
 	resp, b = hs.doAs(small, http.MethodPost, "/v1/chat/completions", `{"model":"mystery-1"}`)
-	if resp.StatusCode != 403 || errCode(t, b) != "model_not_priced" {
+	if resp.StatusCode != 404 || errCode(t, b) != "model_not_found" {
 		t.Fatalf("got %d %s", resp.StatusCode, b)
 	}
 	if len(up.requests()) != 0 {

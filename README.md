@@ -235,7 +235,7 @@ In a browser, where headers cannot be set, pass the token as a subprotocol:
 Errors the gateway itself returns use the OpenAI shape
 `{"error": {"message", "type": "xai_router_error", "code"}}`, for example `invalid_api_key`,
 `insufficient_quota` (429: the request's reserved cost does not fit in the remaining quota),
-`model_not_allowed`, `model_required`, `model_disabled`, `model_not_priced`,
+`model_not_allowed`, `model_required`, `model_disabled`, `model_not_found` (404, for a token with a spending limit and a model the gateway has no price for),
 `no_upstream_keys`. Upstream errors are returned unchanged.
 
 `GET /v1/api-key` is not forwarded: it describes the upstream key (team, user, permissions). Streaming chat
