@@ -258,22 +258,36 @@ func TestNonStreamClientDisconnectBilled(t *testing.T) {
 	}
 }
 
-func TestNonStreamBodyReadErrorFailsOver(t *testing.T) {
+// A body that breaks after 2xx headers is not retried on another key: the
+// upstream already ran (and billed) the request, and a POST such as a video
+// generation would run twice. The client gets 502 and the attempt is billed
+// as an estimate (review A M4).
+func TestNonStreamBodyReadErrorNoFailover(t *testing.T) {
 	hs := newHarness(t, nil)
-	_, keys := keyedUps(hs, func(w http.ResponseWriter, _ *http.Request) {
+	broken := func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Length", "1000")
 		w.WriteHeader(200)
 		_, _ = io.WriteString(w, `{"partial":`)
 		w.(http.Flusher).Flush()
 		panic(http.ErrAbortHandler)
-	}, jsonReply(200, chatOK))
-	resp, b := hs.do(http.MethodPost, "/v1/chat/completions", `{"model":"grok-4.5"}`)
-	if resp.StatusCode != 200 || b != chatOK {
-		t.Fatalf("got %d %s", resp.StatusCode, b)
 	}
-	l := hs.lastLog(1)
-	if len(l.Attempts) != 2 || !strings.Contains(l.Attempts[0].Error, "reading upstream body") || l.KeyID != keys[1].ID {
-		t.Fatalf("attempts: %+v", l.Attempts)
+	ups, keys := keyedUps(hs, broken, jsonReply(200, chatOK))
+	for i, c := range []struct{ path, body string }{
+		{"/v1/chat/completions", `{"model":"grok-4.5"}`},
+		{"/v1/videos/generations", `{"model":"grok-imagine-video","prompt":"x"}`},
+	} {
+		resp, b := hs.do(http.MethodPost, c.path, c.body)
+		if resp.StatusCode != 502 || !strings.Contains(b, "interrupted") {
+			t.Fatalf("%s: got %d %s", c.path, resp.StatusCode, b)
+		}
+		l := hs.lastLog(i + 1)
+		if len(l.Attempts) != 1 || !strings.Contains(l.Attempts[0].Error, "reading upstream body") ||
+			l.KeyID != keys[0].ID || l.Status != 502 || l.CostSource != "estimated" || l.CostTicks <= 0 {
+			t.Fatalf("%s: log %+v attempts %+v", c.path, l, l.Attempts)
+		}
+	}
+	if n := len(ups[1].requests()); n != 0 {
+		t.Fatalf("second key called %d times", n)
 	}
 }
 

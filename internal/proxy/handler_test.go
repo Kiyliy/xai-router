@@ -743,3 +743,22 @@ func TestBodyCapsPerDirection(t *testing.T) {
 		t.Fatal("truncation not flagged")
 	}
 }
+
+// Two keys answering with the same key-specific error (a dead-key
+// keyword) do not stop failover before a healthy key (review A M3).
+func TestFailoverPastSharedKeyError(t *testing.T) {
+	hs := newHarness(t, nil)
+	noCredits := jsonReply(403, `{"error":"Your team has no credits left"}`)
+	ups, keys := keyedUps(hs, noCredits, noCredits, jsonReply(200, chatOK))
+	resp, b := hs.do(http.MethodPost, "/v1/chat/completions", `{"model":"grok-4.5","messages":[]}`)
+	if resp.StatusCode != 200 || b != chatOK {
+		t.Fatalf("got %d %s", resp.StatusCode, b)
+	}
+	if len(ups[2].requests()) != 1 {
+		t.Fatal("healthy key not tried")
+	}
+	l := hs.lastLog(1)
+	if len(l.Attempts) != 3 || l.Attempts[0].Action != pool.ActionVerify || l.KeyID != keys[2].ID {
+		t.Fatalf("attempts: %+v", l.Attempts)
+	}
+}

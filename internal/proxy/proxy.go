@@ -352,8 +352,10 @@ func (st *state) attempt(w http.ResponseWriter, r *http.Request, lease *pool.Lea
 		v := st.h.Pool.Report(k.ID, pool.Outcome{Status: resp.StatusCode, Body: string(errBody), Header: resp.Header, RequestID: st.log.RequestID,
 			Echo: st.echo()})
 		// The same client-class error from two keys is the request's fault,
-		// not the keys': stop and return it.
-		if v.Retry && !v.Penalty && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+		// not the keys': stop and return it. Errors the pool attributes to
+		// the key (dead-key keywords, 401, cooldowns) never stop failover:
+		// keys sharing an exhausted team all answer the same way.
+		if v.Action == pool.ActionRetry && !v.Penalty && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
 			sig := strconv.Itoa(resp.StatusCode) + " " + pool.ErrorMessage(string(errBody), st.echo())
 			if sig == st.lastErrSig {
 				v.Retry, v.Action = false, pool.ActionReturn
@@ -417,11 +419,22 @@ func (st *state) attempt(w http.ResponseWriter, r *http.Request, lease *pool.Lea
 			st.applyEstimatedUsage(&billing.StreamState{})
 			return true, nil
 		}
-		// Headers are not sent yet, so another key can still be tried.
+		// The upstream accepted the request (2xx headers) and then the body
+		// failed: it has run, and billed, the request. Retrying on another
+		// key would run it twice (a second video job, a second charge) with
+		// the first never billed, so this is treated as an interrupted
+		// stream: 502 to the client, cost estimated.
 		v := st.h.Pool.Report(k.ID, pool.Outcome{NetErr: rerr, Timeout: errors.Is(context.Cause(ctx), errUpstreamTimeout), RequestID: st.log.RequestID})
-		record(resp.StatusCode, "reading upstream body: "+v.Reason, v.Action)
-		st.log.KeyID, st.log.KeyName, st.log.Status = 0, "", 0
-		return false, &upstreamError{status: http.StatusBadGateway, err: v.Reason}
+		record(resp.StatusCode, "reading upstream body: "+v.Reason, pool.ActionReturn)
+		st.writeUpstreamError(w, &upstreamError{status: http.StatusBadGateway,
+			err: fmt.Sprintf("upstream response interrupted after %d headers: %s", resp.StatusCode, v.Reason)})
+		st.applyEstimatedUsage(&billing.StreamState{})
+		if st.log.CostTicks == 0 && st.res.Amount() > 0 {
+			// Media and other requests not billed by tokens: bill the
+			// reservation, the worst case the request was admitted for.
+			st.log.CostTicks, st.log.CostSource = st.res.Amount(), "estimated"
+		}
+		return true, nil
 	}
 	full = st.filterModelList(r, full)
 	full = st.filterOwnedList(r.Context(), r, full)
