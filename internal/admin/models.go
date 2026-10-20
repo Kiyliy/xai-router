@@ -32,6 +32,7 @@ func modelJSON(m *store.Model) map[string]any {
 		"video_tiers": vtiers, "input_image_price": usd(m.InputImageTicks),
 		"input_video_price_per_second": usd(m.InputVideoTicksPerSec),
 		"synced_at":                    msTime(m.SyncedAt), "updated_at": msTime(m.UpdatedAt),
+		"needs_price": !billing.HasPrice(m), // added by sync without a usable price
 	}
 }
 
@@ -40,7 +41,7 @@ type modelInput struct {
 	Kind                 *string   `json:"kind"`
 	Aliases              *[]string `json:"aliases"`
 	Enabled              *bool     `json:"enabled"`
-	Source               *string   `json:"source"` // ignored; edits always become manual
+	Source               *string   `json:"source"` // ignored; editing what sync manages makes the model manual
 	ContextLength        *int64    `json:"context_length"`
 	InputPrice           *float64  `json:"input_price"`
 	CachedInputPrice     *float64  `json:"cached_input_price"`
@@ -141,8 +142,21 @@ func (in *modelInput) apply(m *store.Model) string {
 			return "every price tier needs a resolution"
 		}
 	}
-	m.Source = "manual"
+	// Only a change to what sync manages (prices, tiers, kind, aliases,
+	// context) makes the model manual. Switching it on or off does not, so
+	// later syncs keep updating its prices (code review v0.5.6, C-M2).
+	if m.Source == "" || in.changesSyncedFields() {
+		m.Source = "manual"
+	}
 	return ""
+}
+
+func (in *modelInput) changesSyncedFields() bool {
+	return in.Kind != nil || in.Aliases != nil || in.ContextLength != nil || in.InputPrice != nil ||
+		in.CachedInputPrice != nil || in.ImageInputPrice != nil || in.OutputPrice != nil || in.LongInputPrice != nil ||
+		in.LongCachedInputPrice != nil || in.LongOutputPrice != nil || in.LongContextThreshold != nil ||
+		in.ImagePrice != nil || in.ImageTiers != nil || in.VideoPricePerSecond != nil || in.VideoTiers != nil ||
+		in.InputImagePrice != nil || in.InputVideoPricePerSecond != nil
 }
 
 func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
@@ -254,6 +268,15 @@ func SyncSummary(res billing.SyncResult) map[string]any {
 	m := map[string]any{"ok": res.OK, "added": res.Added, "updated": res.Updated, "total": res.Total}
 	if res.Error != "" {
 		m["error"] = res.Error
+	}
+	if len(res.Unpriced) > 0 {
+		m["unpriced"] = res.Unpriced
+	}
+	if len(res.Retired) > 0 {
+		m["retired"] = res.Retired
+	}
+	if len(res.Errors) > 0 {
+		m["errors"] = res.Errors
 	}
 	return m
 }

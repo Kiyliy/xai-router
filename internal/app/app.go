@@ -211,6 +211,7 @@ var staticTypes = map[string]string{
 	".css":   "text/css; charset=utf-8",
 	".svg":   "image/svg+xml",
 	".png":   "image/png",
+	".ico":   "image/x-icon",
 	".woff2": "font/woff2",
 	".txt":   "text/plain; charset=utf-8",
 	".yaml":  "application/yaml; charset=utf-8",
@@ -326,7 +327,7 @@ func (a *App) syncDue(ctx context.Context, every time.Duration) bool {
 	if json.Unmarshal([]byte(raw), &last) != nil {
 		return true
 	}
-	if !last.OK { // retry failed syncs sooner
+	if !last.OK || len(last.Errors) > 0 { // retry failed and partial syncs sooner
 		return time.Since(last.At) > 30*time.Minute
 	}
 	return time.Since(last.At) >= every
