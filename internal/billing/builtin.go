@@ -1,11 +1,17 @@
 package billing
 
-import "github.com/Kiyliy/xai-router/internal/store"
+import (
+	"math"
+
+	"github.com/Kiyliy/xai-router/internal/store"
+)
 
 // Built-in official prices, verified against docs.x.ai/developers/pricing and
 // GET /v1/language-models on 2026-10-16. They seed an empty database and fill
 // in what the model-list endpoints do not expose (video prices). A sync from
-// xAI overwrites token and image prices with live values.
+// xAI overwrites token and image prices with live values (an image model
+// without upstream tiers keeps the built-in tier ratios around the live
+// price).
 
 type langPrice struct {
 	id                          string
@@ -21,7 +27,11 @@ var builtinLanguage = []langPrice{
 	{"grok-4.6", nil, 500_000, 2.00, 0.50, 6.00, 4.00, 1.00, 12.00, 200_000},
 	{"grok-4.5", []string{"grok-4.5-latest", "grok-build-latest"}, 500_000, 2.00, 0.30, 6.00, 4.00, 0.60, 12.00, 200_000},
 	{"grok-4.3", []string{"grok-4.3-latest"}, 1_000_000, 1.25, 0.20, 2.50, 2.50, 0.40, 5.00, 200_000},
-	{"grok-4.20-0309-reasoning", []string{"grok-4.20", "grok-4.20-reasoning", "grok-4.20-reasoning-latest", "grok-4.20-0309"}, 1_000_000, 1.25, 0.20, 2.50, 2.50, 0.40, 5.00, 200_000},
+	{"grok-4.20-0309-reasoning", []string{"grok-4.20", "grok-4.20-reasoning", "grok-4.20-reasoning-latest", "grok-4.20-0309",
+		"grok-4.20-beta-0309-reasoning", "grok-4.20-beta", "grok-4.20-beta-0309", "grok-4.20-beta-latest",
+		"grok-4.20-beta-latest-reasoning", "grok-4.20-beta-reasoning", "grok-4.20-experimental-beta-0304-reasoning",
+		"grok-4.20-experimental-beta-0304", "grok-4.20-experimental-beta-reasoning-latest",
+		"grok-4.20-experimental-beta-latest", "grok-4.20-reasoning-gv2"}, 1_000_000, 1.25, 0.20, 2.50, 2.50, 0.40, 5.00, 200_000},
 	{"grok-4.20-0309-non-reasoning", []string{"grok-4.20-non-reasoning", "grok-4.20-non-reasoning-latest"}, 1_000_000, 1.25, 0.20, 2.50, 2.50, 0.40, 5.00, 200_000},
 	{"grok-4.20-multi-agent-0309", []string{"grok-4.20-multi-agent", "grok-4.20-multi-agent-latest"}, 1_000_000, 1.25, 0.20, 2.50, 2.50, 0.40, 5.00, 200_000},
 	{"grok-build-0.1", []string{"grok-code-fast-1", "grok-code-fast", "grok-code-fast-1-0825"}, 256_000, 1.00, 0.20, 2.00, 2.00, 0.40, 4.00, 200_000},
@@ -46,7 +56,7 @@ var builtinImage = []struct {
 	inputUSD float64
 }{
 	{"grok-imagine-image", []string{"grok-imagine-image-2026-03-02"}, 0.02, res("1k", 0.02, "2k", 0.02), 0.002},
-	{"grok-imagine-image-quality", []string{"grok-imagine-image-quality-latest", "grok-imagine-image-pro"}, 0.05,
+	{"grok-imagine-image-quality", []string{"grok-imagine-image-quality-20260403", "grok-imagine-image-quality-latest", "grok-imagine-image-pro"}, 0.05,
 		res("1k", 0.05, "1.5k", 0.06, "2k", 0.07), 0.01},
 	{"grok-imagine-image-2.0", nil, 0.04, []store.ImageTier{
 		{Quality: "low", Resolution: "1k", Ticks: 400_000_000},
@@ -111,16 +121,27 @@ func builtinModel(id string) *store.Model {
 
 // FillMediaPrices completes a synced media model with the built-in prices
 // the xAI model-list API does not expose: resolution tiers, video prices and
-// media input prices. A model with resolution/quality tiers is listed at its
-// default tier (1k, quality auto→low), so the base price is the same whether
-// it came from sync or from the built-in table.
+// media input prices.
+//
+// Image prices: upstream omits the tiers when a model prices all qualities
+// alike. The live image_price then stays the base price, and the built-in
+// tiers are scaled to it so their resolution ratios survive. Only when tiers
+// are present (from upstream) or there is no live price is the base price
+// taken from the default tier (1k, quality auto→low).
 func FillMediaPrices(m *store.Model) {
 	b := builtinModel(m.ID)
 	if b == nil || b.Kind != m.Kind {
 		return
 	}
-	if len(m.ImageTiers) == 0 {
-		m.ImageTiers = b.ImageTiers
+	if len(m.ImageTiers) == 0 && len(b.ImageTiers) > 0 {
+		m.ImageTiers = scaleTiers(b.ImageTiers, m.ImageTicks, b.ImageTicks)
+	} else if m.Kind == "image" && len(m.ImageTiers) > 0 {
+		if p := imagePrice(&store.Model{ImageTiers: m.ImageTiers}, Request{}); p > 0 {
+			m.ImageTicks = p
+		}
+	}
+	if m.ImageTicks == 0 && len(m.ImageTiers) > 0 {
+		m.ImageTicks = imagePrice(&store.Model{ImageTiers: m.ImageTiers}, Request{})
 	}
 	if len(m.VideoTiers) == 0 {
 		m.VideoTiers = b.VideoTiers
@@ -134,9 +155,18 @@ func FillMediaPrices(m *store.Model) {
 	if m.InputVideoTicksPerSec == 0 {
 		m.InputVideoTicksPerSec = b.InputVideoTicksPerSec
 	}
-	if m.Kind == "image" && len(m.ImageTiers) > 0 {
-		if p := imagePrice(&store.Model{ImageTiers: m.ImageTiers}, Request{}); p > 0 {
-			m.ImageTicks = p
-		}
+}
+
+// scaleTiers returns a copy of tiers scaled by live/base. With no live price
+// (or the built-in one) the tiers are copied unchanged.
+func scaleTiers(tiers []store.ImageTier, live, base int64) []store.ImageTier {
+	out := make([]store.ImageTier, len(tiers))
+	copy(out, tiers)
+	if live <= 0 || base <= 0 || live == base {
+		return out
 	}
+	for i := range out {
+		out[i].Ticks = int64(math.Round(float64(out[i].Ticks) * float64(live) / float64(base)))
+	}
+	return out
 }
