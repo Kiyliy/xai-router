@@ -72,16 +72,22 @@ func TestReferencedResource(t *testing.T) {
 }
 
 func TestInjectStreamUsage(t *testing.T) {
-	out := string(injectStreamUsage([]byte(`{"model":"m","stream":true}`)))
-	if !strings.Contains(out, `"stream_options":{"include_usage":true}`) {
-		t.Fatalf("not injected: %s", out)
+	b, c := injectStreamUsage([]byte(`{"model":"m","stream":true}`))
+	if out := string(b); !strings.Contains(out, `"stream_options":{"include_usage":true}`) || c != usageUnset {
+		t.Fatalf("not injected: %s %d", out, c)
 	}
-	keep := `{"model":"m","stream":true,"stream_options":{"include_usage":false}}`
-	if string(injectStreamUsage([]byte(keep))) != keep {
-		t.Fatal("client choice overwritten")
+	// A client's false is overridden upstream (review A H1) and reported so
+	// the usage chunk can be stripped for it.
+	b, c = injectStreamUsage([]byte(`{"model":"m","stream":true,"stream_options":{"include_usage":false}}`))
+	if out := string(b); !strings.Contains(out, `"include_usage":true`) || strings.Contains(out, "false") || c != usageFalse {
+		t.Fatalf("false not overridden: %s %d", out, c)
 	}
-	out = string(injectStreamUsage([]byte(`{"stream":true,"stream_options":{"foo":1}}`)))
-	if !strings.Contains(out, `"include_usage":true`) || !strings.Contains(out, `"foo":1`) {
+	keep := `{"model":"m","stream":true,"stream_options":{"include_usage":true}}`
+	if b, c := injectStreamUsage([]byte(keep)); string(b) != keep || c != usageTrue {
+		t.Fatalf("client true changed: %s %d", b, c)
+	}
+	b, _ = injectStreamUsage([]byte(`{"stream":true,"stream_options":{"foo":1}}`))
+	if out := string(b); !strings.Contains(out, `"include_usage":true`) || !strings.Contains(out, `"foo":1`) {
 		t.Fatalf("merge failed: %s", out)
 	}
 }

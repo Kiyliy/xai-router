@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 
 	"github.com/Kiyliy/xai-router/internal/billing"
@@ -11,11 +12,18 @@ import (
 // Defaults used to bound the cost of a request before it is sent, so a token
 // quota can be reserved up front (see package quota).
 const (
-	defaultOutputTokens = 4096 // when the request sets no max_tokens
-	reasoningAllowance  = 4096 // reasoning tokens are not bounded by max_tokens
-	maxVideoSeconds     = 15
-	defaultVideoSeconds = 8
-	maxImagesPerRequest = 10
+	// defaultOutputTokens is reserved when the request sets no max_tokens.
+	// The model may still write more: the reservation is a bound only for
+	// requests that set max_tokens.
+	defaultOutputTokens = 16384
+	// defaultContextTokens is assumed for a previous_response_id whose
+	// stored size is unknown (created before sizes were recorded, or not
+	// through this gateway).
+	defaultContextTokens = 32768
+	reasoningAllowance   = 4096 // reasoning tokens are not bounded by max_tokens
+	maxVideoSeconds      = 15
+	defaultVideoSeconds  = 8
+	maxImagesPerRequest  = 10
 )
 
 // estimate returns an upper-bound cost for the request in ticks. It errs on
@@ -64,17 +72,20 @@ func (st *state) estimate(method, path string) int64 {
 		}
 		return cost
 	case m.Kind == "language":
-		return languageEstimate(m, int64(len(st.reqBody)), st.info.MaxTokens, st.info.ServiceTier) +
+		return languageEstimate(m, int64(len(st.reqBody)), st.prevContextTokens, st.info.MaxTokens, st.info.ServiceTier) +
 			toolAllowance(st.reqBody)
 	}
 	return 0
 }
 
-func languageEstimate(m *store.Model, bodyBytes, maxTokens int64, tier string) int64 {
+// languageEstimate bounds a language request: the prompt from the body size
+// plus contextTokens of stored conversation (previous_response_id), and the
+// output from max_tokens.
+func languageEstimate(m *store.Model, bodyBytes, contextTokens, maxTokens int64, tier string) int64 {
 	// A token is at least one byte of UTF-8 text in practice; /2 keeps a wide
 	// margin over typical 3-4 bytes per token while not reserving absurd
 	// amounts for large prompts.
-	in := bodyBytes/2 + 16
+	in := bodyBytes/2 + 16 + contextTokens
 	out := maxTokens
 	if out <= 0 {
 		out = defaultOutputTokens
@@ -103,4 +114,20 @@ func toolAllowance(body []byte) int64 {
 		}
 	}
 	return 0
+}
+
+// contextTokens returns the size of the stored conversation a
+// previous_response_id refers to: what the binding recorded (the prompt and
+// output of that response), or defaultContextTokens when unknown.
+func contextTokens(b *store.Binding) int64 {
+	if b == nil || b.Kind != KindResponse || b.PriceMeta == "" {
+		return defaultContextTokens
+	}
+	var meta struct {
+		ContextTokens int64 `json:"context_tokens"`
+	}
+	if json.Unmarshal([]byte(b.PriceMeta), &meta) != nil || meta.ContextTokens <= 0 {
+		return defaultContextTokens
+	}
+	return meta.ContextTokens
 }

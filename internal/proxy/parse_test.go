@@ -117,12 +117,12 @@ func TestFlexInt(t *testing.T) {
 
 func TestInjectStreamUsageEdgeCases(t *testing.T) {
 	for _, in := range []string{`not json`, `{"stream_options":"bad"}`} {
-		if got := string(injectStreamUsage([]byte(in))); got != in {
+		if got, c := injectStreamUsage([]byte(in)); string(got) != in || c != usageUnset {
 			t.Errorf("%s changed to %s", in, got)
 		}
 	}
-	if got := string(injectStreamUsage([]byte(`{"stream_options":null}`))); got != `{"stream_options":{"include_usage":true}}` {
-		t.Errorf("null options: %s", got)
+	if got, c := injectStreamUsage([]byte(`{"stream_options":null}`)); string(got) != `{"stream_options":{"include_usage":true}}` || c != usageUnset {
+		t.Errorf("null options: %s %d", got, c)
 	}
 }
 
@@ -293,9 +293,9 @@ func TestEstimate(t *testing.T) {
 		{"video capped", "POST", "/v1/videos/extensions", reqInfo{Model: "grok-imagine-video-1.5", Duration: 60}, nil,
 			maxVideoSeconds * vid.VideoTicksPerSec},
 		{"language", "POST", "/v1/chat/completions", reqInfo{Model: "grok-4.5"}, body,
-			languageEstimate(g45, int64(len(body)), 0, "")},
+			languageEstimate(g45, int64(len(body)), 0, 0, "")},
 		{"language with tools", "POST", "/v1/responses", reqInfo{Model: "grok-4.5"}, tools,
-			languageEstimate(g45, int64(len(tools)), 0, "") + 20*100_000_000},
+			languageEstimate(g45, int64(len(tools)), 0, 0, "") + 20*100_000_000},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -326,7 +326,7 @@ func TestLanguageEstimate(t *testing.T) {
 		{"long context", m, 4000, 10, "", (4000/2+16)*20 + (10+reasoningAllowance)*200},
 	}
 	for _, c := range cases {
-		if got := languageEstimate(c.m, c.bytes, c.maxTokens, c.tier); got != c.want {
+		if got := languageEstimate(c.m, c.bytes, 0, c.maxTokens, c.tier); got != c.want {
 			t.Errorf("%s: %d want %d", c.name, got, c.want)
 		}
 	}

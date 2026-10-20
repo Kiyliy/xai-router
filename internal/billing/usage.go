@@ -328,7 +328,12 @@ func (s *StreamState) AddEvent(eventName string, data []byte) {
 			}
 			if u := parseUsage(ev.Response.Usage); u.Found {
 				s.Usage.Merge(u)
-				s.Final = true
+				// Only a completed (or incomplete: output limit reached)
+				// response closes the stream's billing; usage on any other
+				// event (e.g. response.failed) is completed with an estimate.
+				if typ == "response.completed" || typ == "response.incomplete" || typ == "response.done" {
+					s.Final = true
+				}
 			}
 			if ev.Response.ServiceTier != "" {
 				s.Usage.ServiceTier = ev.Response.ServiceTier

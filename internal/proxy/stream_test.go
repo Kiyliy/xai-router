@@ -39,14 +39,20 @@ func TestStreamChatCompletions(t *testing.T) {
 		up := newMockUp(t, sseReply(parts...))
 		hs.addKey("k1", up.srv.URL, nil)
 		resp, b := hs.do(http.MethodPost, "/v1/chat/completions", `{"model":"grok-4.5","stream":true}`)
-		if resp.StatusCode != 200 || b != chatStream {
+		// Usage is always requested upstream; with injection off, a client
+		// that did not ask for it does not see the usage chunk.
+		want := chatStream
+		if !inject {
+			want = strings.Replace(chatStream, parts[3], "", 1)
+		}
+		if resp.StatusCode != 200 || b != want {
 			t.Fatalf("got %d %q", resp.StatusCode, b)
 		}
 		if resp.Header.Get("X-Accel-Buffering") != "no" || resp.Header.Get("Cache-Control") != "no-cache" {
 			t.Fatalf("stream headers: %v", resp.Header)
 		}
 		sent := up.requests()[0].Body
-		if got := strings.Contains(sent, `"include_usage":true`); got != inject {
+		if !strings.Contains(sent, `"include_usage":true`) {
 			t.Fatalf("inject=%v but upstream body %s", inject, sent)
 		}
 		l := hs.lastLog(1)

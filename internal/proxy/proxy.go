@@ -97,6 +97,18 @@ type state struct {
 	priceReq   *billing.Request // pricing parameters of the job a poll finishes
 	preCharged int64            // cost already booked against the quota (WebSocket sessions)
 	lastErrSig string           // last client-class upstream error (status + message)
+	// releaseJob is the async job whose hold this request frees when it is
+	// settled (the job finished, failed or expired).
+	releaseJob string
+	// pollBinding is the binding of the async job a GET poll refers to, when
+	// this token created the job (its quota hold covers the poll).
+	pollBinding *store.Binding
+	// prevContextTokens is the size of the stored conversation a
+	// previous_response_id pulls in (an estimate when it is unknown).
+	prevContextTokens int64
+	// stripUsage drops the usage-only chat chunk before it reaches a client
+	// that did not ask for it (usage is always requested upstream).
+	stripUsage bool
 }
 
 // echo lists client-supplied values that upstream errors may repeat back;
@@ -133,9 +145,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Request-Id", st.log.RequestID)
 	defer st.finish(r)
 
-	// 1. Authenticate the client token.
+	// 1. Authenticate the client token. A token whose quota is used up may
+	// still poll the async jobs it created: their cost is covered by the
+	// job's hold, and only the poll can deliver, bill and release them.
 	tok, err := h.authenticate(r)
-	if err != nil {
+	if tok != nil && !isWebSocket(r) {
+		st.pollBinding = h.ownedPoll(r, tok)
+	}
+	if err != nil && (tok == nil || st.pollBinding == nil) {
 		st.fail(w, err.(*apiError))
 		return
 	}
@@ -178,36 +195,52 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. Reserve the request's worst-case cost against the token's quota, so
-	// concurrent requests cannot overspend it.
-	est := st.estimate(r.Method, r.URL.Path)
-	if st.res = h.Quota.Reserve(tok, est); st.res == nil {
-		left := h.Quota.Remaining(tok)
-		st.fail(w, errf(http.StatusTooManyRequests, "insufficient_quota",
-			"this API key's remaining quota ($%.6f) does not cover this request (up to $%.6f reserved); quota is $%.2f",
-			billing.TicksToUSD(left), billing.TicksToUSD(est), billing.TicksToUSD(tok.QuotaTicks)))
-		return
+	// 4. Resources created by a key must be read with that key.
+	bound := st.pollBinding
+	if bound == nil {
+		if kind, id := referencedResource(r.Method, r.URL.Path); kind != "" {
+			bound, _ = h.DB.GetBinding(r.Context(), id)
+		}
 	}
-
-	// 5. Ask the upstream to report usage on streaming chat requests.
-	outBody := st.reqBody
-	if st.info.Stream && s.InjectStreamUsage && r.URL.Path == "/v1/chat/completions" {
-		outBody = injectStreamUsage(outBody)
-	}
-
-	// 6. Pick keys: resources created by a key must be read with that key.
-	var bound *store.Binding
-	if kind, id := referencedResource(r.Method, r.URL.Path); kind != "" {
-		bound, _ = h.DB.GetBinding(r.Context(), id)
-	}
-	if bound == nil && st.info.PreviousResponseID != "" {
-		bound, _ = h.DB.GetBinding(r.Context(), st.info.PreviousResponseID)
+	if st.info.PreviousResponseID != "" {
+		prev, _ := h.DB.GetBinding(r.Context(), st.info.PreviousResponseID)
+		st.prevContextTokens = contextTokens(prev)
+		if bound == nil {
+			bound = prev
+		}
 	}
 	if bound != nil && !ownsResource(tok.ID, bound.TokenID) {
 		// Another token's response, job or file: indistinguishable from a
 		// missing one.
 		st.fail(w, errf(http.StatusNotFound, "not_found", "resource not found"))
 		return
+	}
+
+	// 5. Reserve the request's worst-case cost against the token's quota, so
+	// concurrent requests cannot overspend it. The poll of a job this token
+	// created is covered by the job's hold and is never refused.
+	if st.pollBinding != nil {
+		st.res = h.Quota.Admit(tok)
+	} else {
+		est := st.estimate(r.Method, r.URL.Path)
+		if st.res = h.Quota.Reserve(tok, est); st.res == nil {
+			left := h.Quota.Remaining(tok)
+			st.fail(w, errf(http.StatusTooManyRequests, "insufficient_quota",
+				"this API key's remaining quota ($%.6f) does not cover this request (up to $%.6f reserved); quota is $%.2f",
+				billing.TicksToUSD(left), billing.TicksToUSD(est), billing.TicksToUSD(tok.QuotaTicks)))
+			return
+		}
+	}
+
+	// 6. Streaming chat requests always ask the upstream for usage, whatever
+	// the client chose: a stream without usage could only be estimated. The
+	// usage chunk is passed to clients that asked for it (or, with
+	// inject_stream_usage on, did not say) and dropped for the others.
+	outBody := st.reqBody
+	if st.info.Stream && r.URL.Path == "/v1/chat/completions" {
+		var choice int
+		outBody, choice = injectStreamUsage(outBody)
+		st.stripUsage = choice == usageFalse || (choice == usageUnset && !s.InjectStreamUsage)
 	}
 	var boundKey int64
 	if bound != nil {
@@ -510,7 +543,22 @@ func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.Cance
 	if s.AnthropicStreamFix && st.log.Path == "/v1/messages" {
 		fixer = &messagesFixer{}
 	}
+	var strip *usageStripper
+	if st.stripUsage {
+		strip = &usageStripper{}
+	}
 	gone := false
+	toClient := func(b []byte) {
+		if len(b) == 0 || gone {
+			return
+		}
+		st.markTTFB()
+		if _, werr := w.Write(b); werr != nil {
+			gone = true
+		} else {
+			_ = rc.Flush()
+		}
+	}
 	forward := func(chunk []byte) {
 		if len(chunk) == 0 {
 			return
@@ -518,15 +566,12 @@ func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.Cance
 		if !gone && clientCtx.Err() != nil {
 			gone = true
 		}
-		if !gone {
-			st.markTTFB()
-			if _, werr := w.Write(chunk); werr != nil {
-				gone = true
-			} else {
-				_ = rc.Flush()
-			}
+		if strip != nil {
+			toClient(strip.Feed(chunk))
+		} else {
+			toClient(chunk)
 		}
-		parser.Write(chunk)
+		parser.Write(chunk) // the whole upstream stream, usage included
 		if s.LogBodies {
 			capt.Write(chunk)
 		}
@@ -547,6 +592,9 @@ func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.Cance
 		if err != nil {
 			if fixer != nil {
 				forward(fixer.Flush())
+			}
+			if strip != nil {
+				toClient(strip.Flush())
 			}
 			if !errors.Is(err, io.EOF) {
 				switch {
@@ -583,9 +631,13 @@ func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.Cance
 		st.log.RespBody = string(capt.Bytes())
 		st.log.Truncated = st.log.Truncated || capt.truncated || ss.Truncated
 	}
-	if errMsg != "" && !ss.Final {
-		// Cut short before the closing usage event: never bill such a
-		// stream as free (or prompt-only); estimate what was received.
+	if !ss.Final && (errMsg != "" || estimatedPaths[st.log.Path]) {
+		// Cut short, or ended without the closing usage event (no chat
+		// usage chunk, no response.completed, no message_delta): never bill
+		// such a stream as free (or prompt-only); estimate what was received.
+		if errMsg == "" {
+			st.h.Log.Info("stream ended without usage; cost estimated", "path", st.log.Path, "request_id", st.log.RequestID)
+		}
 		st.applyEstimatedUsage(ss)
 	} else {
 		st.applyUsage(ss.Usage)
@@ -597,6 +649,10 @@ func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.Cance
 }
 
 var errStreamIdle = errors.New("stream idle timeout")
+
+// estimatedPaths are the token-billed streaming endpoints whose streams are
+// estimated when they end cleanly without usage.
+var estimatedPaths = map[string]bool{"/v1/chat/completions": true, "/v1/responses": true, "/v1/messages": true}
 
 // handleBody extracts usage, ids and bindings from a non-streaming body.
 func (st *state) handleBody(r *http.Request, body []byte) {
@@ -627,6 +683,11 @@ func (st *state) handleBody(r *http.Request, body []byte) {
 			(u.HasCost || u.VideoSeconds > 0 || u.Images > 0 || u.PromptTokens > 0)
 		if !done {
 			u = billing.Usage{}
+			if st.log.Status == http.StatusOK && jobFailed(env.Status) {
+				// A failed, expired or cancelled job costs nothing: free its
+				// hold now instead of keeping it until the TTL.
+				st.releaseJob = id
+			}
 			break
 		}
 		if b, err := st.h.DB.GetBinding(r.Context(), id); err == nil {
@@ -638,12 +699,20 @@ func (st *state) handleBody(r *http.Request, body []byte) {
 				st.priceReq = &pr // priced by the submission's resolution and inputs
 			}
 			first, err := st.h.DB.MarkBindingBilled(r.Context(), id)
-			if err == nil && !first {
+			switch {
+			case err != nil:
+				// Whether the job is now marked billed is unknown: do not
+				// charge it here (a later poll retries) and keep its hold.
+				st.h.Log.Error("mark async job billed", "kind", kind, "id", id, "err", err)
+				u = billing.Usage{}
+				st.log.Error = "finished " + kind + " job not billed: " + err.Error()
+			case !first:
 				st.h.Log.Debug("async job already billed", "kind", kind, "id", id)
 				u = billing.Usage{}
-			}
-			if first {
-				st.h.Quota.ReleaseHold(id)
+			default:
+				// The hold is freed together with settling the job's cost
+				// (see finish), so the quota is never briefly oversubscribed.
+				st.releaseJob = id
 			}
 		} else {
 			// Without the binding (expired, or the job was not submitted
@@ -745,8 +814,14 @@ func (st *state) bind(kind, id string) {
 	ttl := time.Duration(st.s.TaskBindingTTLHours) * time.Hour
 	b := &store.Binding{ResourceID: id, Kind: kind, KeyID: st.log.KeyID, TokenID: st.log.TokenID,
 		Model: st.log.Model, ExpiresAt: time.Now().Add(ttl).UnixMilli()}
-	if kind == KindVideo || kind == KindImage {
+	switch kind {
+	case KindVideo, KindImage:
 		meta, _ := json.Marshal(st.pricingRequest())
+		b.PriceMeta = string(meta)
+	case KindResponse:
+		// The stored conversation a later previous_response_id pulls in:
+		// this response's prompt (which includes its own context) and output.
+		meta, _ := json.Marshal(map[string]int64{"context_tokens": st.log.PromptTokens + st.log.CompletionTokens + st.log.ReasoningTokens})
 		b.PriceMeta = string(meta)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -808,7 +883,7 @@ func (st *state) finish(r *http.Request) {
 		ttl := time.Duration(s.TaskBindingTTLHours) * time.Hour
 		st.res.Hold(st.jobID, l.CostTicks, ttl)
 	} else {
-		st.res.Settle(l.CostTicks - st.preCharged)
+		st.res.SettleReleasing(st.releaseJob, l.CostTicks-st.preCharged)
 	}
 	if l.Status == 0 {
 		l.Status = 499
@@ -881,7 +956,8 @@ func (h *Handler) authenticate(r *http.Request) (*store.Token, error) {
 		return nil, errf(http.StatusForbidden, "token_expired", "this API key has expired")
 	}
 	if tok.Limited && tok.UsedTicks >= tok.QuotaTicks {
-		return nil, errf(http.StatusTooManyRequests, "insufficient_quota",
+		// The token is returned too: polls of its own jobs stay allowed.
+		return tok, errf(http.StatusTooManyRequests, "insufficient_quota",
 			"this API key has used its quota of $%.4f", billing.TicksToUSD(tok.QuotaTicks))
 	}
 	return tok, nil
@@ -1131,20 +1207,33 @@ func flexInt(raw json.RawMessage) int64 {
 	return 0
 }
 
-// injectStreamUsage sets stream_options.include_usage=true unless the client
-// already chose a value.
-func injectStreamUsage(body []byte) []byte {
+// What a client asked for in stream_options.include_usage.
+const (
+	usageUnset = iota
+	usageFalse
+	usageTrue
+)
+
+// injectStreamUsage sets stream_options.include_usage=true, overriding a
+// client's false, and reports what the client had chosen. A body that is not
+// a JSON object, or whose stream_options is not an object, is returned
+// unchanged.
+func injectStreamUsage(body []byte) ([]byte, int) {
 	var m map[string]json.RawMessage
 	if json.Unmarshal(body, &m) != nil {
-		return body
+		return body, usageUnset
 	}
 	opts := map[string]json.RawMessage{}
+	choice := usageUnset
 	if raw, ok := m["stream_options"]; ok && string(raw) != "null" {
 		if json.Unmarshal(raw, &opts) != nil {
-			return body
+			return body, usageUnset
 		}
-		if _, set := opts["include_usage"]; set {
-			return body
+		if v, set := opts["include_usage"]; set {
+			if string(bytes.TrimSpace(v)) == "true" {
+				return body, usageTrue
+			}
+			choice = usageFalse
 		}
 	}
 	opts["include_usage"] = json.RawMessage("true")
@@ -1152,9 +1241,33 @@ func injectStreamUsage(body []byte) []byte {
 	m["stream_options"] = ob
 	out, err := json.Marshal(m)
 	if err != nil {
-		return body
+		return body, usageUnset
 	}
-	return out
+	return out, choice
+}
+
+// jobFailed reports whether an async job's status says it ended without a
+// result, and so without cost.
+func jobFailed(status string) bool {
+	switch strings.ToLower(status) {
+	case "failed", "failure", "error", "expired", "cancelled", "canceled", "rejected":
+		return true
+	}
+	return false
+}
+
+// ownedPoll returns the binding of the async job a GET poll refers to when
+// tok created that job, else nil.
+func (h *Handler) ownedPoll(r *http.Request, tok *store.Token) *store.Binding {
+	_, id, ok := isAsyncPoll(r.Method, r.URL.Path)
+	if !ok {
+		return nil
+	}
+	b, err := h.DB.GetBinding(r.Context(), id)
+	if err != nil || b == nil || b.TokenID != tok.ID {
+		return nil
+	}
+	return b
 }
 
 func copyResponseHeaders(dst, src http.Header) {

@@ -216,3 +216,67 @@ func (f *messagesFixer) fixBlock(block []byte) []byte {
 	out = append(out, `"index":`+strconv.Itoa(idx)+`,`...)
 	return append(out, block[jsonStart+1:]...)
 }
+
+// usageStripper removes the usage-only chunk of a chat completions stream
+// ("choices":[] with "usage") for clients that sent
+// stream_options.include_usage=false: the gateway always asks the upstream
+// for usage so the stream can be billed, but such a client must not see a
+// chunk it did not ask for (some clients index choices[0]). Usage carried
+// inside a content chunk is left in place; clients ignore the extra field.
+// Like messagesFixer it works on whole events and buffers at most one.
+type usageStripper struct {
+	buf []byte
+}
+
+func (u *usageStripper) Feed(b []byte) []byte {
+	u.buf = append(u.buf, b...)
+	var out []byte
+	if _, sep := eventEnd(u.buf); sep == 0 && len(u.buf) > maxSSEEvent {
+		out, u.buf = u.buf, nil
+		return out
+	}
+	for {
+		end, sep := eventEnd(u.buf)
+		if end < 0 {
+			break
+		}
+		if block := u.buf[:end+sep]; !usageOnlyChunk(block) {
+			out = append(out, block...)
+		}
+		u.buf = u.buf[end+sep:]
+	}
+	return out
+}
+
+// Flush returns any trailing bytes not terminated by a blank line.
+func (u *usageStripper) Flush() []byte {
+	out := u.buf
+	u.buf = nil
+	if usageOnlyChunk(out) {
+		return nil
+	}
+	return out
+}
+
+// usageOnlyChunk reports whether an SSE event is a chat chunk with an empty
+// choices array and a usage object.
+func usageOnlyChunk(block []byte) bool {
+	var data []byte
+	for _, line := range bytes.Split(block, []byte("\n")) {
+		line = bytes.TrimRight(line, "\r")
+		if v, ok := bytes.CutPrefix(line, []byte("data:")); ok {
+			data = append(data, bytes.TrimPrefix(v, []byte(" "))...)
+		}
+	}
+	if len(data) == 0 || data[0] != '{' {
+		return false
+	}
+	var ev struct {
+		Choices *[]json.RawMessage `json:"choices"`
+		Usage   json.RawMessage    `json:"usage"`
+	}
+	if json.Unmarshal(data, &ev) != nil {
+		return false
+	}
+	return ev.Choices != nil && len(*ev.Choices) == 0 && len(ev.Usage) > 0 && string(ev.Usage) != "null"
+}
