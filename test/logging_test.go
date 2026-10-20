@@ -133,19 +133,20 @@ func TestEveryOutcomeIsLogged(t *testing.T) {
 			name, token, body string
 			status            int
 			code              string
+			logErr            string // the console reads the reason from this text
 		}{
-			{"bad token", "sk-xr-nope", chat, 401, "invalid_api_key"},
-			{"no token", "", chat, 401, "missing_api_key"},
-			{"model not allowed", q.Token, `{"model":"grok-4.3","messages":[]}`, 403, "model_not_allowed"},
-			{"quota", q.Token, chat, 429, "insufficient_quota"},
-			{"too large", e.client, `{"model":"grok-build-0.1","x":"` + strings.Repeat("a", 2<<20) + `"}`, 413, "request_too_large"},
+			{"bad token", "sk-xr-nope", chat, 401, "invalid_api_key", "invalid API key"},
+			{"no token", "", chat, 401, "missing_api_key", "missing API key"},
+			{"model not allowed", q.Token, `{"model":"grok-4.3","messages":[]}`, 403, "model_not_allowed", ""},
+			{"quota", q.Token, chat, 429, "insufficient_quota", ""},
+			{"too large", e.client, `{"model":"grok-build-0.1","x":"` + strings.Repeat("a", 2<<20) + `"}`, 413, "request_too_large", ""},
 		}
 		e.api("PUT", "/api/v1/settings", map[string]any{"max_body_mb": 1}, 200, nil)
 		for _, c := range cases {
 			resp, body := e.send(c.token, c.body, nil)
 			l := e.logFor(resp.Header.Get("X-Request-Id"))
 			if resp.StatusCode != c.status || l.Status != c.status || !strings.Contains(string(body), c.code) ||
-				l.Error == "" || l.Attempts != 0 || l.CostUSD != 0 {
+				l.Error == "" || l.Attempts != 0 || l.CostUSD != 0 || !strings.Contains(l.Error, c.logErr) {
 				t.Errorf("%s: status %d log %+v body %.120s", c.name, resp.StatusCode, l, body)
 			}
 		}

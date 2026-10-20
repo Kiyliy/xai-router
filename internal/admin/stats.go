@@ -343,7 +343,7 @@ func (s *Server) systemInfo(w http.ResponseWriter, r *http.Request) {
 	if du, ok := s.DiskUsage(); ok {
 		pct := du.UsedPercent()
 		out["disk_total_bytes"], out["disk_free_bytes"] = du.Total, du.Free
-		out["disk_used_percent"] = math.Round(pct*10) / 10
+		out["disk_used_percent"] = math.Floor(pct*10) / 10 // rounded down everywhere, as in the banner
 		out["disk_warning"] = pct >= float64(warnAt)
 	}
 	writeJSON(w, http.StatusOK, out)

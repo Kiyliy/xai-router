@@ -375,7 +375,7 @@ function costSection(d) {
       h('tbody', null, body),
       h('tfoot', null, foot)),
     notes.length ? h('div', { class: 'row-sm cost-notes' }, notes) : null,
-    snap ? null : h('div', { class: 'muted small cost-note' }, t('lg.cost.noSnapshot')));
+    snap || !(d.cost_usd || d.total_tokens) ? null : h('div', { class: 'muted small cost-note' }, t('lg.cost.noSnapshot')));
 }
 
 // ---------- request detail (v0.5, Figma 14/15) ----------
@@ -480,9 +480,9 @@ function kpiBand(d) {
   const tokBar = d.total_tokens ? h('div', { class: 'tok-bar ld5-tokbar' }, seg(c.input + c.image, 'in'), seg(c.cacheWrite, 'cw'), seg(c.cacheRead, 'cr'), seg(c.output, 'out')) : null;
   const tokVal = d.images ? big(t('lg5.images', { n: d.images })) : d.video_seconds ? big(t('lg5.video', { n: d.video_seconds })) : big(d.total_tokens ? fmtInt(d.total_tokens) : '—');
   const at = attemptsOf(d);
-  const n = Math.max(d.attempts || 0, at.length, 1);
+  const n = Math.max(d.attempts || 0, at.length);
   const failed = at.filter((a) => !isOk(a.status)).length;
-  const attSub = isOk(d.status) ? (failed ? t('ld5.prevFailed', { n: failed }) : t('ld5.firstOk')) : t('ld5.allFailed');
+  const attSub = !n ? t('ld5.notForwarded') : isOk(d.status) ? (failed ? t('ld5.prevFailed', { n: failed }) : t('ld5.firstOk')) : t('ld5.allFailed');
   return h('div', { class: 'hairline-grid ld5-band' },
     cell(t('common.latency'), big(fmtMs(lat)), d.ttfb_ms ? h('span', { title: t('logs.ttfbClientHint') }, t('lg.ttfb', { v: fmtMs(d.ttfb_ms) })) : null, lat ? latBar : null),
     cell(t('common.cost'), big(d.cost_usd ? fmtUSD(d.cost_usd) : (isOk(d.status) ? '$0' : '—')), d.cost_source ? t('ld5.costSrc', { s: t(`costsrc.${d.cost_source}`) || d.cost_source }) : null),

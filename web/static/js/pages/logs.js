@@ -402,7 +402,7 @@ export function render(el, ctx) {
     return h('div', null,
       h('div', { class: 'req-line mono', title: `${r.method || 'GET'} ${r.path}` }, h('span', { class: 'lg-method' }, r.method || 'GET'), h('span', { class: 'path' }, r.path)),
       h('div', { class: 'cell-sub model-line' }, r.model ? h('span', { class: 'mono model-name', title: r.model }, r.model) : null,
-        r.stream ? h('span', { class: 'stream-tag', title: t('logs.streamYes') }, icon('stream', 12), t('lg.stream')) : null,
+        r.stream ? h('span', { class: 'stream-tag stream-icon', title: t('logs.streamYes'), 'aria-label': t('logs.streamYes') }, icon('stream', 12)) : null,
         r.websocket ? h('span', { class: 'stream-tag', title: 'WebSocket' }, icon('stream', 12), 'WebSocket') : null));
   }
   const tries = (r) => ((r.attempts || 0) > 1 ? badge(`×${r.attempts}`, 'neutral', { class: 'badge-tries', title: t('logs.retriedN', { n: r.attempts }) }) : null);

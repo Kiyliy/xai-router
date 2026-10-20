@@ -386,3 +386,7 @@
 }
 /* v0.5.2 design review N1: the result after the retry count wraps instead of being cut off. */
 .lg5 .table-ulog[data-mode="request"] .col-status .lg-sum-text { white-space: normal; }
+/* v0.5.4 W1: the streaming mark is an icon (as in the design) and the model line wraps rather than truncating. */
+.lg5 .table-ulog .model-line { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; overflow: visible; white-space: normal; }
+.lg5 .table-ulog .model-line .model-name { overflow: visible; text-overflow: clip; white-space: nowrap; max-width: none; }
+.lg5 .stream-icon { padding: 0 3px; }

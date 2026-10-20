@@ -193,7 +193,8 @@ export function requestReason(r) {
   if (/not allowed to use model/i.test(raw)) return k('modelNotAllowed');
   if (/is disabled on this gateway/i.test(raw)) return k('modelDisabled');
   if (/has no known price/i.test(raw)) return k('modelNotPriced');
-  if (s === 401 && /missing API key|invalid API key/i.test(raw)) return k('tokenInvalid');
+  if (s === 401 && /missing API key/i.test(raw)) return k('tokenMissing');
+  if (s === 401 && /invalid API key/i.test(raw)) return k('tokenInvalid');
   if (/this API key is disabled/i.test(raw)) return k('tokenDisabled');
   if (/this API key has expired/i.test(raw)) return k('tokenExpired');
   if (/model .* does not exist/i.test(raw)) return k('modelNotFound');

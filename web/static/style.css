@@ -26,7 +26,7 @@
   --hover: rgba(255, 255, 255, .03); --active: rgba(255, 255, 255, .06);
   --th-bg: #0b0d10; --code-bg: #0b0d10; --overlay: rgba(0, 0, 0, .65);
   --border: #1c2026; --border-strong: #2a2f37; --border-subtle: #14181d;
-  --text: #e8eaed; --text-2: #9aa1ab; --text-3: #5f6670;
+  --text: #dcdfe4; --text-2: #9aa1ab; --text-3: #5f6670;
   --inverse: #e8eaed; --text-inverse: #08090b; --on-solid: #08090b;
 
   --accent: #3ddbd9; --accent-hover: #6be7e5; --accent-text: #5ce3e1; --accent-fg: #031312;
