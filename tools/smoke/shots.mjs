@@ -27,6 +27,8 @@ const shots = [
   ['07-tokens', () => '#/tokens'],
   ['08-token-drawer', (ids) => `#/tokens?open=${ids.token}`],
   ['10-adjust-quota', (ids) => `#/tokens?open=${ids.token}&adjust=1`],
+  ['10-adjust-quota-increase', (ids) => `#/tokens?open=${ids.token}&adjust=1`, "(async () => {\n    const m = [...document.querySelectorAll('.modal, [role=dialog], dialog')].pop(); if (!m) return;\n    const b = [...m.querySelectorAll('button, [role=tab]')].find((x) => x.textContent.trim() === '增加'); if (b) b.click();\n    await new Promise((r) => setTimeout(r, 200));\n    const set = (el, v) => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value').set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })); };\n    const amt = m.querySelector('input'); if (amt) set(amt, '5');\n    const why = m.querySelector('textarea'); if (why) set(why, '月度充值');\n  })()"],
+  ['11-adjust-quota-decrease', (ids) => `#/tokens?open=${ids.token}&adjust=1`, "(async () => {\n    const m = [...document.querySelectorAll('.modal, [role=dialog], dialog')].pop(); if (!m) return;\n    const b = [...m.querySelectorAll('button, [role=tab]')].find((x) => x.textContent.trim() === '减少'); if (b) b.click();\n    await new Promise((r) => setTimeout(r, 200));\n    const set = (el, v) => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value').set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })); };\n    const amt = m.querySelector('input'); if (amt) set(amt, '2');\n    const why = m.querySelector('textarea'); if (why) set(why, '月度充值');\n  })()"],
   ['12-logs-mixed', () => '#/logs?type=request,audit,system'],
   ['13-logs-requests', () => '#/logs?type=request'],
   ['12-logs-mixed-bottom', () => '#/logs?type=request,audit,system', 'window.scrollTo(0, document.body.scrollHeight)'],
@@ -100,9 +102,9 @@ try {
       where = `${theme} ${name}`;
       await send('Page.navigate', { url: `${base}/?t=${Date.now()}${hash(ids)}` });
       await sleep(2200);
-      if (after) { await evaluate(after); await sleep(500); }
       // Wait out loading spinners and skeletons (dialogs open after their data loads).
       for (let i = 0; i < 20 && await evaluate(`!!document.querySelector('.spinner, .skeleton, .loading')`); i++) await sleep(300);
+      if (after) { await evaluate(after); await sleep(600); }
       const shot = await send('Page.captureScreenshot', { format: 'png' });
       writeFileSync(join(out, `${name}-${theme}.png`), Buffer.from(shot.data, 'base64'));
       console.log(`${name}-${theme}.png`);
