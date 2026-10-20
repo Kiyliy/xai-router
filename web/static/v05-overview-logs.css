@@ -213,7 +213,7 @@
 .lg5 .table-ulog .col-cost, .lg5 .table-ulog .col-lat { font-family: var(--font-mono); }
 /* requests only: 10 columns, four token columns under one group header */
 .lg5 .table-ulog[data-mode="request"] .col-status { width: 182px; }
-.lg5 .table-ulog[data-mode="request"] .col-who { width: 196px; }
+.lg5 .table-ulog[data-mode="request"] .col-who { width: auto; }
 .lg5 .table-ulog[data-mode="request"] .col-tk { width: 66px; padding-left: 4px; padding-right: 4px; }
 /* the token name stays readable; its prefix gives way first */
 .lg5 .table-ulog .cred { display: inline-flex; max-width: 100%; min-width: 0; gap: 6px; }
@@ -231,7 +231,10 @@
 /* requests only: token columns pinned narrow, the request column takes the rest (colgroup in logs.js) */
 .lg5 .table-ulog col.cg-time { width: 140px; }
 .lg5 .table-ulog col.cg-status { width: 182px; } /* v0.6.1 W1: the request column keeps >= 233px at 1440; long reasons wrap */
-.lg5 .table-ulog col.cg-who { width: 184px; }
+/* v0.6.1 W1: the request column is pinned at 233px; the token / key column (its prefix truncates) takes the rest,
+   so a classic 15px scrollbar on Windows comes out of it, not out of the paths (pm-spec 6.9) */
+.lg5 .table-ulog col.cg-req { width: 233px; }
+.lg5 .table-ulog col.cg-who { width: auto; }
 .lg5 .table-ulog col.cg-tk { width: 66px; }
 .lg5 .table-ulog col.cg-cost { width: 84px; }
 .lg5 .table-ulog col.cg-lat { width: 112px; }
