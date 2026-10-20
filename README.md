@@ -1,6 +1,6 @@
 <div align="center">
 
-# xai-router
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/logo/lockup-on-dark.svg"><img src="docs/logo/lockup-on-light.svg" alt="xai-router" height="36"></picture>
 
 **A fast, single-binary gateway for the xAI (Grok) API**
 

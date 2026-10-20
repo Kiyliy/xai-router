@@ -1427,3 +1427,10 @@ a.btn:hover { text-decoration: none; }
 .btn { font-weight: 500; }
 /* Selects: the Lucide chevron-down (16px, 1.5 stroke) like the filter chips. */
 .select { background-image: var(--chevron); background-position: right 8px center; background-size: 16px 16px; padding-right: 30px; }
+
+/* ---- v0.5.7 logo: the "key pool" mark with a live Geist wordmark (design handoff §9) ---- */
+.logo-mark { flex: none; color: var(--text); }
+.brand { gap: 8px; }
+.brand-name { font-family: var(--font-sans); font-weight: 600; font-size: 15px; letter-spacing: -.02em; line-height: 20px; color: var(--text); }
+.login-brand, .login .login-brand { gap: 9px; }
+.login-title, .login .login-title { font-family: var(--font-sans); font-weight: 600; font-size: 15px; letter-spacing: -.02em; }

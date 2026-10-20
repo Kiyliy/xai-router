@@ -83,6 +83,16 @@ try {
   await send('Page.navigate', { url: `${base}/#/overview` });
   // The console loads many modules; over a slow link that can take several seconds.
   for (let i = 0; i < 40 && !(await evaluate(`!!document.querySelector("input[type=password]")`)); i++) await sleep(500);
+  // The sign-in page, in both themes, before signing in.
+  for (const theme of ['dark', 'light']) {
+    await evaluate(`localStorage.setItem('xr.theme', '${theme}')`);
+    await send('Page.navigate', { url: `${base}/?t=${Date.now()}#/overview` });
+    for (let i = 0; i < 40 && !(await evaluate(`!!document.querySelector("input[type=password]")`)); i++) await sleep(500);
+    await sleep(600);
+    const shot = await send('Page.captureScreenshot', { format: 'png' });
+    writeFileSync(join(out, `01-login-${theme}.png`), Buffer.from(shot.data, 'base64'));
+    console.log(`01-login-${theme}.png`);
+  }
   await evaluate(`(async () => {
     const el = document.querySelector('input[type=password]');
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, ${JSON.stringify(password)});
