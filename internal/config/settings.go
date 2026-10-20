@@ -88,7 +88,7 @@ func DefaultSettings() Settings {
 		ModelSyncIntervalHours:   24,
 		TaskBindingTTLHours:      720,
 		TrustedProxies:           []string{"127.0.0.1/32", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"},
-		InjectStreamUsage:        true,
+		InjectStreamUsage:        false, // usage is always requested upstream for billing; clients get it only if they ask
 		AnthropicStreamFix:       true,
 		WSLogMessages:            50,
 		UnpricedModels:           "block_quota_tokens",

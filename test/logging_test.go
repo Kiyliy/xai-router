@@ -102,8 +102,11 @@ func TestEveryOutcomeIsLogged(t *testing.T) {
 	t.Run("stream success", func(t *testing.T) {
 		resp, body := e.send(e.client, `{"model":"grok-build-0.1","stream":true,"messages":[]}`, nil)
 		l := e.logFor(resp.Header.Get("X-Request-Id"))
+		// The client did not ask for usage: it gets the stream without the
+		// usage-only chunk, while the log keeps the raw upstream stream.
 		if l.Status != 200 || !l.Stream || usageOf(l) != mockUsage || l.ResponseText != "Hello world" ||
-			l.ResponseBody != string(body) {
+			!strings.Contains(l.ResponseBody, `"usage"`) || strings.Contains(string(body), `"choices":[]`) ||
+			!strings.Contains(string(body), "Hel") {
 			t.Fatalf("log %+v", l)
 		}
 	})

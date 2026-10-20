@@ -238,6 +238,10 @@ Errors the gateway itself returns use the OpenAI shape
 `model_not_allowed`, `model_required`, `model_disabled`, `model_not_priced`,
 `no_upstream_keys`. Upstream errors are returned unchanged.
 
+`GET /v1/api-key` is not forwarded: it describes the upstream key (team, user, permissions). Streaming chat
+completions always ask xAI for usage, so every stream can be billed; a client receives the final usage chunk
+only when it sets `stream_options.include_usage: true` (or when **Settings → Send usage to streaming clients** is on).
+
 ## Admin API
 
 All endpoints live under `/api/v1` and take `Authorization: Bearer <token>`, where the token is a

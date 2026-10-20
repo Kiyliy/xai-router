@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -263,6 +264,13 @@ func (s *Syncer) Sync(ctx context.Context, baseURL, apiKey string, overwriteManu
 		if m.Aliases == nil {
 			m.Aliases = []string{}
 		}
+		// Built-in aliases upstream does not list (legacy ids it resolves
+		// silently) are kept, after upstream's own, as SeedBuiltin adds them.
+		for _, a := range builtinAliases[m.ID] {
+			if !slices.Contains(m.Aliases, a) {
+				m.Aliases = append(m.Aliases, a)
+			}
+		}
 		if old != nil {
 			m.Enabled = old.Enabled
 			restore := wasRetired && !old.Enabled && priced
@@ -428,6 +436,15 @@ func (s *Syncer) get(ctx context.Context, url, apiKey string, dst any) error {
 // versions (resolution tiers, input prices). Video prices of non-manual rows
 // follow the built-in table, since upstream does not publish them. Manual
 // edits are kept, and a built-in model the admin deleted is not added again.
+// builtinAliases maps a built-in model id to its built-in aliases.
+var builtinAliases = func() map[string][]string {
+	out := map[string][]string{}
+	for _, m := range BuiltinModels() {
+		out[m.ID] = m.Aliases
+	}
+	return out
+}()
+
 func SeedBuiltin(ctx context.Context, db *store.DB) error {
 	seen, _, err := loadMetaSet(ctx, db, MetaBuiltinSeen)
 	if err != nil {
@@ -443,12 +460,21 @@ func SeedBuiltin(ctx context.Context, db *store.DB) error {
 				continue
 			}
 			prev := *old
+			// Built-in aliases missing from the row are added (for example
+			// legacy ids xAI resolves to a current model); existing ones stay.
+			aliasAdded := false
+			for _, a := range m.Aliases {
+				if !slices.Contains(old.Aliases, a) {
+					old.Aliases = append(old.Aliases, a)
+					aliasAdded = true
+				}
+			}
 			if old.Kind == "video" && m.Kind == "video" {
 				old.VideoTicksPerSec, old.VideoTiers = m.VideoTicksPerSec, m.VideoTiers
 				old.InputImageTicks, old.InputVideoTicksPerSec = m.InputImageTicks, m.InputVideoTicksPerSec
 			}
 			FillMediaPrices(old)
-			if samePrices(&prev, old) {
+			if !aliasAdded && samePrices(&prev, old) {
 				continue
 			}
 			m = old

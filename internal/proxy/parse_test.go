@@ -206,7 +206,8 @@ func TestModelAllowed(t *testing.T) {
 		{nil, "anything", true},
 		{[]string{"*"}, "anything", true},
 		{[]string{"grok-4*"}, "grok-4.5", true},
-		{[]string{"grok-4*"}, "grok-3", false},
+		{[]string{"grok-4*"}, "grok-2-vision", false},
+		{[]string{"grok-4*"}, "grok-3", true}, // a legacy alias of grok-4.3
 		{[]string{" GROK-4.5 "}, "grok-4.5", true},
 		{[]string{"grok-4.5"}, "grok-4.5-latest", true}, // alias resolves to the canonical id
 		{[]string{"grok-4.5"}, "grok-4.3", false},

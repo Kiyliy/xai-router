@@ -169,6 +169,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		st.fail(w, errf(http.StatusNotFound, "model_not_found", "the model %s does not exist", id))
 		return
 	}
+	// /v1/api-key describes the upstream key (team, user, ACLs, the last
+	// characters): never forward it on behalf of a client token.
+	if strings.TrimRight(r.URL.Path, "/") == "/v1/api-key" {
+		st.fail(w, errf(http.StatusNotFound, "not_found", "this endpoint is not available through the gateway"))
+		return
+	}
 
 	// 2. Read the body with a hard limit (applies to chunked bodies too).
 	if r.Body != nil && r.Body != http.NoBody {

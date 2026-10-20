@@ -21,7 +21,7 @@ func TestDocumentedEndpointsPassThrough(t *testing.T) {
 		method, path, body string
 		status             int
 	}{
-		{"GET", "/v1/api-key", "", 200},
+		{"GET", "/v1/api-key", "", 404}, // describes the upstream key: refused (acceptance round 6, B3)
 		{"GET", "/v1/me", "", 200},
 		{"GET", "/v1/models/grok-4.3", "", 200},
 		{"GET", "/v1/language-models/grok-4.3", "", 200},
@@ -105,7 +105,7 @@ func TestDocumentedEndpointsPassThrough(t *testing.T) {
 			t.Errorf("%s %s: status %d, want %d (%.200s)", c.method, c.path, resp.StatusCode, c.status, raw)
 			continue
 		}
-		if c.status == http.StatusNoContent {
+		if c.status == http.StatusNoContent || c.path == "/v1/api-key" { // the gateway answers /v1/api-key itself
 			continue
 		}
 		var got struct {
