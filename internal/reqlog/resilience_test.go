@@ -150,7 +150,11 @@ func TestWriterStopRaceKeepsEveryLog(t *testing.T) {
 	ctx := context.Background()
 	tok := mkToken(t, db)
 	for round := 0; round < 5; round++ {
+		// This test is about the stop race, not about timeouts: give each
+		// write production-like time, since under -race on a slow runner
+		// 200 ms per row is not enough and late logs were counted lost.
 		w := fastWriter(t, db, 4)
+		w.batchTimeout, w.rowTimeout, w.drainBudget = 10*time.Second, 5*time.Second, 60*time.Second
 		runCtx, cancel := context.WithCancel(ctx)
 		done := make(chan struct{})
 		go func() { w.Run(runCtx); close(done) }()
