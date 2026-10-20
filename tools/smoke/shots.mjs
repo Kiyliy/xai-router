@@ -29,6 +29,8 @@ const shots = [
   ['10-adjust-quota', (ids) => `#/tokens?open=${ids.token}&adjust=1`],
   ['12-logs-mixed', () => '#/logs?type=request,audit,system'],
   ['13-logs-requests', () => '#/logs?type=request'],
+  ['12-logs-mixed-bottom', () => '#/logs?type=request,audit,system', 'window.scrollTo(0, document.body.scrollHeight)'],
+  ['13-logs-requests-bottom', () => '#/logs?type=request', 'window.scrollTo(0, document.body.scrollHeight)'],
   ['14-log-detail-request', (ids) => `#/logs?type=request&open=${ids.log}`],
   ['16-log-detail-audit', (ids) => `#/logs?type=audit,system&event=${ids.event}`],
   ['17-models', () => '#/models'],
@@ -88,16 +90,17 @@ try {
     const h = { Authorization: 'Bearer ' + localStorage.getItem('xr.token') };
     const j = async (p) => (await fetch(p, { headers: h })).json();
     const first = async (p) => ((await j(p)).data || [])[0] || {};
-    return { key: (await first('/api/v1/keys?page_size=1')).id, token: (await first('/api/v1/tokens?page_size=1')).id,
+    return { key: (await first('/api/v1/keys?page_size=1')).id, token: (((await j('/api/v1/tokens?page_size=200')).data || []).find((t) => !t.unlimited) || (await first('/api/v1/tokens?page_size=1'))).id,
       log: (await first('/api/v1/logs?type=request&page_size=1')).id,
       event: (await first('/api/v1/logs?type=audit&action=token.quota_&page_size=1')).id || (await first('/api/v1/logs?type=audit,system&page_size=1')).id };
   })()`);
   for (const theme of ['dark', 'light']) {
     await evaluate(`localStorage.setItem('xr.theme', '${theme}')`);
-    for (const [name, hash] of shots) {
+    for (const [name, hash, after] of shots) {
       where = `${theme} ${name}`;
       await send('Page.navigate', { url: `${base}/?t=${Date.now()}${hash(ids)}` });
       await sleep(2200);
+      if (after) { await evaluate(after); await sleep(500); }
       // Wait out loading spinners and skeletons (dialogs open after their data loads).
       for (let i = 0; i < 20 && await evaluate(`!!document.querySelector('.spinner, .skeleton, .loading')`); i++) await sleep(300);
       const shot = await send('Page.captureScreenshot', { format: 'png' });

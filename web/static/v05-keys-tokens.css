@@ -23,6 +23,7 @@
    no divider or own background; the whole row highlights */
 .table-keys .col-actions, .table-keys thead .col-actions,
 .table-tokens .col-actions, .table-tokens thead .col-actions { position: static; box-shadow: none; background: transparent; background-image: none; }
+.table-keys thead .col-actions, .table-tokens thead .col-actions { background: var(--th-bg); } /* N3: the header row stays one colour */
 .table-keys tbody tr:hover td.col-actions, .table-tokens tbody tr:hover td.col-actions { background: var(--hover); background-image: none; }
 .table-keys tr.row-selected td.col-actions, .table-tokens tr.row-selected td.col-actions { background: var(--accent-soft); background-image: none; }
 .table-keys tr.row-active td.col-actions, .table-tokens tr.row-active td.col-actions { background: var(--accent-soft) !important; background-image: none !important; }

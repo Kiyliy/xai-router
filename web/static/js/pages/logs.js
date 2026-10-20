@@ -405,7 +405,7 @@ export function render(el, ctx) {
         r.stream ? h('span', { class: 'stream-tag', title: t('logs.streamYes') }, icon('stream', 12), t('lg.stream')) : null,
         r.websocket ? h('span', { class: 'stream-tag', title: 'WebSocket' }, icon('stream', 12), 'WebSocket') : null));
   }
-  const tries = (r) => ((r.attempts || 0) > 1 ? badge(`×${r.attempts}`, 'warning', { class: 'badge-tries', title: t('logs.retriedN', { n: r.attempts }) }) : null);
+  const tries = (r) => ((r.attempts || 0) > 1 ? badge(`×${r.attempts}`, 'neutral', { class: 'badge-tries', title: t('logs.retriedN', { n: r.attempts }) }) : null);
   function targetCell(e) {
     const name = targetText(e), hint = targetHint(e);
     // No object (sign-in, start-up) or a whole-catalogue action (price sync): name the area instead.

@@ -60,6 +60,9 @@ func main() {
 	for i := 0; i < *tokens; i++ {
 		raw := secret.NewToken("sk-xr-")
 		t := &store.Token{Name: fmt.Sprintf("seed-token-%02d", i), Hash: secret.Hash(raw), Prefix: secret.Display(raw), Enabled: true}
+		if i%2 == 0 { // half the tokens have a quota, as in real deployments
+			t.Limited, t.QuotaTicks = true, int64(20+10*i)*10_000_000_000
+		}
 		if err := db.CreateToken(ctx, t); err != nil {
 			log.Fatal(err)
 		}

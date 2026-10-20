@@ -384,3 +384,5 @@
 @media (max-width: 900px) {
   .ov-metric { height: auto; padding: 16px; gap: 6px; }
 }
+/* v0.5.2 design review N1: the result after the retry count wraps instead of being cut off. */
+.lg5 .table-ulog[data-mode="request"] .col-status .lg-sum-text { white-space: normal; }
