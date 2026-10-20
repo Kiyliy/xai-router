@@ -582,10 +582,12 @@ function chainView(d, ctx) {
       h('span', { class: 'ld6-why', title: [eff, a.error].filter(Boolean).join('\n') || null }, reason),
       cur ? h('span', { class: 'ld6-cur' }, t('ld6.current')) : null,
       h('span', { class: 'ld6-ms mono' }, fmtMs(a.latency_ms))),
-    h('div', { class: 'ld5-track' }, h('div', { class: `ld5-wf is-${v}`, style: { left: `${left}%`, width: `${width}%` } }, h('span', { class: 'ld5-wf-ttfb', style: { width: `${ttfbW}%` } }))));
+    h('div', { class: 'ld5-track' }, h('div', { class: `ld5-wf is-${v}`, style: { left: `${left}%`, width: `${width}%` } }, h('span', { class: 'ld5-wf-ttfb', style: { width: `${ttfbW}%` } }))),
+    // Other attempts open on click; a chevron says so (designer review R4).
+    h('span', { class: 'ld6-chev', 'aria-hidden': 'true' }, cur ? null : icon('chevronRight', 14)));
   });
   return h('div', { class: 'ld6-chain' },
-    h('div', { class: 'ld6-card ld6-axis' }, h('div'), h('div', { class: 'ld5-track' }, ticks)),
+    h('div', { class: 'ld6-card ld6-axis' }, h('div'), h('div', { class: 'ld5-track' }, ticks), h('span')),
     cards);
 }
 
