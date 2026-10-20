@@ -159,6 +159,13 @@ export const en = {
   'rr.keysBusy': 'Every upstream key is at its concurrency or rate limit', 'rr.idleTimeout': 'The stream went idle for too long',
   'rr.timeout': 'The request timed out', 'rr.upstreamAuth': 'Upstream key invalid or blocked', 'rr.upstreamCredit': 'The upstream key has no credit left', 'rr.upstreamRate': 'Rate limited by xAI',
   'rr.upstream5xx': 'xAI server error', 'rr.network': 'Could not reach xAI', 'rr.badRequest': 'xAI rejected the request parameters', 'rr.notFound': 'xAI did not find this endpoint or resource',
+  // v0.6.0: one log row per upstream attempt (pm-spec 10.9)
+  'lg6.retried': '{r}, retried', 'lg6.attemptTip': 'Attempt {k} of {n}',
+  'ld6.chainTitle': 'All attempts ({n})', 'ld6.attemptItem': 'Attempt {k}', 'ld6.current': 'Current',
+  'ld6.kpiAttempt': 'Attempt {k}', 'ld6.kpiAttemptSub': '{n} in all, the first {m} failed', 'ld6.kpiAttemptSubAll': '{n} in all, all failed', 'ld6.kpiAttemptSub0': '{n} in all',
+  'ld6.ofN': ' (attempt {k} of {n})', 'ld6.openRow': 'Open this attempt',
+  'logs.finalOnly': 'Final results only',
+  'ov.basisTip': 'From {t}, every retry counts as a request of its own.',
 };
 
 export const zh = {
@@ -313,4 +320,11 @@ export const zh = {
   'rr.keysBusy': '所有上游密钥都达到了并发或速率上限', 'rr.idleTimeout': '流空闲超时',
   'rr.timeout': '请求超时', 'rr.upstreamAuth': '上游密钥无效或被封禁', 'rr.upstreamCredit': '上游密钥余额不足', 'rr.upstreamRate': '被 xAI 限流',
   'rr.upstream5xx': 'xAI 服务器错误', 'rr.network': '无法连接 xAI', 'rr.badRequest': 'xAI 认为请求参数有误', 'rr.notFound': 'xAI 找不到这个接口或资源',
+  // v0.6.0：每次上游尝试一行日志（pm-spec 10.9）
+  'lg6.retried': '{r}，已重试', 'lg6.attemptTip': '第 {k} 次尝试，共 {n} 次',
+  'ld6.chainTitle': '全部尝试（{n} 次）', 'ld6.attemptItem': '第 {k} 次', 'ld6.current': '当前',
+  'ld6.kpiAttempt': '第 {k} 次', 'ld6.kpiAttemptSub': '共 {n} 次，前 {m} 次失败', 'ld6.kpiAttemptSubAll': '共 {n} 次，全部失败', 'ld6.kpiAttemptSub0': '共 {n} 次',
+  'ld6.ofN': '（第 {k} 次 / 共 {n} 次）', 'ld6.openRow': '打开这一行',
+  'logs.finalOnly': '只看最终结果',
+  'ov.basisTip': '{t} 起，每次重试都单独算一次请求。',
 };

@@ -229,9 +229,9 @@
 .lg5 .col-tk .cell-sub { text-align: right; }
 /* requests only: token columns pinned narrow, the request column takes the rest (colgroup in logs.js) */
 .lg5 .table-ulog col.cg-time { width: 140px; }
-.lg5 .table-ulog col.cg-status { width: 160px; }
+.lg5 .table-ulog col.cg-status { width: 174px; } /* v0.6.0: room for the k/n badge */
 .lg5 .table-ulog col.cg-who { width: 184px; }
-.lg5 .table-ulog col.cg-tk { width: 68px; }
+.lg5 .table-ulog col.cg-tk { width: 64.5px; }
 .lg5 .table-ulog col.cg-cost { width: 84px; }
 .lg5 .table-ulog col.cg-lat { width: 112px; }
 /* request line: plain "POST /v1/…" text, method in the secondary color */
@@ -390,3 +390,45 @@
 .lg5 .table-ulog .model-line { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; overflow: visible; white-space: normal; }
 .lg5 .table-ulog .model-line .model-name { overflow: visible; text-overflow: clip; white-space: nowrap; max-width: none; }
 .lg5 .stream-icon { padding: 0 3px; }
+
+/* =================== v0.6.0 retry chains (Figma 12b / 13b / 14b) =================== */
+/* list: rows of one request are joined by a 2px line in the left gutter (14px from the edge, 10px wide) */
+.lg5 .table-ulog tr.chain > td:first-child { position: relative; }
+.lg5 .table-ulog tr.chain > td:first-child::before {
+  content: ""; position: absolute; left: 18px; width: 2px; top: 0; bottom: 0; background: var(--text-3); pointer-events: none;
+}
+.lg5 .table-ulog tr.chain-top > td:first-child::before { top: 50%; }
+.lg5 .table-ulog tr.chain-bottom > td:first-child::before { bottom: 50%; }
+.lg5 .table-ulog tr.chain > td:first-child::after {
+  content: ""; position: absolute; left: 19px; top: 50%; width: 9px; height: 9px; border-radius: 50%; transform: translate(-50%, -50%);
+  box-shadow: 0 0 0 2px var(--bg); pointer-events: none;
+}
+.lg5 .table-ulog tr.node-ok > td:first-child::after { background: var(--success); }
+.lg5 .table-ulog tr.node-err > td:first-child::after { background: var(--danger); }
+.lg5 .table-ulog tr.node-retry > td:first-child::after { width: 7px; height: 7px; background: var(--warning); }
+/* retried attempts are de-emphasized; the final row stays at full strength */
+.lg5 .table-ulog tr.row-retried > td > * { opacity: .6; }
+.lg5 .table-ulog tr.row-retried > td.col-status > *, .lg5 .table-ulog tr.row-retried > td.cell-sum > * { opacity: .85; }
+.lg5 .table-ulog tr.row-retried > td.col-type > * { opacity: 1; }
+.lg5 .table-ulog tr.row-retried .lg-sum-text { color: var(--text-2); }
+.lg5 .badge-tries.mono { font-family: var(--font-mono); }
+
+/* detail: "全部尝试（n 次）", one clickable card per attempt */
+.ld6-chain { display: flex; flex-direction: column; gap: 6px; }
+.ld6-card { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 16px; align-items: center; padding: 10px 12px; border-radius: var(--radius); position: relative; }
+.ld6-card[role="button"] { cursor: pointer; }
+.ld6-card[role="button"]:hover { background: var(--hover); }
+.ld6-card[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ld6-card.is-current { background: var(--active); box-shadow: inset 2px 0 0 var(--accent); }
+.ld6-axis { padding-top: 0; padding-bottom: 0; }
+.ld6-axis .ld5-track { height: 14px; }
+.ld6-card-info { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 13px; }
+.ld6-n { color: var(--text-3); font-size: 12px; white-space: nowrap; flex-shrink: 0; }
+.ld6-key { color: var(--text); flex-shrink: 0; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ld6-card-info .status-code { flex-shrink: 0; }
+.ld6-why { color: var(--text-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ld6-cur { color: var(--accent-text, var(--accent)); font-size: 12px; white-space: nowrap; flex-shrink: 0; }
+.ld6-ms { color: var(--text-2); font-size: 12.5px; white-space: nowrap; margin-left: auto; flex-shrink: 0; }
+@media (max-width: 760px) { .ld6-card { grid-template-columns: 1fr; gap: 6px; } }
+/* overview: the ⓘ by "请求数" when the range spans the counting-basis change */
+.ov-metric .eyebrow .ov-basis { display: inline-flex; vertical-align: -2px; margin-left: 4px; color: var(--text-3); cursor: help; }

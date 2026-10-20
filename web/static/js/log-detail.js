@@ -12,7 +12,7 @@ import { toast, toastError, badge, copyButton, busy, tabs, kv, statusCode, statu
 import { cred } from './detail-drawer.js';
 import {
   actionLabel, actorLabel, targetTypeLabel, targetText, targetHint, eventSentence, levelBadge, requestReason, tokenCats, usdT,
-  fieldLabel, fmtChangeValue,
+  fieldLabel, fmtChangeValue, attemptWhy, isChainRow, isRetriedRow,
 } from './events.js';
 
 // Styles of the log page and drawers; linked here too in case index.html does not link them yet.
@@ -379,17 +379,6 @@ function costSection(d) {
 }
 
 // ---------- request detail (v0.5, Figma 14/15) ----------
-/** Why one upstream attempt failed, in plain words ("密钥无效", "被限流"). */
-function attemptWhy(a) {
-  const s = a.status || 0;
-  const raw = a.error || '';
-  if (s === 401 || s === 403 || a.action === 'disable' || a.action === 'verify') return t('ld5.att.auth');
-  if (s === 429) return t('ld5.att.rate');
-  if (/timeout|timed out|deadline/i.test(raw)) return t('ld5.att.timeout');
-  if (!s || /\bEOF\b|connection (reset|refused)|\bdial\b|no such host|\btls\b/i.test(raw)) return t('ld5.att.network');
-  if (s >= 500) return t('ld5.att.server');
-  return t('ld5.att.other', { c: s });
-}
 /** "被限流，冷却 60 秒" style effect of a failed attempt on its upstream key. */
 function attemptEffect(a) {
   if (a.action === 'disable') return t('ld5.att.disabled');
@@ -400,14 +389,32 @@ const attemptsOf = (d) => (d.upstream_attempts || []).slice().sort((a, b) => (a.
 const attKey = (a) => a.key_name || (a.key_id != null ? `#${a.key_id}` : '—');
 const isOk = (s) => s === 101 || (s >= 200 && s < 400);
 
-/** "第 3 次尝试成功。前两次：prod-07 密钥无效（已自动禁用），prod-03 被限流（冷却 60 秒）。" */
+/** The rows of this request's retry chain (v0.6.0), first attempt first; [] for a single attempt. */
+const chainOf = (d) => (Array.isArray(d.chain) && d.chain.length > 1 && isChainRow(d) ? d.chain.slice().sort((a, b) => (a.attempt_index || 0) - (b.attempt_index || 0)) : []);
+const chainPos = (d) => ({ k: d.attempt_index || 1, n: d.attempt_total || 1 });
+
+/**
+ * Historical rows: "第 3 次尝试成功。前两次：prod-07 密钥无效（已自动禁用），prod-03 被限流（冷却 60 秒）。"
+ * Chain rows (v0.6.0): "成功（第 3 次 / 共 3 次）。前两次：…" (Figma 14b).
+ */
 function conclusion(d) {
-  const at = attemptsOf(d);
-  const failed = at.filter((a) => !isOk(a.status));
-  const prev = failed.length ? t(failed.length === 1 ? 'ld5.prev1' : 'ld5.prevN', { n: failed.length }) + failed.map((a) => {
+  const chain = chainOf(d);
+  const prevText = (failed) => (failed.length ? t(failed.length === 1 ? 'ld5.prev1' : 'ld5.prevN', { n: failed.length }) + failed.map((a) => {
     const eff = attemptEffect(a);
     return `${attKey(a)} ${attemptWhy(a)}${eff ? t('ld5.paren', { x: eff }) : ''}`;
-  }).join(t('lg.sep')) + t('ld5.stop') : '';
+  }).join(t('lg.sep')) + t('ld5.stop') : '');
+  if (chain.length) {
+    const { k, n } = chainPos(d);
+    const ofN = t('ld6.ofN', { k, n });
+    const prev = prevText(chain.filter((a) => (a.attempt_index || 0) < k && !isOk(a.status)));
+    if (isRetriedRow(d)) return { text: `${requestReason(d).text}${ofN}${t('ld5.stop')}${prev}`, tone: 'warning' };
+    if (isOk(d.status)) return { text: k > 1 ? `${t('lg5.okAttempt', { n: k })}${t('ld5.stop')}${prev}` : `${t('lg.ok')}${t('ld5.stop')}`, tone: prev ? 'warning' : 'success' };
+    const r = requestReason(d);
+    return { text: `${r ? r.text : t('lg.failed')}${ofN}${t('ld5.stop')}${prev}`, tone: d.status >= 500 || !d.status ? 'danger' : 'warning', link: r && r.link };
+  }
+  const at = attemptsOf(d);
+  const failed = at.filter((a) => !isOk(a.status));
+  const prev = prevText(failed);
   if (isOk(d.status)) {
     const n = Math.max(d.attempts || 0, at.length);
     return { text: n > 1 ? `${t('lg5.okAttempt', { n })}${t('ld5.stop')}${prev}` : `${t('lg.ok')}${t('ld5.stop')}`, tone: n > 1 ? 'warning' : 'success' };
@@ -422,7 +429,8 @@ const splitUnit = (s) => { const m = /^([-\d.,$]+)\s*(.*)$/.exec(String(s)); ret
 /** Drawer title: status code, tries, method and path. */
 export function requestTitle(d) {
   return h('span', { class: 'ld5-title' }, statusCode(d.status),
-    (d.attempts || 0) > 1 ? h('span', { class: 'ld5-tries', title: t('logs.retriedN', { n: d.attempts }) }, `×${d.attempts}`) : null,
+    isChainRow(d) ? h('span', { class: 'ld5-tries', title: t('lg6.attemptTip', { k: d.attempt_index || 1, n: d.attempt_total }) }, `${d.attempt_index || 1}/${d.attempt_total}`)
+      : (d.attempts || 0) > 1 ? h('span', { class: 'ld5-tries', title: t('logs.retriedN', { n: d.attempts }) }, `×${d.attempts}`) : null,
     h('span', { class: 'ld5-method' }, d.method || 'GET'), h('span', { class: 'ld5-path' }, d.path || ''));
 }
 
@@ -456,7 +464,7 @@ export function requestHead(d) {
   return h('div', { class: 'ld5-head' },
     h('div', { class: `ld5-con ld-${con.tone}` }, con.text, con.link ? h('a', { class: 'link', href: con.link.hash }, ` ${con.link.label} →`) : null),
     h('div', { class: 'ld5-meta' },
-      m(t('logs.time'), h('span', { class: 'mono', title: relTime(d.created_at) }, fmtDateTime(d.created_at))),
+      m(t('logs.time'), h('span', { class: 'mono', title: relTime(d.created_at) }, fmtDateTime(isChainRow(d) && d.started_at ? d.started_at : d.created_at))),
       m(t('common.model'), d.model ? h('span', { class: 'mono' }, d.model, d.stream ? h('span', { class: 'stream-tag' }, t('lg.stream')) : null, d.websocket ? h('span', { class: 'stream-tag' }, 'WebSocket') : null) : null),
       m(t('ld5.token'), d.token_name ? (d.token_id != null ? navLink(d.token_name, `#/tokens?open=${d.token_id}`, `${t('lg.openToken')}: ${d.token_name} ${tokPfx}`) : d.token_name) : null),
       m(t('common.key'), d.key_name ? (d.key_id != null ? navLink(d.key_name, `#/keys?open=${d.key_id}`, t('lg.openKey')) : d.key_name) : null)),
@@ -482,12 +490,24 @@ function kpiBand(d) {
   const at = attemptsOf(d);
   const n = Math.max(d.attempts || 0, at.length);
   const failed = at.filter((a) => !isOk(a.status)).length;
-  const attSub = !n ? t('ld5.notForwarded') : isOk(d.status) ? (failed ? t('ld5.prevFailed', { n: failed }) : t('ld5.firstOk')) : t('ld5.allFailed');
+  let attSub = !n ? t('ld5.notForwarded') : isOk(d.status) ? (failed ? t('ld5.prevFailed', { n: failed }) : t('ld5.firstOk')) : t('ld5.allFailed');
+  let attVal = bigNum(String(n), { unit: t('ld5.timesUnit'), size: 'md' });
+  let attCls = n > 1 ? 'is-warn' : '';
+  // A chain row (v0.6.0): "第 k 次" with "共 n 次，前 m 次失败" / "共 n 次，全部失败" (pm-spec 10.9).
+  const chain = chainOf(d);
+  if (chain.length) {
+    const { k, n: total } = chainPos(d);
+    const m = chain.filter((a) => (a.attempt_index || 0) < k && !isOk(a.status)).length;
+    const allFailed = !chain.some((a) => isOk(a.status));
+    attSub = allFailed ? t('ld6.kpiAttemptSubAll', { n: total }) : m ? t('ld6.kpiAttemptSub', { n: total, m }) : t('ld6.kpiAttemptSub0', { n: total });
+    attVal = big(t('ld6.kpiAttempt', { k }));
+    attCls = '';
+  }
   return h('div', { class: 'hairline-grid ld5-band' },
     cell(t('common.latency'), big(fmtMs(lat)), d.ttfb_ms ? h('span', { title: t('logs.ttfbClientHint') }, t('lg.ttfb', { v: fmtMs(d.ttfb_ms) })) : null, lat ? latBar : null),
     cell(t('common.cost'), big(d.cost_usd ? fmtUSD(d.cost_usd) : (isOk(d.status) ? '$0' : '—')), d.cost_source ? t('ld5.costSrc', { s: t(`costsrc.${d.cost_source}`) || d.cost_source }) : null),
     cell(t('lg5.tokGroup'), tokVal, d.total_tokens ? t('ld5.inOut', { i: fmtInt(c.input + c.image + c.cacheRead + (c.cacheWrite || 0)), o: fmtInt(c.output) }) : null, tokBar),
-    cell(t('logs.attemptsTimeline'), bigNum(String(n), { unit: t('ld5.timesUnit'), size: 'md' }), attSub, null, n > 1 ? 'is-warn' : ''));
+    cell(t('logs.attemptsTimeline'), attVal, attSub, null, attCls));
 }
 
 /** Upstream attempts on one time axis (Figma 14): info on the left, the bar on the right. */
@@ -522,6 +542,53 @@ function attemptsView(d) {
     at.some((a) => isOk(a.status) && a.ttfb_ms) ? h('div', { class: 'ld5-legend' }, h('span', { class: 'ld5-lg-a' }), t('ld5.lgWait'), h('span', { class: 'ld5-lg-b' }), t('ld5.lgBody')) : null);
 }
 
+/**
+ * "全部尝试（n 次）" (v0.6.0, Figma 14b): one card per attempt of this request on one time axis,
+ * "第 k 次 · key · status reason · duration"; the current row is highlighted, the others open their row.
+ */
+function chainView(d, ctx) {
+  const chain = chainOf(d);
+  if (!chain.length) return null;
+  // Place each attempt at its own start time; without start times, one after another by duration.
+  const starts = chain.map((a) => (a.started_at ? new Date(a.started_at).getTime() : NaN));
+  const valid = starts.every((x) => !isNaN(x));
+  const t0 = valid ? Math.min(...starts) : 0;
+  let acc = 0;
+  const offs = chain.map((a, i) => { if (valid) return starts[i] - t0; const o = acc; acc += a.latency_ms || 0; return o; });
+  const span = Math.max(1, ...chain.map((a, i) => offs[i] + (a.latency_ms || 0)));
+  const ticks = [0, span / 2, span].map((v, i) => h('span', { class: 'ld5-tick', style: { left: `${(i / 2) * 100}%` } }, i ? fmtMs(v) : '0'));
+  const cards = chain.map((a, i) => {
+    const cur = a.id === d.id;
+    const ok = isOk(a.status);
+    const retried = a.attempt_state === 'retried' || (a.attempt_state == null && i < chain.length - 1);
+    const v = ok ? 'ok' : retried ? 'warn' : 'err';
+    const eff = retried ? attemptEffect(a) : '';
+    const reason = ok ? t('lg.ok')
+      : retried ? t('lg6.retried', { r: `${attemptWhy(a)}${eff ? t('ld5.paren', { x: eff }) : ''}` })
+        : ((requestReason({ status: a.status, error: a.error }) || {}).text || t('lg.failed'));
+    const left = (offs[i] / span) * 100, width = Math.max(0.8, ((a.latency_ms || 0) / span) * 100);
+    const ttfbW = ok && a.latency_ms ? Math.min(100, ((a.ttfb_ms || 0) / a.latency_ms) * 100) : 0;
+    const open = () => { if (!cur && ctx.openRow) ctx.openRow(a.id); };
+    return h('div', {
+      class: `ld6-card is-${v} ${cur ? 'is-current' : ''}`, 'data-id': a.id,
+      role: cur ? null : 'button', tabindex: cur ? null : '0', 'aria-current': cur ? 'true' : null,
+      title: cur ? null : t('ld6.openRow'), onclick: open,
+      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); open(); } },
+    },
+    h('div', { class: 'ld6-card-info' },
+      h('span', { class: 'ld6-n' }, t('ld6.attemptItem', { k: a.attempt_index || i + 1 })),
+      h('span', { class: 'ld6-key mono', title: a.key_name || null }, attKey(a)),
+      statusCode(a.status),
+      h('span', { class: 'ld6-why', title: a.error || null }, reason),
+      cur ? h('span', { class: 'ld6-cur' }, t('ld6.current')) : null,
+      h('span', { class: 'ld6-ms mono' }, fmtMs(a.latency_ms))),
+    h('div', { class: 'ld5-track' }, h('div', { class: `ld5-wf is-${v}`, style: { left: `${left}%`, width: `${width}%` } }, h('span', { class: 'ld5-wf-ttfb', style: { width: `${ttfbW}%` } }))));
+  });
+  return h('div', { class: 'ld6-chain' },
+    h('div', { class: 'ld6-card ld6-axis' }, h('div'), h('div', { class: 'ld5-track' }, ticks)),
+    cards);
+}
+
 export function requestDetailView(d, ctx = {}) {
   const isChat = /\/chat\/completions$/.test(d.path || '');
   const usageNote = d.stream && isChat && ctx.injectUsage !== false
@@ -539,7 +606,8 @@ export function requestDetailView(d, ctx = {}) {
     d.stream && !d.websocket ? { id: 'sse', label: t('logs.rawSse'), render: () => sseView(d.response_body, { filename: `log-${d.id}-response.sse.txt` }) } : null,
     { id: 'headers', label: t('logs.headers'), count: hdrCount, render: bothHeaders },
   ].filter(Boolean);
-  const attempts = attemptsView(d);
+  const chain = chainView(d, ctx);
+  const attempts = chain ? null : attemptsView(d);
   const section = (title, body) => h('section', { class: 'ld-section ld5-sec' }, h('div', { class: 'eyebrow' }, h('span', null, title)), body);
   return h('div', { class: 'log-detail ld5' },
     d.error && !isOk(d.status) ? h('div', { class: 'ld-raw' }, h('span', { class: 'muted small' }, t('lg.rawError')), h('code', { class: 'mono small break' }, d.error)) : null,
@@ -547,6 +615,7 @@ export function requestDetailView(d, ctx = {}) {
     kpiBand(d),
     section(t('lg.costTitle'), costSection(d)),
     d.websocket_session ? wsSessionView(d.websocket_session) : null,
+    chain ? section(t('ld6.chainTitle', { n: chainOf(d).length }), chain) : null,
     attempts ? section(t('logs.attemptsTimeline'), attempts) : null,
     h('div', { class: 'ld5-tabs' }, tabs(allTabs, { cls: 'tabs-sm' })));
 }
@@ -615,7 +684,8 @@ function quotaReasonText(d) {
 
 /** Find the request log of a request id and return its id (null when it was purged). */
 export async function findRequestLog(requestId, signal) {
-  const r = await get('/api/v1/logs', { type: 'request', q: requestId, page_size: 5 }, { signal });
-  const row = (r.data || []).find((x) => x.request_id === requestId) || (r.data || [])[0];
+  const r = await get('/api/v1/logs', { type: 'request', q: requestId, page_size: 20 }, { signal });
+  const rows = r.data || [];
+  const row = rows.find((x) => x.request_id === requestId && x.attempt_final !== false) || rows.find((x) => x.request_id === requestId) || rows[0];
   return row ? row.id : null;
 }

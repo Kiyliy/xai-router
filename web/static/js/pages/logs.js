@@ -19,6 +19,7 @@ import {
 } from '../log-detail.js';
 import {
   actionLabel, actorLabel, targetTypeLabel, targetText, targetHint, eventSentence, typeTag, levelDot, requestReason, tokenCats,
+  isChainRow, isRetriedRow,
 } from '../events.js';
 
 const TYPES = ['request', 'audit', 'system'];
@@ -57,7 +58,7 @@ function stateFromParams(p) {
   const types = (p.type || '').split(',').map((x) => x.trim()).filter((x) => TYPES.includes(x));
   return {
     types: types.length ? TYPES.filter((x) => types.includes(x)) : [...TYPES],
-    problems: p.problems === '1',
+    problems: p.problems === '1', final: p.attempts === 'final',
     preset: URL_PRESETS.includes(p.range) ? p.range : (p.from || p.to ? 'custom' : '24h'),
     from: p.from || '', to: p.to || '', q: p.q || '',
     model: p.model || '', status: p.status || '', key_id: p.key_id || '', token_id: p.token_id || '', path: p.path || '',
@@ -72,7 +73,7 @@ export function render(el, ctx) {
   const has = (ty) => st.types.includes(ty);
   const mode = () => (st.types.length === 1 && has('request') ? 'request' : has('request') ? 'mixed' : 'events');
   const paramsObj = () => ({
-    type: st.types.length === TYPES.length ? '' : st.types.join(','), problems: st.problems ? '1' : '',
+    type: st.types.length === TYPES.length ? '' : st.types.join(','), problems: st.problems ? '1' : '', attempts: st.final ? 'final' : '',
     range: st.preset !== '24h' && st.preset !== 'custom' ? st.preset : '', from: st.preset === 'custom' ? st.from : '', to: st.preset === 'custom' ? st.to : '',
     q: st.q, model: st.model, status: st.status, key_id: st.key_id, token_id: st.token_id, path: st.path,
     target_type: st.target_type, target_id: st.target_id, action: st.action, actor: st.actor,
@@ -111,6 +112,8 @@ export function render(el, ctx) {
   }, icon('check', 13), h('span', null, t(`lg.type.${ty}`))));
   const typeSel = h('div', { class: 'lg-types', role: 'group', 'aria-label': t('lg.types') }, h('span', { class: 'lg-label' }, t('lg5.typeLabel')), typeBtns);
   const problemsSw = switchEl({ checked: st.problems, label: t('lg.problems'), onChange: (v) => { st.problems = v; changed(); } });
+  // v0.6.0: every upstream attempt is a row; this shows only the last row of each request (pm-spec 10.9).
+  const finalSw = switchEl({ checked: st.final, label: t('logs.finalOnly'), onChange: (v) => { st.final = v; changed(); } });
   const qIn = input({ type: 'search', placeholder: t('lg.qPh'), oninput: debounce((e) => { st.q = e.target.value.trim(); changed(false); }, 350) });
 
   // --- row 2: per-type filters ---
@@ -197,7 +200,7 @@ export function render(el, ctx) {
     onchange: (e) => { st.actor = e.target.value; changed(); },
   });
   const resetBtn = button(t('logs.resetFilters'), { icon: 'x', variant: 'ghost', size: 'sm', onClick: () => {
-    Object.assign(st, { preset: '24h', from: '', to: '', q: '', model: '', status: '', key_id: '', token_id: '', path: '', target_type: '', target_id: '', action: '', actor: '', problems: false });
+    Object.assign(st, { preset: '24h', from: '', to: '', q: '', model: '', status: '', key_id: '', token_id: '', path: '', target_type: '', target_id: '', action: '', actor: '', problems: false, final: false });
     pathOther = false; customPath.value = '';
     changed();
   } });
@@ -214,7 +217,7 @@ export function render(el, ctx) {
   } });
   const grid = h('div', { class: 'filters-row lg-grid' });
   const filterBar = h('div', { class: 'filters lg-filters' },
-    h('div', { class: 'filters-row lg-row1' }, presetSel, customRange, typeSel, problemsSw,
+    h('div', { class: 'filters-row lg-row1' }, presetSel, customRange, typeSel, problemsSw, finalSw,
       h('div', { class: 'filters-q-row' }, h('div', { class: 'search-input filters-q' }, icon('search', 15), qIn), filterToggle)),
     grid, hintEl, dlTargets);
 
@@ -226,6 +229,8 @@ export function render(el, ctx) {
     fromIn.value = toLocalInput(st.from); toIn.value = toLocalInput(st.to);
     typeBtns.forEach((b) => { const on = has(b.dataset.type); b.classList.toggle('active', on); b.setAttribute('aria-pressed', on ? 'true' : 'false'); });
     problemsSw.input.checked = st.problems;
+    finalSw.input.checked = st.final;
+    finalSw.hidden = mode() === 'events';
     qIn.value = st.q;
     if (st.model && ![...modelSel.options].some((o) => o.value === st.model)) modelSel.appendChild(h('option', { value: st.model }, st.model));
     modelSel.value = st.model;
@@ -257,7 +262,7 @@ export function render(el, ctx) {
     if (m === 'mixed' && REQ_FILTERS.some((k) => st[k])) hint = t('lg.hintReqOnly');
     else if (m === 'mixed' && EV_FILTERS.some((k) => st[k])) hint = t('lg.hintEvOnly');
     hintEl.hidden = !hint; hintEl.lastChild.textContent = hint;
-    const n = [st.preset !== '24h', st.problems, ...(m !== 'events' ? [st.model, st.status, st.key_id, st.token_id, st.path] : []), ...(m !== 'request' ? EV_FILTERS.map((k) => st[k]) : [])].filter(Boolean).length;
+    const n = [st.preset !== '24h', st.problems, ...(m !== 'events' ? [st.final, st.model, st.status, st.key_id, st.token_id, st.path] : []), ...(m !== 'request' ? EV_FILTERS.map((k) => st[k]) : [])].filter(Boolean).length;
     filterToggle.replaceChildren(icon('filter', 14), h('span', null, n ? t('logs.filtersN', { n }) : t('logs.filters')));
     filterToggle.classList.toggle('btn-active', n > 0);
     reset.hidden = n === 0;
@@ -359,7 +364,9 @@ export function render(el, ctx) {
     return r.key_id != null ? h('a', { class: 'link cell-link', href: `#/keys?open=${r.key_id}`, title: `${t('lg.openKey')}: ${r.key_name}`, onclick: stop }, text) : h('span', null, text);
   };
   // Today: "14:02:41", earlier: "10月18日 14:02" (pm-spec 10.3). Mixed views add the relative time below.
-  const timeCell = (r) => {
+  // A chain's rows share created_at (the end of the client request); each shows its own start (v0.6.0).
+  const timeCell = (r0) => {
+    const r = r0.started_at && isChainRow(r0) ? { ...r0, created_at: r0.started_at } : r0;
     const d = new Date(r.created_at);
     const today = d.toDateString() === new Date().toDateString();
     const recent = Date.now() - d.getTime() < 86400e3;
@@ -367,13 +374,15 @@ export function render(el, ctx) {
       recent ? h('div', { class: 'cell-sub', 'data-rel': r.created_at }, relTime(r.created_at)) : null);
   };
   // Error rows get the 2px red line: server-side failures and error-level records, not client 4xx.
-  const isErr = (r) => (r.type === 'request' || r.type === undefined ? (!r.status || r.status >= 500) : r.level === 'error');
+  // A retried attempt is de-emphasized instead (v0.6.0): the final row carries the outcome.
+  const isErr = (r) => (r.type === 'request' || r.type === undefined ? !isRetriedRow(r) && (!r.status || r.status >= 500) : r.level === 'error');
   // The token total only where the four token columns are not shown (pm-spec 10.8 #54).
-  const okText = (r, withTokens = true) => ((r.attempts || 0) > 1 ? t('lg5.okAttempt', { n: r.attempts })
+  const okText = (r, withTokens = true) => (!isChainRow(r) && (r.attempts || 0) > 1 ? t('lg5.okAttempt', { n: r.attempts })
     : r.images ? t('lg5.images', { n: r.images }) : r.video_seconds ? t('lg5.video', { n: r.video_seconds })
       : withTokens && r.total_tokens ? t('lg5.okTokens', { n: fmtInt(r.total_tokens) }) : t('lg5.ok'));
   function tokCells(r) {
     const td = (cls, ...kids) => h('td', { class: `num col-tk ${cls || ''}` }, ...kids);
+    if (isRetriedRow(r)) return [td(), td(), td(), td('muted', '—')];
     if (r.images || r.video_seconds) return [td(), td(), td(), td('muted small nowrap', t(r.images ? 'lg5.perImage' : 'lg5.perSecond'))];
     if (!r.total_tokens && !r.prompt_tokens) return [td(), td(), td(), td('muted', '—')];
     const c = tokenCats(r);
@@ -405,7 +414,10 @@ export function render(el, ctx) {
         r.stream ? h('span', { class: 'stream-tag stream-icon', title: t('logs.streamYes'), 'aria-label': t('logs.streamYes') }, icon('stream', 12)) : null,
         r.websocket ? h('span', { class: 'stream-tag', title: 'WebSocket' }, icon('stream', 12), 'WebSocket') : null));
   }
-  const tries = (r) => ((r.attempts || 0) > 1 ? badge(`×${r.attempts}`, 'neutral', { class: 'badge-tries', title: t('logs.retriedN', { n: r.attempts }) }) : null);
+  // Chain rows (v0.6.0) show "k/n"; historical single rows keep "×n" (pm-spec 10.9).
+  const tries = (r) => (isChainRow(r)
+    ? badge(`${r.attempt_index || 1}/${r.attempt_total}`, 'neutral', { class: 'badge-tries mono', title: t('lg6.attemptTip', { k: r.attempt_index || 1, n: r.attempt_total }) })
+    : (r.attempts || 0) > 1 ? badge(`×${r.attempts}`, 'neutral', { class: 'badge-tries', title: t('logs.retriedN', { n: r.attempts }) }) : null);
   function targetCell(e) {
     const name = targetText(e), hint = targetHint(e);
     // No object (sign-in, start-up) or a whole-catalogue action (price sync): name the area instead.
@@ -431,10 +443,10 @@ export function render(el, ctx) {
     return node;
   }
 
-  function row(r) {
+  function row(r, i) {
     const isReq = r.type === 'request' || r.type === undefined;
     const active = isReq ? r.id === st.openId : r.id === st.openEvent;
-    const tr = h('tr', { class: `clickable ${isErr(r) ? 'row-err' : ''} ${active ? 'row-active' : ''}`, 'data-id': r.id, 'data-type': isReq ? 'request' : 'event', onclick: () => (isReq ? openDetail(r.id) : openEvent(r.id)) });
+    const tr = h('tr', { class: `clickable ${isErr(r) ? 'row-err' : ''} ${active ? 'row-active' : ''} ${isReq ? chainClass(r, i) : ''}`, 'data-id': r.id, 'data-type': isReq ? 'request' : 'event', onclick: () => (isReq ? openDetail(r.id) : openEvent(r.id)) });
     const m = mode();
     if (m === 'request') {
       const rr = requestReason(r);
@@ -444,8 +456,8 @@ export function render(el, ctx) {
           h('span', { class: 'lg-sum-text', title: rr ? (rr.raw || rr.text) : null }, rr ? rr.text : okText(r, false)))),
         h('td', { class: 'truncate-cell m-meta m-who' }, h('div', { class: 'truncate' }, tokenLink(r)), h('div', { class: 'cell-sub truncate' }, keyLink(r))),
         ...tokCells(r),
-        h('td', { class: 'num mono m-meta col-cost' }, r.cost_usd ? fmtUSD(r.cost_usd) : h('span', { class: 'muted' }, r.status >= 400 || !r.status ? '—' : '$0')),
-        h('td', { class: `num mono m-meta col-lat ${r.latency_ms > 30000 ? 'text-warning' : ''}` }, h('div', null, fmtMs(r.latency_ms)), r.ttfb_ms ? h('div', { class: 'cell-sub', title: t('logs.ttfbClientHint') }, t('lg.ttfb', { v: fmtMs(r.ttfb_ms) })) : null));
+        h('td', { class: 'num mono m-meta col-cost' }, r.cost_usd ? fmtUSD(r.cost_usd) : h('span', { class: 'muted' }, r.status >= 400 || !r.status || isRetriedRow(r) ? '—' : '$0')),
+        h('td', { class: `num mono m-meta col-lat ${r.latency_ms > 30000 ? 'text-warning' : ''}` }, h('div', null, fmtMs(r.latency_ms)), r.ttfb_ms && !isRetriedRow(r) ? h('div', { class: 'cell-sub', title: t('logs.ttfbClientHint') }, t('lg.ttfb', { v: fmtMs(r.ttfb_ms) })) : null));
     } else if (m === 'mixed') {
       if (isReq) {
         const rr = requestReason(r);
@@ -472,6 +484,31 @@ export function render(el, ctx) {
     }
     return tr;
   }
+  /** Chain marks (v0.6.0, Figma 12b/13b): rows of one request next to each other are joined by a line. */
+  function chainClass(r, i) {
+    if (!isChainRow(r) || i == null) return '';
+    const cls = [isRetriedRow(r) ? 'row-retried' : ''];
+    const same = (o) => !!o && (o.type === 'request' || !o.type) && !!r.request_id && o.request_id === r.request_id && isChainRow(o);
+    const up = same(st.rows[i - 1]), down = same(st.rows[i + 1]);
+    if (up || down) cls.push('chain', up ? '' : 'chain-top', down ? '' : 'chain-bottom', isRetriedRow(r) ? 'node-retry' : r.status && r.status < 400 ? 'node-ok' : 'node-err');
+    return cls.filter(Boolean).join(' ');
+  }
+  /**
+   * Keep each chain's rows together, the final row first and then the earlier attempts, at the place
+   * of its first row (the backend lists a chain together; this guards page edges and interleaved events).
+   */
+  function groupChains(rows) {
+    const groups = new Map();
+    const out = [];
+    for (const r of rows) {
+      if ((r.type === 'request' || !r.type) && isChainRow(r) && r.request_id) {
+        let g = groups.get(r.request_id);
+        if (!g) { g = []; groups.set(r.request_id, g); out.push(g); }
+        g.push(r);
+      } else out.push(r);
+    }
+    return out.flatMap((x) => (Array.isArray(x) ? x.sort((a, b) => (b.attempt_index || 0) - (a.attempt_index || 0)) : [x]));
+  }
   function actorCell(e) {
     if ((e.actor === 'anonymous' || !e.actor) && e.ip) return [h('div', { class: 'truncate' }, t('lg5.anonIp', { ip: e.ip }))];
     return [h('div', { class: 'truncate' }, actorLabel(e)), e.ip && e.actor !== 'system' ? h('div', { class: 'cell-sub mono' }, e.ip) : null];
@@ -485,7 +522,7 @@ export function render(el, ctx) {
   function query() {
     const m = mode();
     const q = { type: st.types.join(','), problems: st.problems ? 1 : '', q: st.q, key_id: st.key_id, token_id: st.token_id, page_size: st.pageSize };
-    if (m !== 'events') Object.assign(q, { model: st.model, status: st.status, path: st.path });
+    if (m !== 'events') Object.assign(q, { model: st.model, status: st.status, path: st.path, attempts: st.final ? 'final' : '' });
     if (m !== 'request') Object.assign(q, { target_type: st.target_type, target_id: st.target_id, action: st.action, actor: st.actor });
     if (m === 'request') q.page = st.page; else if (st.cursors.length) q.cursor = st.cursors[st.cursors.length - 1];
     if (st.preset === 'custom') { q.from = st.from; q.to = st.to; }
@@ -504,13 +541,13 @@ export function render(el, ctx) {
     try {
       const res = await get('/api/v1/logs', query(), { signal });
       if (signal.aborted) return;
-      st.rows = res.data || [];
+      st.rows = groupChains(res.data || []);
       if (res.total != null) { st.total = res.total || 0; st.totalKind = res.total_kind || (res.total_exact === false ? 'approx' : 'exact'); }
       st.next = res.next_cursor || '';
       st.loaded = true;
       countEl.textContent = PRESET_MS[st.preset] ? t('lg5.countRange', { r: t(`logs.preset.${st.preset}`), n: fmtTotal(st.total, st.totalKind) }) : t('lg5.count', { n: fmtTotal(st.total, st.totalKind) });
       countEl.title = st.totalKind === 'approx' ? t('common.totalApproxHint') : st.totalKind === 'at_least' ? t('common.totalAtLeastHint') : '';
-      const filtered = st.problems || st.q || REQ_FILTERS.some((k) => st[k]) || EV_FILTERS.some((k) => st[k]) || st.key_id || st.token_id;
+      const filtered = st.problems || (m !== 'events' && st.final) || st.q || REQ_FILTERS.some((k) => st[k]) || EV_FILTERS.some((k) => st[k]) || st.key_id || st.token_id;
       let empty;
       if (!st.rows.length && m === 'request' && st.page > 1) {
         const goPage = (pg) => { st.page = pg; syncParams(true); load({ keepScroll: false }); };
@@ -518,7 +555,7 @@ export function render(el, ctx) {
       } else if (filtered) empty = { icon: 'filter', title: t('logs.noMatch'), desc: t('logs.noMatchDesc'), action: button(t('lg.clearFilters'), { icon: 'x', size: 'sm', onClick: () => resetBtn.click() }) };
       else empty = { icon: 'logs', title: t('logs.empty'), desc: t('logs.emptyDesc') };
       paintHead();
-      tbody.replaceChildren(...(st.rows.length ? st.rows.map(row) : [tableEmptyRow(cols, empty)]));
+      tbody.replaceChildren(...(st.rows.length ? st.rows.map((r, i) => row(r, i)) : [tableEmptyRow(cols, empty)]));
       if (!keepScroll) wrap.scrollTop = 0;
       if (m === 'request') {
         pagerSlot.replaceChildren(pager);
@@ -578,7 +615,7 @@ export function render(el, ctx) {
     fillTargetList();
     targetBtn.textContent = targetLabel();
     // Rows drawn before the lists arrived: redraw so object names and "deleted" marks appear.
-    if (st.loaded && st.rows && st.rows.some((r) => r.type && r.type !== 'request')) { tbody.replaceChildren(...(st.rows.length ? st.rows.map(row) : [])); markActive(); }
+    if (st.loaded && st.rows && st.rows.some((r) => r.type && r.type !== 'request')) { tbody.replaceChildren(...(st.rows.length ? st.rows.map((r, i) => row(r, i)) : [])); markActive(); }
   }
 
   // --- detail drawer (requests and events share one drawer; ↑ / ↓ step through the rows) ---
@@ -621,8 +658,12 @@ export function render(el, ctx) {
     drawer.el.querySelector('.modal-subtitle')?.replaceChildren(headNode);
     drawer.extra.replaceChildren(...(actions || []));
   }
+  // A chain entry opened from the drawer may not be on this page: arrows then step from the row it was opened from.
+  let anchorIdx = -1;
   function curIndex() {
-    return st.rows.findIndex((r) => (r.type === 'request' || !r.type ? r.id === st.openId && !st.openEvent : r.id === st.openEvent));
+    const i = st.rows.findIndex((r) => (r.type === 'request' || !r.type ? r.id === st.openId && !st.openEvent : r.id === st.openEvent));
+    if (i >= 0) anchorIdx = i;
+    return i >= 0 ? i : Math.min(anchorIdx, st.rows.length - 1);
   }
   async function openDetail(id) {
     st.openId = id; st.openEvent = null; syncParams(); markActive();
@@ -633,7 +674,7 @@ export function render(el, ctx) {
       const d = await get(`/api/v1/logs/${id}`, null, { signal });
       if (drawer !== d0 || st.openId !== id) return;
       paintDrawerHead('req', requestTitle(d), requestHead(d), requestActions(d));
-      drawer.setBody(requestDetailView(d, { injectUsage }));
+      drawer.setBody(requestDetailView(d, { injectUsage, openRow: (rid) => openDetail(rid) }));
       drawer.body.scrollTop = 0;
     } catch (e) {
       if (e.name === 'AbortError' || signal.aborted) return;

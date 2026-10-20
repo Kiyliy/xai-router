@@ -180,13 +180,34 @@ export function eventSentence(e) {
 }
 
 // ---------- readable request error reasons (pm-spec 9.5) ----------
+/** A log row that is an earlier, failed attempt of a retried request (v0.6.0). */
+export const isRetriedRow = (r) => r.attempt_state === 'retried' || (r.attempt_final === false && (r.attempt_total || 1) > 1);
+/** A log row that belongs to a retry chain (more than one attempt). */
+export const isChainRow = (r) => (r.attempt_total || 1) > 1;
+
+/** Why one upstream attempt failed, in a few plain words ("密钥无效", "被限流"). */
+export function attemptWhy(a) {
+  const s = a.status || 0;
+  const raw = a.error || '';
+  if (s === 401 || s === 403 || a.action === 'disable' || a.action === 'verify') return t('ld5.att.auth');
+  if (/incorrect api key|invalid api key|api key is (blocked|disabled)|team is blocked|account suspended|has been blocked/i.test(raw)) return t('ld5.att.auth');
+  if (/(does not|doesn't) have any credits|no credits|used all available credits|spending limit/i.test(raw)) return t('rr.upstreamCredit');
+  if (s === 429) return t('ld5.att.rate');
+  if (/timeout|timed out|deadline/i.test(raw)) return t('ld5.att.timeout');
+  if (!s || /\bEOF\b|connection (reset|refused)|\bdial\b|no such host|\btls\b/i.test(raw)) return t('ld5.att.network');
+  if (s >= 500) return t('ld5.att.server');
+  return t('ld5.att.other', { c: s });
+}
+
 /**
  * { text, raw, key, link?: { label, hash } } for a request row; null for a plain success.
+ * A retried attempt reads "被限流，已重试" (pm-spec 10.9); the final row keeps its normal reason.
  * The raw error text stays visible in the detail drawer.
  */
 export function requestReason(r) {
   const raw = r.error || '';
   const s = r.status || 0;
+  if (isRetriedRow(r)) return { text: t('lg6.retried', { r: attemptWhy(r) }), raw, key: 'retried', retried: true };
   const k = (key, link) => ({ text: t(`rr.${key}`), raw, link, key });
   if (/no upstream API keys are available|no_upstream_keys/i.test(raw)) return k('noKeys', { label: t('rr.noKeysLink'), hash: '#/keys' });
   if (s === 429 && /quota/i.test(raw) && !/^HTTP/.test(raw)) return k('quota', r.token_id ? { label: t('rr.quotaLink'), hash: `#/tokens?open=${r.token_id}&adjust=1` } : null);

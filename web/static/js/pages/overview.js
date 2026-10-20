@@ -141,10 +141,10 @@ export function render(el, ctx) {
     return o;
   }
 
-  function metric({ label, tip, value, accent, sub, extra }) {
+  function metric({ label, tip, value, accent, sub, extra, hint }) {
     const [num, unit] = splitUnit(value);
     return h('div', { class: 'ov-metric' },
-      h('div', { class: 'eyebrow' }, h('span', { 'data-tip': tip || null }, label)),
+      h('div', { class: 'eyebrow' }, h('span', { 'data-tip': tip || null }, label), hint || null),
       h('div', { class: `big-num ${accent ? 'is-accent' : ''}` }, num, unit ? h('span', { class: 'unit' }, unit) : null),
       extra || null,
       h('div', { class: 'ov-metric-sub' }, sub));
@@ -155,6 +155,18 @@ export function render(el, ctx) {
     if (!prev) return t('ov5.noPrev', { r: rLabel() });
     const d = money ? `${cur - prev < 0 ? '−' : '+'}${fmtUSD(Math.abs(cur - prev))}` : `${cur >= prev ? '+' : '−'}${(Math.abs(cur - prev) / prev * 100).toFixed(1)}%`;
     return t('ov5.vs', { r: rLabel(), d });
+  }
+
+  /**
+   * v0.6.0 counts every upstream attempt as a request. When the selected range spans the time that
+   * started (stats_basis_since), an ⓘ by "请求数" says so (pm-spec 10.9); otherwise nothing.
+   */
+  let basisSince = null;
+  function basisHint() {
+    const ms = basisSince ? new Date(basisSince).getTime() : NaN;
+    if (isNaN(ms) || ms <= Date.now() - RANGE_MS[range] || ms > Date.now()) return null;
+    const tip = t('ov.basisTip', { t: fmtDateTime(basisSince, { seconds: false }) });
+    return h('span', { class: 'th-hint ov-basis', tabindex: '0', role: 'img', 'aria-label': tip, 'data-tip': tip }, icon('info', 12));
   }
 
   function renderStrip(o, prev) {
@@ -180,7 +192,7 @@ export function render(el, ctx) {
     const tokTotal = input + cached + output;
     const seg = (n, cls) => (n > 0 ? h('span', { class: `tok-sw ${cls}`, style: { flex: `${n} 1 0` } }) : null);
     strip.replaceChildren(
-      metric({ label: t('ov.requests'), value: fmtInt(o.requests || 0), accent: true, sub: vsPct(o.requests || 0, prev ? prev.requests : null) }),
+      metric({ label: t('ov.requests'), hint: basisHint(), value: fmtInt(o.requests || 0), accent: true, sub: vsPct(o.requests || 0, prev ? prev.requests : null) }),
       metric({ label: t('ov.successRate'), tip: t('ov5.successTip'), value: has ? fmtPct(o.success_rate) : '—', sub: rateSub }),
       metric({ label: t('ov.avgLatency'), tip: t('ov.endToEnd'), value: has ? fmtMs(o.avg_latency_ms) : '—', sub: latSub }),
       metric({ label: t('ov.cost'), value: fmtUSD(o.cost_usd || 0), sub: vsPct(o.cost_usd || 0, prev ? (prev.requests ? prev.cost : 0) : null, true) }),
@@ -335,11 +347,13 @@ export function render(el, ctx) {
     const pTs = get('/api/v1/stats/timeseries', { range, interval: interval(), group: 'none', tz_offset_minutes: tzOffset() }, opts);
     const pr = PREV_RANGE[range];
     const pPrev = pr ? get('/api/v1/stats/timeseries', { range: pr, interval: interval(), group: 'none', tz_offset_minutes: tzOffset() }, opts).catch(() => null) : Promise.resolve(null);
+    const pInfo = Promise.resolve(ctx.info && ctx.info() ? ctx.info() : ctx.refreshInfo && ctx.refreshInfo()).catch(() => null);
     loadAttention(keysP);
     onboard.refresh();
     try {
-      const [o, ts, prevTs] = await Promise.all([pOv, pTs, pPrev]);
+      const [o, ts, prevTs, info] = await Promise.all([pOv, pTs, pPrev, pInfo]);
       if (my !== seq) return;
+      basisSince = (info && info.stats_basis_since) || null;
       if (ctx.reportKeys) ctx.reportKeys(o.keys);
       // Previous window: the same length, right before the first bucket of this one.
       let prev = null;
