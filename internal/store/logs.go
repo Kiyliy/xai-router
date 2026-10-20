@@ -365,16 +365,31 @@ func (db *DB) ListLogs(ctx context.Context, f LogFilter) ([]*Log, int, error) {
 // rather than the table.
 func (db *DB) ListLogsPage(ctx context.Context, f LogFilter) (*LogPage, error) {
 	if f.Q != "" && looksLikeID(f.Q) {
-		// Ids are searched exactly (indexed). If nothing has that id, fall
-		// back to searching error texts.
-		idf := f
-		idf.qIsID = true
-		p, err := db.listLogsPage(ctx, idf)
-		if err != nil || p.Total > 0 || f.Offset > 0 {
-			return p, err
+		// Ids are searched exactly (indexed). If nothing has that id, error
+		// texts are searched instead. The mode is decided from the query and
+		// filters alone, never from the page (offset or cursor), so every
+		// page of one search uses the same mode.
+		isID, err := db.idMatches(ctx, f)
+		if err != nil {
+			return nil, err
 		}
+		f.qIsID = isID
 	}
 	return db.listLogsPage(ctx, f)
+}
+
+// idMatches reports whether any log matching the filter has f.Q as its
+// request or upstream id, ignoring paging (two index lookups).
+func (db *DB) idMatches(ctx context.Context, f LogFilter) (bool, error) {
+	f.qIsID = true
+	f.BeforeAt, f.BeforeID, f.Offset = 0, 0, 0
+	w, args := f.where()
+	var one int
+	err := db.R.QueryRowContext(ctx, `SELECT 1 FROM request_logs`+w+` LIMIT 1`, args...).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // looksLikeID reports whether s could be a request or upstream id.
