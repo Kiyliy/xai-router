@@ -477,6 +477,19 @@ const MetaStatsBasisSince = "stats_basis_since"
 // from now on: when there are stats from before, the cutover time is kept
 // in meta.
 func migrateV10(ctx context.Context, tx *sql.Tx) error {
+	if err := v10Schema(ctx, tx); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO meta (k, v)
+SELECT ?, CAST(CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) AS TEXT)
+WHERE EXISTS (SELECT 1 FROM stats_dim) OR EXISTS (SELECT 1 FROM request_logs)`, MetaStatsBasisSince)
+	return err
+}
+
+// v10Schema adds what v10 adds to request_logs, skipping what exists. It
+// also runs on every start (see migrate), so a database created by a
+// pre-release v10 build gets the columns and index added later.
+func v10Schema(ctx context.Context, tx *sql.Tx) error {
 	have := map[string]bool{}
 	rows, err := tx.QueryContext(ctx, `SELECT name FROM pragma_table_info('request_logs')`)
 	if err != nil {
@@ -508,9 +521,11 @@ func migrateV10(ctx context.Context, tx *sql.Tx) error {
 			return err
 		}
 	}
-	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO meta (k, v)
-SELECT ?, CAST(CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) AS TEXT)
-WHERE EXISTS (SELECT 1 FROM stats_dim) OR EXISTS (SELECT 1 FROM request_logs)`, MetaStatsBasisSince)
+	// The retried rows (attempt_final = 0), for attempts=final (see
+	// notRetriedSQL). Existing rows are all final: the index starts empty,
+	// after one scan of the table.
+	_, err = tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_logs_retried ON request_logs(created_at)
+WHERE attempt_final = 0`)
 	return err
 }
 
@@ -551,6 +566,19 @@ func (db *DB) migrate(ctx context.Context) error {
 		if _, err := tx.ExecContext(ctx, `UPDATE schema_version SET v = ?`, i+1); err != nil {
 			tx.Rollback()
 			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	if v == latest && latest >= 10 {
+		tx, err := db.W.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		if err := v10Schema(ctx, tx); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("v10 schema: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
 			return err

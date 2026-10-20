@@ -451,7 +451,7 @@ func (f LogFilter) where() (string, []any) {
 		w, a = append(w, "(created_at < ? OR (created_at = ? AND id < ?))"), append(a, f.BeforeAt, f.BeforeAt, f.BeforeID)
 	}
 	if f.FinalOnly {
-		w = append(w, "attempt_final = 1")
+		w = append(w, notRetriedSQL)
 	}
 	if f.Problems && f.Status == "" {
 		w = append(w, successSQL+" = 0")
@@ -499,6 +499,14 @@ UNION SELECT id FROM request_logs WHERE upstream_id = ?)`), append(a, f.Q, f.Q)
 	}
 	return " WHERE " + strings.Join(w, " AND "), a
 }
+
+// notRetriedSQL keeps the final row of each client request (attempts=final)
+// as a probe of the small partial index of retried rows, idx_logs_retried
+// (about one row in ten): the list and its count stay on whichever covering
+// index serves the other filters, instead of reading every wide row for
+// attempt_final.
+const notRetriedSQL = `NOT EXISTS (SELECT 1 FROM request_logs AS r INDEXED BY idx_logs_retried
+WHERE r.attempt_final = 0 AND r.created_at = request_logs.created_at AND r.id = request_logs.id)`
 
 func escapeLike(s string) string {
 	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
@@ -748,6 +756,18 @@ AND hour >= ? AND hour <= ?`, dim, id, from, to).Scan(&est)
 	if err != nil {
 		return 0, false
 	}
+	if f.FinalOnly && est > 0 {
+		// The rollups count every row; leave out the retried rows' share,
+		// counted on their small partial index.
+		var all, retried int64
+		_ = db.R.QueryRowContext(ctx, `SELECT COALESCE(SUM(requests),0) FROM stats_dim WHERE dim = 'all' AND id = ''
+AND hour >= ? AND hour <= ?`, from, to).Scan(&all)
+		_ = db.R.QueryRowContext(ctx, `SELECT COUNT(*) FROM request_logs INDEXED BY idx_logs_retried
+WHERE attempt_final = 0 AND created_at >= ? AND created_at <= ?`, from, to).Scan(&retried)
+		if all > 0 && retried > 0 {
+			est = est * max(all-retried, 0) / all
+		}
+	}
 	// The id range of the remaining logs bounds every estimate (logs are
 	// deleted oldest first), and is the estimate for an unfiltered list:
 	// rollups of deleted hours can otherwise be counted again when older
@@ -757,7 +777,7 @@ AND hour >= ? AND hour <= ?`, dim, id, from, to).Scan(&est)
 	_ = db.R.QueryRowContext(ctx, `SELECT MAX(id) FROM request_logs`).Scan(&maxID)
 	if maxID.Valid {
 		span := maxID.Int64 - minID.Int64 + 1
-		if dim == "all" && col == "requests" && f.From <= 0 && f.To <= 0 {
+		if dim == "all" && col == "requests" && f.From <= 0 && f.To <= 0 && !f.FinalOnly {
 			return span, true
 		}
 		est = min(est, span)

@@ -318,6 +318,31 @@ func TestUpgradeFromV9ToV10(t *testing.T) {
 		db.Close()
 	}
 
+	var idx int
+	db, _ := Open(path)
+	_ = db.R.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE name = 'idx_logs_retried'`).Scan(&idx)
+	db.Close()
+	if idx != 1 {
+		t.Fatal("idx_logs_retried missing")
+	}
+	// A database made by a pre-release v10 build (without started_at and the
+	// index) gets them on the next start.
+	raw, _ = sql.Open("sqlite", "file:"+filepath.ToSlash(path))
+	for _, q := range []string{`DROP INDEX idx_logs_retried`, `ALTER TABLE request_logs DROP COLUMN started_at`} {
+		if _, err := raw.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw.Close()
+	db, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l, err := db.GetLog(ctx, 1); err != nil || l.StartedAt != 1000 {
+		t.Fatalf("pre-release v10 database: %+v %v", l, err)
+	}
+	db.Close()
+
 	// A new database has always counted rows: no cutover.
 	fresh, err := Open(filepath.Join(t.TempDir(), "new.db"))
 	if err != nil {

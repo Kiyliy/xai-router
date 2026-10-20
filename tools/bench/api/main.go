@@ -127,6 +127,22 @@ func main() {
 		{"status=error, page 5,000", "/api/v1/logs?status=error&page=5000"},
 		{"keys list", "/api/v1/keys"},
 		{"tokens list", "/api/v1/tokens"},
+		// v0.6.0: one row per upstream attempt; attempts=final keeps the last
+		// row of each client request.
+		{"final", "/api/v1/logs?attempts=final"},
+		{"final, 200/page", "/api/v1/logs?attempts=final&page_size=200"},
+		{"final+status=error", "/api/v1/logs?attempts=final&status=error"},
+		{"final+status=5xx", "/api/v1/logs?attempts=final&status=5xx"},
+		{"final+model", "/api/v1/logs?attempts=final&model=grok-4.3"},
+		{"final+key", fmt.Sprintf("/api/v1/logs?attempts=final&key_id=%d", k1)},
+		{"final+token+success", fmt.Sprintf("/api/v1/logs?attempts=final&token_id=%d&status=success", t1)},
+		{"final+key+error", fmt.Sprintf("/api/v1/logs?attempts=final&key_id=%d&status=error", k1)},
+		{"final+q=error text", "/api/v1/logs?attempts=final&q=internal"},
+		{"final+q=request id", "/api/v1/logs?attempts=final&q=" + first.Data[0].RequestID},
+		{"final+7d+model+429", fmt.Sprintf("/api/v1/logs?attempts=final&from=%d&model=grok-4.5&status=429", weekAgo)},
+		{"final, page 5,000", "/api/v1/logs?attempts=final&page=5000"},
+		{"final+status=error, page 2,000", "/api/v1/logs?attempts=final&status=error&page=2000"},
+		{"final+model, page 2,000", "/api/v1/logs?attempts=final&model=grok-4.3&page=2000"},
 	}
 	// The unified log (v0.4.1, acceptance U27): requests merged with audit
 	// and system events. Deep pages use a cursor 20 days back.
@@ -147,6 +163,8 @@ func main() {
 		{"mixed+key+problems", fmt.Sprintf("/api/v1/logs?type=request,audit,system&key_id=%d&problems=1", k1)},
 		{"system+key, deep cursor", fmt.Sprintf("/api/v1/logs?type=system&key_id=%d&cursor=%s", k1, deep)},
 		{"mixed q=text", "/api/v1/logs?type=request,audit,system&q=invalid"},
+		{"mixed final", "/api/v1/logs?type=request,audit,system&attempts=final"},
+		{"request final, deep cursor", "/api/v1/logs?type=request,system&attempts=final&cursor=" + deep},
 	}
 	stats := []q{}
 	for _, rg := range []string{"7d", "30d"} {
@@ -215,6 +233,33 @@ func main() {
 		}
 		ds = append(ds, d)
 	}
+	// Retry chains (v0.6.0): rows of retried requests, whose detail reads
+	// the whole chain and the request body from row 1.
+	var chainIDs []int64
+	for _, pg := range []int{1, 100, 1000} {
+		_, cb, _ := call(fmt.Sprintf("/api/v1/logs?page_size=200&page=%d", pg))
+		var p struct {
+			Data []struct {
+				ID           int64 `json:"id"`
+				AttemptTotal int   `json:"attempt_total"`
+			}
+		}
+		_ = json.Unmarshal(cb, &p)
+		for _, l := range p.Data {
+			if l.AttemptTotal > 1 {
+				chainIDs = append(chainIDs, l.ID)
+			}
+		}
+	}
+	var cds []time.Duration
+	for i := 0; i < *n*5 && len(chainIDs) > 0; i++ {
+		id := chainIDs[r.IntN(len(chainIDs))]
+		st, _, d := call(fmt.Sprintf("/api/v1/logs/%d", id))
+		if st != 200 {
+			log.Fatalf("chain detail %d: %d", id, st)
+		}
+		cds = append(cds, d)
+	}
 	// Event detail.
 	_, eb, _ := call("/api/v1/logs?type=audit,system&page_size=1")
 	var ev struct{ Data []struct{ ID int64 } }
@@ -237,6 +282,17 @@ func main() {
 	fmt.Printf("\n### Log detail (P1)\n\n| query | runs | p50 | p95 | max | ok |\n|---|---|---|---|---|---|\n")
 	fmt.Printf("| random log detail | %d | %v | %v | %v | %s |\n", len(ds), pct(ds, 0.5).Round(time.Millisecond),
 		p95.Round(time.Millisecond), pct(ds, 1).Round(time.Millisecond), map[bool]string{true: "✅", false: "❌"}[p95 < *dlimit])
+	if len(cds) > 0 {
+		cp := pct(cds, 0.95)
+		if cp >= *dlimit {
+			fails++
+		}
+		fmt.Printf("| retry chain row detail (chain, body from row 1) | %d | %v | %v | %v | %s |\n", len(cds),
+			pct(cds, 0.5).Round(time.Millisecond), cp.Round(time.Millisecond), pct(cds, 1).Round(time.Millisecond),
+			map[bool]string{true: "✅", false: "❌"}[cp < *dlimit])
+	} else {
+		fmt.Println("| retry chain row detail | 0 | – | – | – | no retried rows found (seed with -retry) |")
+	}
 	if len(eds) > 0 {
 		ep := pct(eds, 0.95)
 		if ep >= *dlimit {

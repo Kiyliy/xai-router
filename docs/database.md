@@ -27,7 +27,8 @@ xai-router 把全部状态存在一个 SQLite 文件里（`$XR_DATA_DIR/xai-rout
 | `admin_tokens` | 管理 API 令牌 | Admin API token | `/api/v1/admin-tokens` |
 | `sessions` | 控制台登录会话 | Console session | — |
 | `request_logs` | 请求日志 | Request logs | `/api/v1/logs` |
-| `log_attempts` | 上游尝试 | Upstream attempts | `upstream_attempts` |
+| `request_logs.attempt_*` | 重试链路（第 k 次 / 共 n 次） | Retry chain (attempt k of n) | `attempt_index` / `attempt_total` / `attempt_final` / `attempt_state`，详情里的 `chain` |
+| `log_attempts` | 上游尝试（v0.6.0 之前的日志和 WebSocket 会话） | Upstream attempts | `upstream_attempts` |
 | `stats_dim` | 统计（概览、明细） | Statistics | `/api/v1/stats/*` |
 | `*_ticks` | 金额（界面显示美元） | cost (USD) | `*_usd` |
 
@@ -56,9 +57,9 @@ xai-router 把全部状态存在一个 SQLite 文件里（`$XR_DATA_DIR/xai-rout
 | `admin_tokens` | 管理 API 令牌（脚本调用 `/api/v1/*` 用） | 几个 |
 | `sessions` | 控制台登录会话 | 几个 |
 | `models` | 模型目录和价格表 | 几十 |
-| `request_logs` | 每个客户端请求一行：摘要、Token 数、费用 | 百万级 |
+| `request_logs` | 每次上游尝试一行（v0.6.0 起；之前是每个客户端请求一行）：摘要、Token 数、费用 | 百万级；有重试时约为客户端请求数 × 平均尝试次数 |
 | `request_log_bodies` | 请求和响应的头、正文（与摘要分开存） | 与日志同量，占体积的大头 |
-| `log_attempts` | 每次上游尝试（一个请求可能换上游密钥重试多次） | 约等于日志条数 |
+| `log_attempts` | v0.6.0 之前的日志挂的上游尝试；之后只有 WebSocket 会话的拨号尝试写入 | 不再随请求增长 |
 | `bindings` | 上游资源与创建它的上游密钥、客户端令牌之间的绑定。资源包括异步视频/图片任务、已存的 response、文件、批处理等 | 随异步任务量 |
 | `stats_dim` | 按小时预聚合的统计，分 4 个维度：全部 / 模型 / 上游密钥 / 客户端令牌 | 每小时最多 1 + 模型数 + 上游密钥数 + 客户端令牌数 行 |
 | `events` | 操作记录（管理员做了什么，`audit`）和系统记录（网关自己做了什么，`system`）。只能追加，永久保留 | 每天几十到几百行 |
@@ -105,7 +106,7 @@ erDiagram
 | status_reason | TEXT | '' | 自动禁用或冷却的原因 |
 | cooldown_until | INTEGER | 0 | 冷却到期时间 |
 | max_concurrency / rpm_limit | INTEGER | 0 | 并发上限、每分钟请求上限，0 = 不限 |
-| attempts / attempt_errors | INTEGER | 0 | 用这个上游密钥做过的**上游尝试**次数和失败次数。一个客户端请求可能先后尝试多个上游密钥，所以这两个数和统计里"按上游密钥"的请求数口径不同（v8 前叫 `requests` / `errors`） |
+| attempts / attempt_errors | INTEGER | 0 | 用这个上游密钥做过的**上游尝试**次数和失败次数（v8 前叫 `requests` / `errors`）。v0.6.0 起每次尝试是一行日志，所以和统计里"按上游密钥"的请求数口径一致（WebSocket 的拨号尝试除外）；失败数只算网关判定为密钥问题的尝试（retry / cooldown / disable / verify），原样返回的客户端错误不算 |
 | cost_ticks | INTEGER | 0 | 记到这个上游密钥上的花费（随日志写入累加） |
 | last_used_at | INTEGER | 0 | |
 | last_error | TEXT | '' | 最近一次错误 |
@@ -167,32 +168,43 @@ erDiagram
 
 ### 5.5 `request_logs`（请求日志摘要）
 
-每个客户端请求一行。成功、失败、被网关拒绝、客户端中途断开，都会记一行。
+v0.6.0 起**每次上游尝试一行**：一个客户端请求换上游密钥重试 n 次，就记 n+1 行，共用同一个 `request_id`（响应头 `X-Request-Id`），用 `attempt_index` / `attempt_total` 标出第几次、共几次，`attempt_final = 1` 的是最终那一行。被网关拒绝（没有尝试）、WebSocket 会话（拨号尝试仍挂在 `log_attempts`）、异步任务轮询各是一行。成功、失败、被拒绝、客户端中途断开，都会记行。
+
+同一链路的各行：
+- 各自记录自己那次尝试：上游密钥、状态码、错误、动作（`attempt_action`）、TTFB、耗时、开始时间（`started_at`）、响应头和响应体；请求头每行都存。
+- **请求体只存在第 1 行**（同一链路的请求体都一样，单条上限 32KB，重试 n 次不多存 n 份）；详情接口读第 1 行补上，并返回 `request_body_from`。第 1 行已被清理时，后面的行没有请求体。
+- **只有最终那一行计费**：Token 数、费用、`cost_source`、`price_snapshot` 只在最终行。之前失败的尝试记 $0，例外是上游在错误响应里报告了费用（`cost_source = upstream`）。额度仍然按客户端请求预扣一次、结算一次（结算金额 = 各行费用之和）。
+- 共用同一个 `created_at`：客户端请求结束时间 + 1ms。列表按 `created_at DESC, id DESC` 排，同一链路的行 id 按尝试顺序递增，所以链路连在一起、最终行在最上面；链路进行中写下的系统记录（冷却、自动禁用）时间更早，排在整条链路后面。每行自己的开始时间在 `started_at`。
+- 历史行（v10 之前）不展开：`attempt_index = attempt_total = attempt_final = 1`，嵌套的尝试照旧在 `log_attempts`。
 
 | 字段 | 类型 | 默认 | 含义 |
 |---|---|---|---|
 | id | INTEGER PK 自增 | | 同时是列表的次排序键 |
 | request_id | TEXT | | 网关生成的请求 id（响应头 `X-Request-Id`） |
-| created_at | INTEGER | | 请求**开始**时间（行在请求结束时写入） |
+| created_at | INTEGER | | 列表排序时间。单次尝试：请求**开始**时间（行在请求结束时写入）；重试链路：整个客户端请求的结束时间 + 1ms，链路各行相同 |
+| started_at | INTEGER | 0 | 这一行那次尝试的开始时间（v10）。0 = 与 created_at 相同（v10 之前的行） |
+| attempt_index / attempt_total | INTEGER | 1 / 1 | 第几次尝试（从 1 开始）/ 这个客户端请求一共几次（v10） |
+| attempt_final | INTEGER | 1 | 1 = 最终那一行（带结果、用量和费用），0 = 已重试（v10）。`attempts=final` 筛选用它 |
+| attempt_action | TEXT | '' | 这次尝试后网关的动作：success / retry / return / cooldown / disable / verify（v10；之前的行为空） |
 | method / path / query | TEXT | | |
 | model | TEXT | '' | |
 | stream / ws | INTEGER | 0 | 是否流式 / 是否 WebSocket |
-| status | INTEGER | 0 | 返回给客户端的状态码。499 = 客户端断开 |
+| status | INTEGER | 0 | 最终行（和单次尝试）是返回给客户端的状态码，499 = 客户端断开；已重试的行是这次失败对应的状态码（网络错误 502 / 504，流内错误按对应的 HTTP 状态，例如容量不足 429） |
 | error | TEXT | '' | 错误说明（上游尝试的错误截断到 2000 字符，WebSocket 的截断到 500 字符） |
 | client_ip / user_agent | TEXT | '' | |
 | token_id / token_name / token_prefix | INTEGER NULL / TEXT / TEXT | | 客户端令牌。名称和前缀是请求当时的值（`token_prefix` 从 v8 开始写入；更早的行显示令牌当前的前缀） |
-| key_id / key_name | INTEGER NULL / TEXT | | 最后一次尝试用的上游密钥 |
-| attempts | INTEGER | 0 | 上游尝试次数（详情在 `log_attempts`） |
-| ttfb_ms / latency_ms | INTEGER | 0 | 首包耗时、总耗时 |
+| key_id / key_name | INTEGER NULL / TEXT | | 这一行那次尝试用的上游密钥（v10 之前的行：最后一次尝试的） |
+| attempts | INTEGER | 0 | 这一行代表的上游尝试数：尝试行为 1，被拒绝为 0；v10 之前的行和 WebSocket 会话是全部尝试数（详情在 `log_attempts`） |
+| ttfb_ms / latency_ms | INTEGER | 0 | 首包耗时、耗时，都从这一行那次尝试开始算 |
 | prompt_tokens, completion_tokens, cached_tokens, reasoning_tokens, image_tokens, total_tokens | INTEGER | 0 | 统一口径后的 Token 数 |
 | cache_write_tokens | INTEGER NULL | NULL | 缓存写入的 Token 数（v9）。NULL = 上游没有报告（chat、responses），界面显示"—"；messages 接口报告 0 或实际值 |
 | price_snapshot | TEXT | '' | 计费时用的单价（JSON，v9）：输入、缓存输入、输出、图片输入、长上下文、优先级，或图片 / 视频单价。改价后旧请求的单价不变；v0.4.1 之前的行为空 |
 | images / video_seconds | INTEGER / REAL | 0 | 媒体用量。视频秒数可能有小数，它只是用量，不是金额 |
-| cost_ticks | INTEGER | 0 | 本请求的费用 |
-| cost_source | TEXT | 'none' | upstream（上游返回）/ computed（按价格表算）/ estimated（响应被截断时估算）/ none |
+| cost_ticks | INTEGER | 0 | 这一行的费用（重试链路只有最终行有，见上文） |
+| cost_source | TEXT | 'none' | upstream（上游返回）/ computed（按价格表算）/ estimated（响应被截断时估算）/ upstream_error（流里只有错误，计 0）/ none |
 | upstream_id | TEXT | '' | 上游返回的 id（response id、任务 id 等） |
 | truncated | INTEGER | 0 | 正文是否被截断 |
-| extra | TEXT | '' | WebSocket 会话等的附加信息（JSON，v2） |
+| extra | TEXT | '' | 附加信息（JSON，v2）：WebSocket 会话统计；流先回 200 再报错时的 `stream_error`（错误、客户端看到的状态 `client_status`，没计费时的估算，已输出内容并计费时 `after_content`）。详情接口以 `extra` 返回 |
 
 ### 5.6 `request_log_bodies`、`log_attempts`
 
@@ -204,7 +216,7 @@ erDiagram
 | resp_text / reasoning_text | 拼好的回答全文和推理文本 |
 | log_attempts.id | PK 自增 |
 | log_attempts.log_id | 外键 → request_logs.id，ON DELETE CASCADE |
-| seq, key_id, key_name, status, error, action, ttfb_ms, latency_ms, started_at | 第几次尝试、用的上游密钥、结果，以及网关采取的动作（retry / cooldown / disable / success / return） |
+| seq, key_id, key_name, status, error, action, ttfb_ms, latency_ms, started_at | 第几次尝试、用的上游密钥、结果，以及网关采取的动作（retry / cooldown / disable / success / return）。**v0.6.0 起 HTTP 请求不再写这张表**（每次尝试是一行日志，见 5.5）；只有 WebSocket 会话的拨号尝试还写，旧日志照旧读取 |
 
 ### 5.7 `bindings`（资源绑定）
 
@@ -228,13 +240,19 @@ erDiagram
 | dim | TEXT | `all` / `model` / `key` / `token` |
 | hour | INTEGER | 小时起点（Unix 毫秒，UTC） |
 | id | TEXT | 维度值：`''`（all）、模型名、上游密钥 id、客户端令牌 id（`'0'` = 无令牌） |
-| requests, success, errors | INTEGER | 客户端请求数（不是上游尝试数） |
+| requests, success, errors | INTEGER | 日志行数：成功行、失败行（见下文"统计口径"；v0.6.0 之前是客户端请求数） |
 | prompt_tokens … total_tokens | INTEGER | |
 | cost_ticks | INTEGER | |
 | latency_ms_sum | INTEGER | 耗时之和，用来算平均耗时 |
 | | | PK (dim, hour, id)，`WITHOUT ROWID` |
 
-每批日志写入时，在**同一个事务**里对 4 个维度做 upsert。关闭"记录日志"、或者某条日志写入失败只能记账时，统计照样累加，所以统计是计费的权威来源；日志会过期删除，统计不会。
+每批日志写入时，在**同一个事务**里对 4 个维度做 upsert（一个客户端请求的各行总在同一批）。关闭"记录日志"、或者某条日志写入失败只能记账时，统计照样按行累加，所以统计是计费的权威来源；日志会过期删除，统计不会。
+
+**统计口径（v0.6.0 起按日志行，和 New API 一致）：**
+- 请求数 = 日志行数，失败的重试也算；失败数 = 状态不是成功的行，包括"已重试"的行；成功率 = 成功行 / 全部行。重试 N 次后成功，记 N+1 次请求、1 次成功、N 次失败；N+1 次全部失败，记 N+1 次请求、N+1 次失败。
+- 费用和 Token 只来自计费的行（通常只有最终行），所以总量和以前一样。
+- 按上游密钥拆分时，每行归到它自己用的上游密钥，坏 key 的失败记在它自己名下；按模型、客户端令牌拆分时每行都计入；客户端令牌的 `requests` 计数器也按行数算。
+- **分界时间**：从 v9 升级到 v10 时，如果库里已有日志或统计，升级时间（Unix 毫秒）记在 `meta.stats_basis_since`，系统信息接口以 `stats_basis_since` 返回。之前的统计按客户端请求计，不重算（300 万行要全量重算，而且历史日志也没有各次尝试的内容）；新建的库没有这个值（返回 null），一直按行计。统计页在时间范围跨过分界时注明口径。
 
 ### 5.9 `events`（操作记录和系统记录，v9）
 
@@ -281,19 +299,22 @@ erDiagram
 | idx_logs_reqid | (request_id) | 按请求 id 搜索 |
 | idx_logs_upstream | (upstream_id) | 按上游 id 搜索 |
 | idx_logs_errsearch | (created_at, id, error, model, key_id, token_id, status, path) WHERE error <> '' | 错误文本搜索（只扫失败的请求，并覆盖其他筛选列） |
+| idx_logs_retried | request_logs(created_at) WHERE attempt_final = 0 | `attempts=final`：排除已重试的行（v10） |
 | idx_attempts_log | log_attempts(log_id) | 日志详情读取尝试记录；级联删除 |
 | idx_bindings_expires | bindings(expires_at) | 清理过期绑定 |
 | 各表的 UNIQUE | keys.key、tokens.token_hash、admin_tokens.token_hash | 导入去重、按 hash 鉴权 |
 
 统计查询只读 `stats_dim` 的主键范围（`dim = ? AND hour >= ?`），与日志量无关。
 
-写入成本：每条日志大约要更新 20 个 B 树，包括 `request_logs` 的 12 个、正文表、尝试记录、4 个统计维度和两张计数表，批量写入。在 160 请求/秒、20 并发下，网关的额外延迟 p99 约 2ms（`notes/xai-router-evidence/P3-P4-load-final.md`）。不要再加日志索引。
+写入成本：每行日志大约要更新 20 个 B 树，包括 `request_logs` 的 12 个、正文表、4 个统计维度和两张计数表，批量写入（v0.6.0 起有重试的请求按行数成倍，但不再写尝试记录表）。
+
+`attempts=final` 用一个很小的部分索引 `idx_logs_retried`（`request_logs(created_at) WHERE attempt_final = 0`，只含已重试的行，约一成）：条件写成 `NOT EXISTS`，对每个候选行在这个小索引里探查一次，所以列表、深翻页和计数仍走原来按 `(created_at, id)` 排好的覆盖索引，不回表读宽行（直接写 `attempt_final = 1` 时每行都要回表，60 万行上偏移 25 万的翻页从约 50ms 变成 170ms 以上，冷缓存时更慢）。总数估算时，按这个索引里已重试行的占比从小时统计里扣掉。同一链路共用 `created_at`，所以翻页游标（`<created_at>.<0|1>.<id>`）不用改。详情的 `chain` 按 `request_id` 走 `idx_logs_reqid`。
 
 ## 7. 删除行为
 
 | 删除对象 | 日志 | 尝试记录 | 统计 | 绑定 |
 |---|---|---|---|---|
-| 一条日志（过期或手动清理） | — | 级联删除 | **保留**（统计不随日志删除） | 不受影响 |
+| 一条日志（过期或手动清理） | — | 级联删除 | **保留**（统计不随日志删除） | 不受影响。同一链路的行 `created_at` 相同，按时间清理时一起删除 |
 | 上游密钥（软删除） | 保留，照常显示"名称 · 掩码" | 保留 | 保留，明细里标"已删除" | 保留到过期。绑定到这个上游密钥的资源返回 503 `upstream_key_unavailable` |
 | 客户端令牌（软删除） | 保留，照常显示"名称 · 前缀" | — | 保留，明细里标"已删除" | 保留到过期。资源只属于原令牌，其他令牌访问返回 404 |
 | 管理 API 令牌（吊销） | — | — | — | — |
@@ -318,7 +339,7 @@ v0.4.0 之前硬删除的对象，在统计里显示为"#id（已删除）"。
 **花费和账单以 `stats_dim` 为准**。统计永久保留，并且包含没有记录日志的请求；日志只在保留期内可以对照。对账关系：
 
 - 统计费用之和 = 所有客户端令牌的 `used_ticks` 之和（含已删除的令牌）+ 没有令牌的请求的费用；
-- 统计中"按上游密钥"的费用之和 = 统计总费用。各上游密钥的 `cost_ticks` 按上游尝试记账，用于显示该密钥自己的花费。
+- 统计中"按上游密钥"的费用之和 = 统计总费用。各上游密钥的 `cost_ticks` 按行记到这一行自己的上游密钥上，所以四方对账成立：令牌已用之和 = 日志费用之和 = 上游密钥花费之和 = 统计费用（`test.TestRetryChainsReconcile` 覆盖重试后成功、全部失败、部分内容后出错、换 key 四种情况）。
 
 `tokens.used_ticks` 同时是额度判断的依据。启动时从库里加载，运行时由额度模块在内存中预扣和结算。
 
@@ -337,14 +358,14 @@ v0.4.0 之前硬删除的对象，在统计里显示为"#id（已删除）"。
 **磁盘是真正的约束。** 旧项目线上 105 天产生了 766 万条日志（峰值每小时约 2.6 万条，约 7 次写入/秒，其中 90% 是失效 key 重试产生的 403），SQLite 的写入能力有 100 倍以上的余量；日志体积才是上限。对应的措施：
 
 - 请求体和响应体分别有单条大小上限：`log_request_body_max_kb`、`log_response_body_max_kb`，默认各 32KB（v0.4.1 之前是共用的 256KB）；拼好的回答文本也受响应上限约束；base64 媒体一律剥离。
-- 换上游密钥重试的中间尝试是挂在这条日志下的 `log_attempts` 子行，不会产生新的 `request_logs` 行；每个请求的尝试次数受 `max_attempts`（默认 5）限制，失效的 key 会被自动禁用，之后不再被尝试。
+- v0.6.0 起换上游密钥重试的每次尝试都是一行 `request_logs`（之前是挂在日志下的 `log_attempts` 子行）。重试的行很小：没有请求体（只存在第 1 行），响应通常是很短的错误文本。每个请求的尝试次数受 `max_attempts`（默认 5）限制，失效的 key 会被自动禁用，之后不再被尝试。
 - 系统信息里显示数据盘的总量、剩余和使用率；超过 `disk_warn_percent`（默认 85%）时控制台顶部显示横幅，并记一条 `disk.low` 事件（每 10 分钟检查一次，越过阈值才记）。
 
 磁盘空间回收：新库是 `auto_vacuum=INCREMENTAL`，删除后的空闲页会被新日志复用；需要把空间还给系统时，在"数据与存储"页执行"压缩"（分小步执行，空闲空间很大时可能需要几个小时）。v0.3 之前创建的库，需要在"数据与存储"页执行一次"压缩"，转成增量模式。这一次是完整的 VACUUM，期间会阻塞写入。
 
 ## 9. 迁移
 
-- 版本号存在 `schema_version`（一行）。启动时按顺序执行 `internal/store/db.go` 里的 `migrations[v:]`。
+- 版本号存在 `schema_version`（一行）。启动时按顺序执行 `internal/store/db.go` 里的 `migrations[v:]`（v1–v9，SQL），再执行 `codeMigrations`（v10 起，Go 函数：先检查要加的列是否已存在，所以对已经部分执行过的库也安全）。
   - 每个版本在**一个事务**里执行，并在同一事务里更新版本号。中途失败会整体回滚，下次启动重试，所以重复启动是安全的。
   - 数据库的版本比程序新时（例如降级运行旧版本），程序拒绝启动，避免旧代码把软删除的令牌当成有效令牌。
 - **已发布的迁移不再修改**，结构变更都通过新版本完成。
@@ -365,8 +386,11 @@ v0.4.0 之前硬删除的对象，在统计里显示为"#id（已删除）"。
 | v8 | v0.4.0 | 以下改动依据第 10 节的评审：上游密钥和客户端令牌加 `deleted_at`（软删除）；令牌加 `reset_ticks`、`used_reset_at`；`keys.requests/errors` 改名为 `attempts/attempt_errors`；`models.image_input_ticks` 改名为 `image_token_ticks`；日志加 `token_prefix`；删除空表 `stats_hourly` |
 | v9 | v0.4.1 | 操作和系统记录表 `events`（`kind`、`level`、`target_hint`、`request_id`，只能追加的触发器）；令牌加 `unlimited`（原来 `quota_ticks = 0` 的令牌迁移为不限额），v0.4.0 重置用量清掉的 `reset_ticks` 加回 `used_ticks`，然后删除 `reset_ticks`、`used_reset_at`；每个令牌写一条 `token.quota_migrate` 记录（`reason_code` 为 `pre_v0_4_1`，有重置历史的再写一条 `reset_folded`），使记录之和 = 当前额度、剩余不变；日志加 `cache_write_tokens`、`price_snapshot`。同版本的代码改动：额度只能调整并留记录，去掉重置用量（`PATCH /tokens/{id}` 带 `quota_usd` 或 `reset_usage` 返回 400 `quota_is_adjustment_only`）；请求体 / 响应体分别设上限 |
 
+| v10 | v0.6.0 | 每次上游尝试一行日志：`request_logs` 加 `attempt_index`、`attempt_total`、`attempt_final`（默认 1，历史行都是单次的最终行）、`attempt_action`（默认 ''）、`started_at`（默认 0 = created_at）；加列是 O(1)；新建部分索引 `idx_logs_retried`（升级时扫一遍表，300 万行约几秒，历史行都是最终行，所以索引是空的）。v10 的列和索引在每次启动时都会补齐（检查后跳过已有的），预发布版建的 v10 库也能用。库里已有日志或统计时，升级时间记入 `meta.stats_basis_since`（统计口径的分界）。同版本的代码改动：HTTP 请求不再写 `log_attempts`；统计、上游密钥和令牌的计数按行 |
+
 升级测试：
-- `store.TestUpgradeFromV010Schema`：用 v0.1.0 的 schema 和数据升级到最新版本，核对数据，并验证重复启动不会出错；
+- `store.TestUpgradeFromV010Schema`：用 v0.1.0 的 schema 和数据升级到最新版本，核对数据，并验证重复启动不会出错；历史行是单次尝试，并记下了统计分界时间；
+- `store.TestUpgradeFromV9ToV10`：用 v0.5.x（v9）的数据库升级（其中一个新列已经存在），核对历史行是单次的最终行、嵌套尝试和统计不变、`stats_basis_since` 已记录且重复启动不变；新建的库没有分界时间；
 - `store.TestUpgradeFromV031Schema`：用 v0.3.1（v7）的数据库升级，核对以下几点：
   - 改名后的列保留原值，旧表已删除；
   - 软删除、重置用量和名称/前缀解析在旧数据上都正确；

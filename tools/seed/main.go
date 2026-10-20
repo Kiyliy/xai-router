@@ -2,6 +2,10 @@
 // load and performance testing. It writes through store.InsertLogs, so key and
 // token counters and the hourly statistics stay consistent with the logs.
 //
+// -n counts client requests. About -retry percent of them (default 10) were
+// retried: 1-3 failed attempts on other keys before the final one, each its
+// own log row (v0.6.0 retry chains), so the log has roughly n * 1.2 rows.
+//
 //	go run ./tools/seed -db ./data/xai-router.db -n 3000000 -days 30
 package main
 
@@ -30,6 +34,7 @@ func main() {
 	bigPct := flag.Float64("big", 1, "percent of logs with a 100-200 KB response body")
 	batch := flag.Int("batch", 1000, "logs per transaction")
 	events := flag.Int("events", 0, "only add this many audit and system events to an existing database (no logs)")
+	retryPct := flag.Float64("retry", 10, "percent of client requests retried 1-3 times before the final attempt")
 	flag.Parse()
 
 	ctx := context.Background()
@@ -133,6 +138,7 @@ func main() {
 	slices.Sort(times)
 	times[len(times)-1] = end - 3000
 	t0 := time.Now()
+	rows := 0
 	buf := make([]*store.Log, 0, *batch)
 	for i := 0; i < *n; i++ {
 		created := times[i]
@@ -226,19 +232,45 @@ func main() {
 			l.PriceSnapshot = table.PriceSnapshot(l.Model, u, req)
 		}
 		attempts := 1
-		if r.IntN(12) == 0 && ep.kind != "list" {
-			attempts = 2 + r.IntN(2)
+		if r.Float64()*100 < *retryPct {
+			attempts = 2 + r.IntN(3) // 1-3 retried attempts
 		}
-		for a := 1; a <= attempts; a++ {
-			act, st := "success", l.Status
-			if a < attempts {
-				act, st = "retry", 503
-			} else if l.Status >= 400 {
-				act = "return"
+		// The retried attempts fail on other keys, one after the other; the
+		// final attempt (on the request's key) starts when they are done.
+		at := created
+		for a := 1; a < attempts; a++ {
+			k := keyIDs[(ki+a)%len(keyIDs)]
+			kn := keyNames[(ki+a)%len(keyNames)]
+			st, act, msg := 503, "retry", "HTTP 503: upstream unavailable"
+			switch r.IntN(4) {
+			case 0:
+				st, act, msg = 429, "cooldown", "rate limited (429): slow down"
+			case 1:
+				st, msg = 500, "HTTP 500: internal"
+			case 2:
+				st, msg = 502, "network error: connection reset by peer"
 			}
-			l.Attempts = append(l.Attempts, store.Attempt{Seq: a, KeyID: l.KeyID, KeyName: l.KeyName, Status: st,
-				Action: act, TTFBMs: l.TTFBMs, LatencyMs: l.LatencyMs, StartedAt: created})
+			lat := int64(30 + r.IntN(900))
+			att := store.Attempt{Seq: a, KeyID: k, KeyName: kn, Status: st, Error: msg, Action: act, TTFBMs: lat,
+				LatencyMs: lat, StartedAt: at, LogStatus: st,
+				RespHeaders: `{"Content-Type":"application/json"}`, RespBody: `{"error":"` + msg + `"}`}
+			if st == 502 {
+				att.Status, att.TTFBMs, att.RespHeaders, att.RespBody = 0, 0, "", `{"error":{"code":"upstream_error","message":"`+msg+`"}}`
+			}
+			l.Attempts = append(l.Attempts, att)
+			at += lat + 1
 		}
+		act := "success"
+		if l.Status >= 400 {
+			act = "return"
+		}
+		l.Attempts = append(l.Attempts, store.Attempt{Seq: attempts, KeyID: l.KeyID, KeyName: l.KeyName, Status: l.Status,
+			Action: act, TTFBMs: l.TTFBMs, LatencyMs: l.LatencyMs, StartedAt: at})
+		// The client request lasted from its start to the end of the final
+		// attempt.
+		l.TTFBMs += at - created
+		l.LatencyMs += at - created
+		rows += attempts
 		buf = append(buf, l)
 		if len(buf) == *batch || i == *n-1 {
 			if err := db.InsertLogs(ctx, buf); err != nil {
@@ -247,7 +279,8 @@ func main() {
 			buf = buf[:0]
 			if (i+1)%100_000 == 0 || i == *n-1 {
 				el := time.Since(t0)
-				log.Printf("%d/%d logs (%.0f/s), db %.1f GB", i+1, *n, float64(i+1)/el.Seconds(), float64(db.Size())/1e9)
+				log.Printf("%d/%d client requests, %d log rows (%.0f/s), db %.1f GB", i+1, *n, rows,
+					float64(i+1)/el.Seconds(), float64(db.Size())/1e9)
 			}
 		}
 	}
