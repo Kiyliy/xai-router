@@ -297,7 +297,7 @@ export function render(el, ctx) {
         h('tr', { class: 'lg-head-sub' }, th(t('lg.tok.input'), 'num col-tk'), th(t('lg.tok.cacheWrite'), 'num col-tk', t('lg.tok.cacheWriteTip')), th(t('lg.tok.cacheRead'), 'num col-tk'), th(t('lg.tok.output'), 'num col-tk')));
       return;
     } else if (m === 'mixed') {
-      cells = [th(t('logs.time'), 'col-time'), th(t('lg.col.type'), 'col-type'), th(t('lg.col.target'), 'col-subj'), th(t('lg.col.summary')), th(t('lg.col.who'), 'col-who'), th(t('lg.col.costLat'), 'num col-cost')];
+      cells = [th(t('logs.time'), 'col-time'), th(t('lg.col.type'), 'col-type'), th(t('lg.col.target'), 'col-subj'), th(t('lg.col.summary'), 'col-summ'), th(t('lg.col.who'), 'col-who'), th(t('lg.col.costLat'), 'num col-cost')];
     } else {
       cells = [th(t('logs.time'), 'col-time'), th(t('lg.col.level'), 'col-type'), th(t('lg.col.target')), th(t('lg.col.action')), th(t('lg.col.summary')), th(t('lg.col.actor')), th(t('lg.col.ip'))];
     }
@@ -355,13 +355,13 @@ export function render(el, ctx) {
   const tokPfx = (r) => (r.token_prefix ? `${r.token_prefix}…` : '');
   const stop = (e) => e.stopPropagation();
   const tokenLink = (r) => (r.token_name
-    ? (r.token_id != null ? h('a', { class: 'link cell-link', href: `#/tokens?open=${r.token_id}`, title: `${t('lg.openToken')}: ${credText(r.token_name, tokPfx(r))}`, onclick: stop }, cred(r.token_name, tokPfx(r))) : cred(r.token_name, tokPfx(r)))
+    ? (r.token_id != null ? h('a', { class: 'link cell-link', href: `#/tokens?open=${r.token_id}`, title: `${t('lg.openToken')}${t('lg.labelSep')}${credText(r.token_name, tokPfx(r))}`, onclick: stop }, cred(r.token_name, tokPfx(r))) : cred(r.token_name, tokPfx(r)))
     : h('span', { class: 'muted' }, '—'));
   // "上游密钥 prod-01"; requests the gateway answered itself or rejected say so instead.
   const keyLink = (r) => {
     if (!r.key_name) return h('span', { class: 'muted' }, r.status && r.status < 400 ? t('lg5.local') : t('lg5.notForwarded'));
     const text = t('lg5.keyLine', { name: r.key_name });
-    return r.key_id != null ? h('a', { class: 'link cell-link', href: `#/keys?open=${r.key_id}`, title: `${t('lg.openKey')}: ${r.key_name}`, onclick: stop }, text) : h('span', null, text);
+    return r.key_id != null ? h('a', { class: 'link cell-link', href: `#/keys?open=${r.key_id}`, title: `${t('lg.openKey')}${t('lg.labelSep')}${r.key_name}`, onclick: stop }, text) : h('span', null, text);
   };
   // Today: "14:02:41", earlier: "10月18日 14:02" (pm-spec 10.3). Mixed views add the relative time below.
   // A chain's rows share created_at (the end of the client request); each shows its own start (v0.6.0).
@@ -453,7 +453,7 @@ export function render(el, ctx) {
       tr.append(timeCell(r),
         h('td', { class: 'cell-req m-title' }, reqLine(r)),
         h('td', { class: 'col-status m-badge' }, h('div', { class: `lg-sum ${isChainRow(r) && rr ? 'is-stacked' : ''}` }, statusBadge(r.status), tries(r),
-          h('span', { class: 'lg-sum-text', title: rr ? (rr.raw || rr.text) : null }, rr ? rr.text : okText(r, false)))),
+          h('span', { class: 'lg-sum-text', title: rr ? [rr.tip, rr.raw || rr.text].filter(Boolean).join('\n') : null }, rr ? rr.text : okText(r, false)))),
         h('td', { class: 'truncate-cell m-meta m-who' }, h('div', { class: 'truncate' }, tokenLink(r)), h('div', { class: 'cell-sub truncate' }, keyLink(r))),
         ...tokCells(r),
         h('td', { class: 'num mono m-meta col-cost' }, r.cost_usd ? fmtUSD(r.cost_usd) : h('span', { class: 'muted' }, r.status >= 400 || !r.status || isRetriedRow(r) ? '—' : '$0')),
@@ -464,7 +464,7 @@ export function render(el, ctx) {
         tr.append(timeCell(r), h('td', { class: 'col-type' }, typeTag('request', r.level)),
           h('td', { class: 'cell-req m-title' }, reqLine(r)),
           h('td', { class: 'cell-sum' }, h('div', { class: 'lg-sum' }, statusBadge(r.status), tries(r),
-            h('span', { class: 'lg-sum-text', title: rr ? (rr.raw || rr.text) : null }, rr ? rr.text : okText(r)))),
+            h('span', { class: 'lg-sum-text', title: rr ? [rr.tip, rr.raw || rr.text].filter(Boolean).join('\n') : null }, rr ? rr.text : okText(r)))),
           h('td', { class: 'truncate-cell m-meta' }, h('div', { class: 'truncate' }, tokenLink(r)), h('div', { class: 'cell-sub truncate' }, keyLink(r))),
           h('td', { class: 'num mono m-meta col-cost' }, h('div', null, r.cost_usd ? fmtUSD(r.cost_usd) : h('span', { class: 'muted' }, '—')), h('div', { class: 'cell-sub' }, fmtMs(r.latency_ms))));
       } else {

@@ -977,6 +977,7 @@ components:
         attempt_total: { type: integer, description: "Attempts of the client request (1 for older rows, WebSocket sessions, async polls and gateway refusals)" }
         attempt_final: { type: boolean, description: "The last attempt, which holds the request's outcome, usage and cost" }
         attempt_state: { type: string, enum: [single, final, retried], description: "single = the only attempt (always for rows before v0.6.0); final = the last of several; retried = an earlier attempt that failed and was retried" }
+        attempt_action: { type: string, enum: ["", success, return, retry, cooldown, disable, verify], description: "What the gateway did after this attempt: success or return (forwarded to the client), retry (next key), cooldown (key paused, next key), disable (key auto-disabled, next key), verify (key being checked, next key). Empty for rows before v0.6.0" }
         started_at: { type: string, format: date-time, description: "When this row's attempt started" }
         cache_write_tokens: { type: integer, nullable: true, description: "Only when the upstream reports it (Messages: cache_creation_input_tokens); xAI does not bill cache writes" }
         id: { type: integer }

@@ -200,8 +200,9 @@
 .lg5 .type-tag > span:last-child { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border-radius: var(--radius-xs); background: var(--tag-request-soft); color: var(--tag-request); }
 .lg5 .type-tag.type-audit > span:last-child { background: var(--tag-audit-soft); color: var(--tag-audit); }
 .lg5 .type-tag.type-system > span:last-child { background: var(--tag-system-soft); color: var(--tag-system); }
-.lg5 .table-ulog[data-mode="mixed"] .col-subj { width: 19%; }
-.lg5 .table-ulog[data-mode="mixed"] .col-who { width: 17%; }
+/* v0.6.1 (designer, PM 6.8): object 233px, summary 349px; who takes the rest */
+.lg5 .table-ulog[data-mode="mixed"] .col-subj { width: 233px; }
+.lg5 .table-ulog[data-mode="mixed"] .col-summ { width: 349px; }
 .lg5 .table-ulog[data-mode="mixed"] .col-cost { width: 96px; }
 .lg5 .table-ulog .req-line .path { font-size: 13px; color: var(--text); }
 .lg5 .table-ulog .method { font-size: 10.5px; color: var(--text-3); font-family: var(--font-mono); background: none; padding: 0; border: 0; }
@@ -211,7 +212,7 @@
 .lg5 .lg-sum-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .lg5 .table-ulog .col-cost, .lg5 .table-ulog .col-lat { font-family: var(--font-mono); }
 /* requests only: 10 columns, four token columns under one group header */
-.lg5 .table-ulog[data-mode="request"] .col-status { width: 208px; }
+.lg5 .table-ulog[data-mode="request"] .col-status { width: 182px; }
 .lg5 .table-ulog[data-mode="request"] .col-who { width: 196px; }
 .lg5 .table-ulog[data-mode="request"] .col-tk { width: 66px; padding-left: 4px; padding-right: 4px; }
 /* the token name stays readable; its prefix gives way first */
@@ -229,9 +230,9 @@
 .lg5 .col-tk .cell-sub { text-align: right; }
 /* requests only: token columns pinned narrow, the request column takes the rest (colgroup in logs.js) */
 .lg5 .table-ulog col.cg-time { width: 140px; }
-.lg5 .table-ulog col.cg-status { width: 208px; } /* v0.6.0: room for the k/n badge */
+.lg5 .table-ulog col.cg-status { width: 182px; } /* v0.6.1 W1: the request column keeps >= 233px at 1440; long reasons wrap */
 .lg5 .table-ulog col.cg-who { width: 184px; }
-.lg5 .table-ulog col.cg-tk { width: 61px; }
+.lg5 .table-ulog col.cg-tk { width: 66px; }
 .lg5 .table-ulog col.cg-cost { width: 84px; }
 .lg5 .table-ulog col.cg-lat { width: 112px; }
 /* request line: plain "POST /v1/…" text, method in the secondary color */

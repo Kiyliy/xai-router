@@ -199,6 +199,14 @@ export function attemptWhy(a) {
   return t('ld5.att.other', { c: s });
 }
 
+/** What a failed attempt did to its upstream key, for a tooltip: "prod-07 已自动禁用", "prod-03 已进入冷却"; '' otherwise. */
+export function keyEffectTip(keyName, action) {
+  const k = keyName || t('common.key');
+  if (action === 'disable') return t('lg6.keyDisabled', { k });
+  if (action === 'cooldown') return t('lg6.keyCooldown', { k });
+  return '';
+}
+
 /**
  * { text, raw, key, link?: { label, hash } } for a request row; null for a plain success.
  * A retried attempt reads "被限流，已重试" (pm-spec 10.9); the final row keeps its normal reason.
@@ -207,7 +215,7 @@ export function attemptWhy(a) {
 export function requestReason(r) {
   const raw = r.error || '';
   const s = r.status || 0;
-  if (isRetriedRow(r)) return { text: t('lg6.retried', { r: attemptWhy(r) }), raw, key: 'retried', retried: true };
+  if (isRetriedRow(r)) return { text: t('lg6.retried', { r: attemptWhy(r) }), raw, key: 'retried', retried: true, tip: keyEffectTip(r.key_name, r.attempt_action ?? r.action) };
   const k = (key, link) => ({ text: t(`rr.${key}`), raw, link, key });
   if (/no upstream API keys are available|no_upstream_keys/i.test(raw)) return k('noKeys', { label: t('rr.noKeysLink'), hash: '#/keys' });
   if (s === 429 && /quota/i.test(raw) && !/^HTTP/.test(raw)) return k('quota', r.token_id ? { label: t('rr.quotaLink'), hash: `#/tokens?open=${r.token_id}&adjust=1` } : null);

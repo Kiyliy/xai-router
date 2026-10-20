@@ -12,7 +12,7 @@ import { toast, toastError, badge, copyButton, busy, tabs, kv, statusCode, statu
 import { cred } from './detail-drawer.js';
 import {
   actionLabel, actorLabel, targetTypeLabel, targetText, targetHint, eventSentence, levelBadge, requestReason, tokenCats, usdT,
-  fieldLabel, fmtChangeValue, attemptWhy, isChainRow, isRetriedRow,
+  fieldLabel, fmtChangeValue, attemptWhy, isChainRow, isRetriedRow, keyEffectTip,
 } from './events.js';
 
 // Styles of the log page and drawers; linked here too in case index.html does not link them yet.
@@ -395,22 +395,22 @@ const chainPos = (d) => ({ k: d.attempt_index || 1, n: d.attempt_total || 1 });
 
 /**
  * Historical rows: "第 3 次尝试成功。前两次：prod-07 密钥无效（已自动禁用），prod-03 被限流（冷却 60 秒）。"
- * Chain rows (v0.6.0): "成功（第 3 次 / 共 3 次）。前两次：…" (Figma 14b).
+ * Chain rows (v0.6.0): "第 3 次尝试成功。前 2 次：prod-07 密钥无效（已自动禁用），prod-03 被限流。" (Figma 14b):
+ * an automatic disable is named in the sentence, a cooldown only in the attempt's tooltip (pm-spec 6.8).
  */
 function conclusion(d) {
   const chain = chainOf(d);
-  const prevText = (failed) => (failed.length ? t(failed.length === 1 ? 'ld5.prev1' : 'ld5.prevN', { n: failed.length }) + failed.map((a) => {
-    const eff = attemptEffect(a);
+  const prevText = (failed, disableOnly = false) => (failed.length ? t(failed.length === 1 ? 'ld5.prev1' : 'ld5.prevN', { n: failed.length }) + failed.map((a) => {
+    const eff = disableOnly && a.action !== 'disable' ? '' : attemptEffect(a);
     return `${attKey(a)} ${attemptWhy(a)}${eff ? t('ld5.paren', { x: eff }) : ''}`;
   }).join(t('lg.sep')) + t('ld5.stop') : '');
   if (chain.length) {
-    const { k, n } = chainPos(d);
-    const ofN = t('ld6.ofN', { k, n });
-    const prev = prevText(chain.filter((a) => (a.attempt_index || 0) < k && !isOk(a.status)));
-    if (isRetriedRow(d)) return { text: `${requestReason(d).text}${ofN}${t('ld5.stop')}${prev}`, tone: 'warning' };
+    const { k } = chainPos(d);
+    const prev = prevText(chain.filter((a) => (a.attempt_index || 0) < k && !isOk(a.status)), true);
+    if (isRetriedRow(d)) return { text: `${requestReason(d).text}${t('ld5.stop')}${prev}`, tone: 'warning' };
     if (isOk(d.status)) return { text: k > 1 ? `${t('lg5.okAttempt', { n: k })}${t('ld5.stop')}${prev}` : `${t('lg.ok')}${t('ld5.stop')}`, tone: prev ? 'warning' : 'success' };
     const r = requestReason(d);
-    return { text: `${r ? r.text : t('lg.failed')}${ofN}${t('ld5.stop')}${prev}`, tone: d.status >= 500 || !d.status ? 'danger' : 'warning', link: r && r.link };
+    return { text: `${r ? r.text : t('lg.failed')}${t('ld5.stop')}${prev}`, tone: d.status >= 500 || !d.status ? 'danger' : 'warning', link: r && r.link };
   }
   const at = attemptsOf(d);
   const failed = at.filter((a) => !isOk(a.status));
@@ -466,7 +466,7 @@ export function requestHead(d) {
     h('div', { class: 'ld5-meta' },
       m(t('logs.time'), h('span', { class: 'mono', title: relTime(d.created_at) }, fmtDateTime(isChainRow(d) && d.started_at ? d.started_at : d.created_at))),
       m(t('common.model'), d.model ? h('span', { class: 'mono' }, d.model, d.stream ? h('span', { class: 'stream-tag' }, t('lg.stream')) : null, d.websocket ? h('span', { class: 'stream-tag' }, 'WebSocket') : null) : null),
-      m(t('ld5.token'), d.token_name ? (d.token_id != null ? navLink(d.token_name, `#/tokens?open=${d.token_id}`, `${t('lg.openToken')}: ${d.token_name} ${tokPfx}`) : d.token_name) : null),
+      m(t('ld5.token'), d.token_name ? (d.token_id != null ? navLink(d.token_name, `#/tokens?open=${d.token_id}`, `${t('lg.openToken')}${t('lg.labelSep')}${d.token_name} ${tokPfx}`) : d.token_name) : null),
       m(t('common.key'), d.key_name ? (d.key_id != null ? navLink(d.key_name, `#/keys?open=${d.key_id}`, t('lg.openKey')) : d.key_name) : null)),
     h('div', { class: 'ld5-meta ld5-meta2' },
       m(t('logs.requestId'), idv(d.request_id, t('logs.copyReqId'))),
@@ -562,7 +562,7 @@ function chainView(d, ctx) {
     const ok = isOk(a.status);
     const retried = a.attempt_state === 'retried' || (a.attempt_state == null && i < chain.length - 1);
     const v = ok ? 'ok' : retried ? 'warn' : 'err';
-    const eff = retried ? attemptEffect(a) : '';
+    const eff = retried ? keyEffectTip(a.key_name, a.action) : '';
     const reason = ok ? t('lg.ok')
       : retried ? t('lg6.retried', { r: attemptWhy(a) })
         : ((requestReason({ status: a.status, error: a.error }) || {}).text || t('lg.failed'));
@@ -579,7 +579,7 @@ function chainView(d, ctx) {
       h('span', { class: 'ld6-n' }, t('ld6.attemptItem', { k: a.attempt_index || i + 1 })),
       h('span', { class: 'ld6-key mono', title: a.key_name || null }, attKey(a)),
       statusCode(a.status),
-      h('span', { class: 'ld6-why', title: [eff, a.error].filter(Boolean).join(t('lg.sep')) || null }, reason),
+      h('span', { class: 'ld6-why', title: [eff, a.error].filter(Boolean).join('\n') || null }, reason),
       cur ? h('span', { class: 'ld6-cur' }, t('ld6.current')) : null,
       h('span', { class: 'ld6-ms mono' }, fmtMs(a.latency_ms))),
     h('div', { class: 'ld5-track' }, h('div', { class: `ld5-wf is-${v}`, style: { left: `${left}%`, width: `${width}%` } }, h('span', { class: 'ld5-wf-ttfb', style: { width: `${ttfbW}%` } }))));

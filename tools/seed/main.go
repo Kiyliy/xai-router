@@ -187,6 +187,9 @@ func main() {
 		var u billing.Usage
 		var req billing.Request
 		ok := l.Status == 200 || l.Status == 202
+		if !ok {
+			l.TTFBMs = 0 // an error response has no first token
+		}
 		switch {
 		case ep.kind == "list":
 			l.RespBody = `{"object":"list","data":[{"id":"grok-4.3","object":"model"}]}`
@@ -242,16 +245,18 @@ func main() {
 			k := keyIDs[(ki+a)%len(keyIDs)]
 			kn := keyNames[(ki+a)%len(keyNames)]
 			st, act, msg := 503, "retry", "HTTP 503: upstream unavailable"
-			switch r.IntN(4) {
+			switch r.IntN(5) {
 			case 0:
 				st, act, msg = 429, "cooldown", "rate limited (429): slow down"
+			case 3:
+				st, act, msg = 401, "disable", "HTTP 401: Incorrect API key provided"
 			case 1:
 				st, msg = 500, "HTTP 500: internal"
 			case 2:
 				st, msg = 502, "network error: connection reset by peer"
 			}
 			lat := int64(30 + r.IntN(900))
-			att := store.Attempt{Seq: a, KeyID: k, KeyName: kn, Status: st, Error: msg, Action: act, TTFBMs: lat,
+			att := store.Attempt{Seq: a, KeyID: k, KeyName: kn, Status: st, Error: msg, Action: act,
 				LatencyMs: lat, StartedAt: at, LogStatus: st,
 				RespHeaders: `{"Content-Type":"application/json"}`, RespBody: `{"error":"` + msg + `"}`}
 			if st == 502 {
@@ -268,7 +273,9 @@ func main() {
 			Action: act, TTFBMs: l.TTFBMs, LatencyMs: l.LatencyMs, StartedAt: at})
 		// The client request lasted from its start to the end of the final
 		// attempt.
-		l.TTFBMs += at - created
+		if l.TTFBMs > 0 {
+			l.TTFBMs += at - created
+		}
 		l.LatencyMs += at - created
 		rows += attempts
 		buf = append(buf, l)

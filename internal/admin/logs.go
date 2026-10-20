@@ -35,6 +35,7 @@ func logSummaryJSON(l *store.Log) map[string]any {
 		"cache_write_tokens": l.CacheWriteTokens, // null: the upstream did not report it
 		"attempt_index":      max(l.AttemptIndex, 1), "attempt_total": max(l.AttemptTotal, 1),
 		"attempt_final": l.AttemptFinal || l.AttemptTotal <= 1, "attempt_state": l.AttemptState(),
+		"attempt_action": l.AttemptAction,
 	}
 }
 
