@@ -65,7 +65,7 @@ const evaluate = async (expression) => {
 
 try {
   let target;
-  for (let i = 0; i < 50 && !target; i++) {
+  for (let i = 0; i < 150 && !target; i++) { // up to 30 s: CI runners can be slow to start Chrome
     await sleep(200);
     try { target = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((t) => t.type === 'page'); } catch { /* starting */ }
   }
