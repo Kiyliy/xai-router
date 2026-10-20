@@ -236,6 +236,7 @@ func TestAdminTokensAndSessions(t *testing.T) {
 	if err != nil || got.ID != at.ID || got.Name != "ci" {
 		t.Fatalf("by hash: %+v %v", got, err)
 	}
+	db.touches.Wait() // last_used_at is updated in the background
 	ts, _ := db.ListAdminTokens(ctx)
 	if len(ts) != 2 || ts[0].LastUsedAt == 0 {
 		t.Fatalf("list / last used: %+v", ts)

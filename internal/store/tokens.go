@@ -356,7 +356,7 @@ func (db *DB) GetAdminTokenByHash(ctx context.Context, hash string) (*AdminToken
 		return nil, err
 	}
 	if now := NowMs(); now-t.LastUsedAt > 60_000 {
-		_, _ = db.W.ExecContext(ctx, `UPDATE admin_tokens SET last_used_at=? WHERE id=?`, now, t.ID)
+		db.touch(`UPDATE admin_tokens SET last_used_at=? WHERE id=?`, now, t.ID)
 	}
 	return &t, nil
 }
@@ -400,14 +400,37 @@ func (db *DB) GetSession(ctx context.Context, hash string, ttlMs int64) (int64, 
 	}
 	now := NowMs()
 	if exp < now {
-		_, _ = db.W.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash = ?`, hash)
+		db.touch(`DELETE FROM sessions WHERE token_hash = ?`, hash)
 		return 0, ErrNotFound
 	}
 	if now-seen > 3600_000 {
 		exp = now + ttlMs
-		_, _ = db.W.ExecContext(ctx, `UPDATE sessions SET last_seen_at=?, expires_at=? WHERE token_hash=?`, now, exp, hash)
+		db.touch(`UPDATE sessions SET last_seen_at=?, expires_at=? WHERE token_hash=?`, now, exp, hash)
 	}
 	return exp, nil
+}
+
+// touchSlots bounds concurrent best-effort bookkeeping writes.
+const touchSlots = 4
+
+// touch runs a best-effort bookkeeping write (last-used times, session
+// expiry) in the background with a short timeout, so authenticating to the
+// admin API never waits for the single write connection (which a long
+// VACUUM or purge may hold). When the write is busy, the update is skipped:
+// it is repeated on a later request.
+func (db *DB) touch(query string, args ...any) {
+	select {
+	case db.touchSem <- struct{}{}:
+	default:
+		return // enough updates already waiting
+	}
+	db.touches.Add(1)
+	go func() {
+		defer func() { <-db.touchSem; db.touches.Done() }()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = db.W.ExecContext(ctx, query, args...)
+	}()
 }
 
 // DeleteSession removes one session.

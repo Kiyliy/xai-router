@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver
@@ -32,6 +33,9 @@ type DB struct {
 	Path string
 	bind *bindingCache // write-behind cache for bindings (see bindings.go)
 	toks tokenCache    // client tokens by hash, for request authentication (see tokens.go)
+
+	touchSem chan struct{}  // best-effort bookkeeping writes in flight (see touch)
+	touches  sync.WaitGroup // waited for by Close
 }
 
 // Open opens (creating if needed) the database at path and runs migrations.
@@ -68,7 +72,7 @@ func Open(path string) (*DB, error) {
 		return nil, err
 	}
 	r.SetMaxOpenConns(8)
-	db := &DB{W: w, R: r, Path: path}
+	db := &DB{W: w, R: r, Path: path, touchSem: make(chan struct{}, touchSlots)}
 	if path == ":memory:" {
 		// Keep a single connection for reads too: shared cache across pools is
 		// flaky with table locks, and tests do not need read concurrency.
@@ -84,6 +88,7 @@ func Open(path string) (*DB, error) {
 
 // Close closes both pools.
 func (db *DB) Close() error {
+	db.touches.Wait() // each has a short timeout
 	if db.bind != nil {
 		db.bind.close() // persist queued bindings first
 		db.bind = nil

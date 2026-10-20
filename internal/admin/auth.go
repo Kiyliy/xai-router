@@ -34,15 +34,23 @@ func EnsurePassword(ctx context.Context, db *store.DB, envPassword string) (gene
 }
 
 // ResetPassword replaces the admin password with a generated one and revokes
-// all sessions. The console then asks for a password change.
-func ResetPassword(ctx context.Context, db *store.DB, pw string) error {
+// all sessions and, unless keepAdminTokens is set, all admin API tokens: a
+// recovery must also cut off a leaked token. The console then asks for a
+// password change.
+func ResetPassword(ctx context.Context, db *store.DB, pw string, keepAdminTokens bool) error {
 	if err := db.SetMeta(ctx, MetaPassword, secret.HashPassword(pw)); err != nil {
 		return err
 	}
 	if err := db.SetMeta(ctx, MetaPasswordGenerated, "1"); err != nil {
 		return err
 	}
-	return db.DeleteSessionsExcept(ctx, "")
+	if err := db.DeleteSessionsExcept(ctx, ""); err != nil {
+		return err
+	}
+	if keepAdminTokens {
+		return nil
+	}
+	return db.DeleteAllAdminTokens(ctx)
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {

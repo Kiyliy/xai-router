@@ -34,7 +34,9 @@ const usage = `xai-router — a gateway for the xAI (Grok) API
 
 Usage:
   xai-router                    start the server
-  xai-router reset-password     set a new random admin password and print it
+  xai-router reset-password     set a new random admin password and print it; signs out
+                                all sessions and revokes all admin API tokens
+                                (--keep-admin-tokens keeps the tokens)
   xai-router version            print version information
   xai-router healthcheck        probe /healthz of a running server (for containers)
 
@@ -55,7 +57,7 @@ func main() {
 			fmt.Printf("xai-router %s (commit %s, built %s)\n", version, commit, date)
 			return
 		case "reset-password":
-			if err := resetPassword(); err != nil {
+			if err := resetPassword(os.Args[2:]); err != nil {
 				fmt.Fprintln(os.Stderr, "error:", err)
 				os.Exit(1)
 			}
@@ -154,8 +156,12 @@ func run() error {
 		log.Warn("graceful shutdown timed out", "err", err)
 	}
 	// WebSocket sessions are hijacked connections that Shutdown does not
-	// track: close them and wait for their logs.
-	a.Proxy.CloseWebSockets(shutCtx)
+	// track: close them and wait for their logs. This has its own budget:
+	// when Shutdown used all of shutCtx (a stream longer than 90 s), the
+	// sessions must still be logged and billed before the database closes.
+	wsCtx, wsCancel := context.WithTimeout(context.Background(), wsCloseBudget)
+	a.Proxy.CloseWebSockets(wsCtx)
+	wsCancel()
 	lifecycle("system.stop")
 	if err := a.Close(); err != nil {
 		return err
@@ -164,7 +170,19 @@ func run() error {
 	return nil
 }
 
-func resetPassword() error {
+// wsCloseBudget bounds the wait for closed WebSocket sessions' final logs.
+const wsCloseBudget = 15 * time.Second
+
+func resetPassword(args []string) error {
+	keep := false
+	for _, a := range args {
+		switch a {
+		case "--keep-admin-tokens", "-keep-admin-tokens":
+			keep = true
+		default:
+			return fmt.Errorf("unknown option %q (reset-password accepts --keep-admin-tokens)", a)
+		}
+	}
 	env, err := config.LoadEnv()
 	if err != nil {
 		return err
@@ -175,11 +193,16 @@ func resetPassword() error {
 	}
 	defer db.Close()
 	pw := secret.Random(20)
-	if err := admin.ResetPassword(context.Background(), db, pw); err != nil {
+	if err := admin.ResetPassword(context.Background(), db, pw, keep); err != nil {
 		return err
 	}
 	fmt.Println("New admin password:", pw)
-	fmt.Println("All sessions were signed out. Change the password in the console under Admin access.")
+	if keep {
+		fmt.Println("All sessions were signed out; admin API tokens were kept.")
+	} else {
+		fmt.Println("All sessions were signed out and all admin API tokens (xra-…) were revoked.")
+	}
+	fmt.Println("Change the password in the console under Admin access.")
 	return nil
 }
 

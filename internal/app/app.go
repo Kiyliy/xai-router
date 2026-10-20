@@ -332,13 +332,16 @@ func (a *App) syncDue(ctx context.Context, every time.Duration) bool {
 	return time.Since(last.At) >= every
 }
 
-// Close stops workers, flushes logs and closes the database.
+// Close stops workers, flushes logs and closes the database. Logs that
+// arrive after that (a request that outlived the shutdown budget) are
+// reported as lost rather than written to the closed database.
 func (a *App) Close() error {
 	if a.cancel != nil {
 		a.cancel()
-		a.wg.Wait()
+		a.wg.Wait() // the log writer has drained its queue and retries
 	} else {
 		_ = a.Logs.Flush(context.Background())
 	}
+	a.Logs.Close()
 	return a.DB.Close()
 }

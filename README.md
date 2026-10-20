@@ -163,7 +163,8 @@ timeouts, body limits, log retention, sync interval, trusted proxies…) is edit
 | `XR_LOG_FORMAT` | `text` | `text` or `json` |
 
 Forgot the password? `xai-router reset-password` (or `docker compose exec xai-router
-xai-router reset-password`) prints a new one and signs everyone out.
+xai-router reset-password`) prints a new one, signs everyone out and revokes all admin API
+tokens (`xra-…`), so a leaked token loses access too. Add `--keep-admin-tokens` to keep them.
 
 ### Upgrading
 

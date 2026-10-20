@@ -160,11 +160,23 @@ func TestEnsureAndResetPassword(t *testing.T) {
 	if err := db.CreateSession(ctx, "s1", store.NowMs()+1000_000); err != nil {
 		t.Fatal(err)
 	}
-	if err := ResetPassword(ctx, db, "new-password-1"); err != nil {
+	if err := db.CreateAdminToken(ctx, &store.AdminToken{Name: "leaked", Hash: "ah-leaked"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ResetPassword(ctx, db, "pw-keep-tokens", true); err != nil {
+		t.Fatal(err)
+	}
+	if ts, _ := db.ListAdminTokens(ctx); len(ts) != 1 {
+		t.Fatalf("--keep-admin-tokens revoked tokens: %d left", len(ts))
+	}
+	if err := ResetPassword(ctx, db, "new-password-1", false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.GetSession(ctx, "s1", 1000); err == nil {
 		t.Fatal("sessions survived a reset")
+	}
+	if ts, _ := db.ListAdminTokens(ctx); len(ts) != 0 {
+		t.Fatalf("admin tokens survived a reset: %d", len(ts))
 	}
 	hash, _ := db.GetMeta(ctx, MetaPassword)
 	if !secret.CheckPassword("new-password-1", hash) {
@@ -174,7 +186,7 @@ func TestEnsureAndResetPassword(t *testing.T) {
 	if _, err := EnsurePassword(ctx, db, "x"); err == nil {
 		t.Fatal("closed database should fail")
 	}
-	if err := ResetPassword(ctx, db, "x"); err == nil {
+	if err := ResetPassword(ctx, db, "x", false); err == nil {
 		t.Fatal("closed database should fail")
 	}
 }

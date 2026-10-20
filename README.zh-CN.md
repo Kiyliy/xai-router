@@ -131,7 +131,8 @@ XR_ADMIN_PASSWORD='换成强密码' ./xai-router
 | `XR_LOG_FORMAT` | `text` | `text` 或 `json` |
 
 忘记密码：执行 `xai-router reset-password`（Docker 下用 `docker compose exec xai-router xai-router reset-password`），
-会打印新密码并让所有会话下线。
+会打印新密码、让所有会话下线，并吊销所有管理 API 令牌（`xra-…`），泄露的令牌也随之失效。
+加 `--keep-admin-tokens` 可保留这些令牌。
 
 ### 升级
 
