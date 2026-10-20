@@ -12,7 +12,8 @@ import (
 	"github.com/Kiyliy/xai-router/internal/store"
 )
 
-// seedLogs inserts three logs and returns them (with ids).
+// seedLogs inserts three client requests (four rows: req-1 is retried once)
+// and returns them (with the ids of their final rows).
 func seedLogs(t *testing.T, h *harness) (*store.Key, *store.Token, []*store.Log) {
 	t.Helper()
 	ctx := context.Background()
@@ -32,8 +33,9 @@ func seedLogs(t *testing.T, h *harness) (*store.Key, *store.Token, []*store.Log)
 			HasBodies: true, Truncated: true,
 			ReqHeaders: `{"Anthropic-Version":"2023-06-01","Authorization":"Bearer sk-xr-…abcd","Content-Type":"application/json"}`,
 			ReqBody:    `{"msg":"it's"}`, RespHeaders: `{"X-Up":"1"}`, RespBody: "ok", RespText: "hi",
-			Attempts: []store.Attempt{{Seq: 1, KeyID: k.ID, KeyName: "kA", Status: 500, Action: "retry", StartedAt: now},
-				{Seq: 2, KeyID: k.ID, KeyName: "kA", Status: 200, Action: "success", StartedAt: now}}},
+			Attempts: []store.Attempt{{Seq: 1, KeyID: k.ID, KeyName: "kA", Status: 500, Action: "retry", StartedAt: now - 1000,
+				Error: "boom", RespBody: `{"error":"boom"}`, RespHeaders: `{"X-Up":"0"}`},
+				{Seq: 2, KeyID: k.ID, KeyName: "kA", Status: 200, Action: "success", StartedAt: now - 990}}},
 		{RequestID: "req-2", CreatedAt: now - 500, Method: "GET", Path: "/v1/models", Status: 500, Error: "upstream exploded",
 			KeyID: 999, KeyName: "gone", CostSource: "none"},
 		{RequestID: "req-3", CreatedAt: now, Method: "GET", Path: "/v1/realtime", Status: 101, WS: true,
@@ -49,21 +51,42 @@ func TestLogsAPI(t *testing.T) {
 	h := newHarness(t)
 	k, tok, logs := seedLogs(t, h)
 	ls := h.must(h.call(http.MethodGet, "/api/v1/logs", ""), 200)
-	if num(ls["total"]) != 3 || list(ls)[0]["request_id"] != "req-3" {
+	if num(ls["total"]) != 4 || list(ls)[0]["request_id"] != "req-3" {
 		t.Fatalf("list: %v", ls)
 	}
+	// Rows of the chain: the final row first (newest first), then the retried one.
+	rows := list(ls)
+	rowsF, rowsR := rows[2], rows[3]
+	if rowsF["request_id"] != "req-1" || rowsF["attempt_state"] != "final" || num(rowsF["attempt_index"]) != 2 ||
+		num(rowsF["attempt_total"]) != 2 || rowsF["attempt_final"] != true || rowsF["level"] != "info" {
+		t.Fatalf("final row: %v", rowsF)
+	}
+	if rowsR["request_id"] != "req-1" || rowsR["attempt_state"] != "retried" || num(rowsR["attempt_index"]) != 1 ||
+		rowsR["attempt_final"] != false || rowsR["level"] != "warn" || num(rowsR["status"]) != 500 || rowsR["cost_usd"] != 0.0 {
+		t.Fatalf("retried row: %v", rowsR)
+	}
+	if rows[0]["attempt_state"] != "single" || rows[1]["attempt_state"] != "single" || rows[1]["level"] != "error" {
+		t.Fatalf("single rows: %v %v", rows[0], rows[1])
+	}
 	filters := map[string]int64{
-		"status=5xx":           1,
-		"status=500":           1,
+		"status=5xx":           2,
+		"status=500":           2,
 		"status=2xx":           1,
-		"model=grok-4.5":       1,
-		"path=/v1/chat":        1,
+		"model=grok-4.5":       2,
+		"path=/v1/chat":        2,
 		"q=req-2":              1,
+		"q=req-1":              2,
 		"q=exploded":           1,
-		"key_id=" + itoa(k.ID): 1,
-		"token_id=" + itoa(tok.ID) + "&from=" + itoa(logs[0].CreatedAt/1000-5): 2,
+		"key_id=" + itoa(k.ID): 2,
+		"token_id=" + itoa(tok.ID) + "&from=" + itoa(logs[0].CreatedAt/1000-5): 3,
 		"to=" + itoa(logs[0].CreatedAt):                                        1,
-		"from=2000-01-01":                                                      3,
+		"from=2000-01-01":                                                      4,
+		"attempts=all":                                                         4,
+		"attempts=final":                                                       3,
+		"attempts=final&status=5xx":                                            1,
+		"attempts=final&key_id=" + itoa(k.ID):                                  1,
+		"attempts=final&model=grok-4.5":                                        1,
+		"attempts=final&q=req-1":                                               1,
 	}
 	for q, want := range filters {
 		if got := h.must(h.call(http.MethodGet, "/api/v1/logs?"+q, ""), 200); num(got["total"]) != want {
@@ -75,23 +98,59 @@ func TestLogsAPI(t *testing.T) {
 			t.Fatalf("%s: %d", q, r.status)
 		}
 	}
+	if r := h.call(http.MethodGet, "/api/v1/logs?attempts=some", ""); r.status != 400 || r.code(t) != "invalid_attempts" {
+		t.Fatalf("bad attempts: %d", r.status)
+	}
+	if fl := list(h.must(h.call(http.MethodGet, "/api/v1/logs?attempts=final", ""), 200)); len(fl) != 3 || num(fl[2]["id"]) != logs[0].ID {
+		t.Fatalf("attempts=final: %v", fl)
+	}
 
 	d := h.must(h.call(http.MethodGet, "/api/v1/logs/"+itoa(logs[0].ID), ""), 200)
 	if d["request_body"] != `{"msg":"it's"}` || d["response_text"] != "hi" || d["query"] != "a=1" || d["truncated"] != true {
 		t.Fatalf("detail: %v", d)
 	}
-	if at := d["upstream_attempts"].([]any); len(at) != 2 || num(at[0].(map[string]any)["status"]) != 500 {
+	// New rows have no nested attempts: the chain lists the rows.
+	if at := d["upstream_attempts"].([]any); len(at) != 0 {
 		t.Fatalf("attempts: %v", d["upstream_attempts"])
+	}
+	chain := d["chain"].([]any)
+	if len(chain) != 2 {
+		t.Fatalf("chain: %v", chain)
+	}
+	c0, c1 := chain[0].(map[string]any), chain[1].(map[string]any)
+	if num(c0["attempt_index"]) != 1 || c0["attempt_state"] != "retried" || num(c0["status"]) != 500 || c0["action"] != "retry" ||
+		c0["error"] != "boom" || num(c0["key_id"]) != k.ID || c0["key_name"] != "kA" || c0["cost_usd"] != 0.0 || c0["created_at"] == nil ||
+		num(c1["id"]) != logs[0].ID || c1["attempt_state"] != "final" || c1["action"] != "success" || c1["cost_usd"] != 1e-7 {
+		t.Fatalf("chain: %v", chain)
+	}
+	if num(d["request_body_from"]) != num(c0["id"]) {
+		t.Fatalf("request_body_from: %v", d["request_body_from"])
+	}
+	// The retried row: its own response; the request body read from row 1
+	// (itself); no request_body_from.
+	r0 := h.must(h.call(http.MethodGet, "/api/v1/logs/"+itoa(num(c0["id"])), ""), 200)
+	if r0["request_body"] != `{"msg":"it's"}` || r0["request_body_from"] != nil || r0["response_body"] != `{"error":"boom"}` ||
+		r0["level"] != "warn" || len(r0["chain"].([]any)) != 2 || r0["price_snapshot"] != nil {
+		t.Fatalf("retried detail: %v", r0)
+	}
+	if hd := r0["response_headers"].(map[string]any); hd["X-Up"] != "0" {
+		t.Fatalf("retried row headers: %v", hd)
 	}
 	if hd := d["request_headers"].(map[string]any); hd["Content-Type"] != "application/json" {
 		t.Fatalf("headers: %v", hd)
 	}
-	if num(d["attempts"]) != 2 || num(d["token_id"]) != tok.ID || d["websocket"] != false {
+	if num(d["attempts"]) != 1 || num(d["token_id"]) != tok.ID || d["websocket"] != false {
 		t.Fatalf("summary: %v", d)
 	}
 	ws := h.must(h.call(http.MethodGet, "/api/v1/logs/"+itoa(logs[2].ID), ""), 200)
 	if s, _ := ws["websocket_session"].(map[string]any); s == nil || s["closed_by"] != "client" || ws["key_id"] != nil {
 		t.Fatalf("ws detail: %v", ws)
+	}
+	if ex, _ := ws["extra"].(map[string]any); ex["closed_by"] != "client" || len(ws["chain"].([]any)) != 0 {
+		t.Fatalf("ws extra / chain: %v", ws)
+	}
+	if d2 := h.must(h.call(http.MethodGet, "/api/v1/logs/"+itoa(logs[1].ID), ""), 200); d2["extra"] != nil {
+		t.Fatalf("extra of a plain row: %v", d2["extra"])
 	}
 	if r := h.call(http.MethodGet, "/api/v1/logs/99999", ""); r.status != 404 {
 		t.Fatalf("missing: %d", r.status)
@@ -135,7 +194,7 @@ func TestLogsAPI(t *testing.T) {
 		}
 	}
 	del := h.must(h.call(http.MethodDelete, "/api/v1/logs?wait=true&before="+itoa(logs[1].CreatedAt), ""), 200)
-	if num(del["deleted"]) != 1 {
+	if num(del["deleted"]) != 2 {
 		t.Fatalf("delete: %v", del)
 	}
 	// The synchronous purge is recorded with its cutoff and count.
@@ -143,7 +202,7 @@ func TestLogsAPI(t *testing.T) {
 	if len(pe) != 1 {
 		t.Fatalf("purge events %v", pe)
 	}
-	if res := pe[0]["detail"].(map[string]any)["result"].(map[string]any); num(res["deleted"]) != 1 || res["before"] == nil {
+	if res := pe[0]["detail"].(map[string]any)["result"].(map[string]any); num(res["deleted"]) != 2 || res["before"] == nil {
 		t.Fatalf("purge record %v", pe[0])
 	}
 	if ls = h.must(h.call(http.MethodGet, "/api/v1/logs", ""), 200); num(ls["total"]) != 2 {
@@ -155,7 +214,8 @@ func TestStatsAPI(t *testing.T) {
 	h := newHarness(t)
 	seedLogs(t, h)
 	ov := h.must(h.call(http.MethodGet, "/api/v1/stats/overview", ""), 200)
-	if num(ov["requests"]) != 3 || num(ov["success"])+num(ov["errors"]) != 3 || ov["range"] != "24h" || ov["cost_usd"] != 1e-7 {
+	// Stats count rows: req-1's retried attempt is a request (and an error).
+	if num(ov["requests"]) != 4 || num(ov["success"]) != 2 || num(ov["errors"]) != 2 || ov["range"] != "24h" || ov["cost_usd"] != 1e-7 {
 		t.Fatalf("overview: %v", ov)
 	}
 	if keys := ov["keys"].(map[string]any); num(keys["total"]) != 1 || num(keys["active"]) != 1 {
@@ -219,7 +279,7 @@ func TestStatsAPI(t *testing.T) {
 	}
 	for _, c := range cases {
 		s := series(c.q)
-		if s["interval"] != c.interval || len(s["buckets"].([]any)) < c.buckets || total(s) != 3 {
+		if s["interval"] != c.interval || len(s["buckets"].([]any)) < c.buckets || total(s) != 4 {
 			t.Errorf("%q: interval %v, %d buckets, %d requests", c.q, s["interval"], len(s["buckets"].([]any)), total(s))
 		}
 	}

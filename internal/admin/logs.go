@@ -31,9 +31,38 @@ func logSummaryJSON(l *store.Log) map[string]any {
 		"prompt_tokens": l.PromptTokens, "completion_tokens": l.CompletionTokens, "cached_tokens": l.CachedTokens,
 		"reasoning_tokens": l.ReasoningTokens, "image_tokens": l.ImageTokens, "total_tokens": l.TotalTokens,
 		"images": l.Images, "video_seconds": l.VideoSeconds, "cost_usd": usd(l.CostTicks), "cost_source": l.CostSource,
-		"websocket": l.WS, "type": "request", "level": requestLevel(l.Status),
+		"websocket": l.WS, "type": "request", "level": logLevel(l),
 		"cache_write_tokens": l.CacheWriteTokens, // null: the upstream did not report it
+		"attempt_index":      max(l.AttemptIndex, 1), "attempt_total": max(l.AttemptTotal, 1),
+		"attempt_final": l.AttemptFinal || l.AttemptTotal <= 1, "attempt_state": l.AttemptState(),
 	}
+}
+
+// logLevel is a log row's level: an attempt that failed and was retried is
+// a warning, the failed last attempt of a retried request an error, and a
+// single attempt follows its status (requestLevel).
+func logLevel(l *store.Log) string {
+	switch l.AttemptState() {
+	case "retried":
+		return store.LevelWarn
+	case "final":
+		if !l.Success() {
+			return store.LevelError
+		}
+	}
+	return requestLevel(l.Status)
+}
+
+// chainEntryJSON summarises one row of a retry chain.
+func chainEntryJSON(l *store.Log) map[string]any {
+	var keyID any
+	if l.KeyID != 0 {
+		keyID = l.KeyID
+	}
+	return map[string]any{"id": l.ID, "attempt_index": l.AttemptIndex, "attempt_total": l.AttemptTotal,
+		"attempt_state": l.AttemptState(), "key_id": keyID, "key_name": l.KeyName, "status": l.Status,
+		"error": l.Error, "action": l.AttemptAction, "ttfb_ms": l.TTFBMs, "latency_ms": l.LatencyMs,
+		"created_at": msTime(l.CreatedAt), "cost_usd": usd(l.CostTicks)}
 }
 
 func headersMap(s string) map[string]string {
@@ -81,6 +110,14 @@ func (s *Server) listLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	f := store.LogFilter{Model: q.Get("model"), Status: q.Get("status"), Path: q.Get("path"), Q: strings.TrimSpace(q.Get("q")),
 		Problems: q.Get("problems") == "1" || q.Get("problems") == "true", Limit: p.size, Offset: p.offset()}
+	switch q.Get("attempts") {
+	case "", "all":
+	case "final":
+		f.FinalOnly = true // the last row of each client request
+	default:
+		writeErr(w, http.StatusBadRequest, "invalid_attempts", "attempts must be all or final")
+		return
+	}
 	var err error
 	if f.From, err = parseTimeParam(q.Get("from")); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_time", err.Error())
@@ -116,7 +153,7 @@ func (s *Server) listLogs(w http.ResponseWriter, r *http.Request) {
 	case f.TokenID != 0:
 		ef.TargetType, ef.TargetID = "token", strconv.FormatInt(f.TokenID, 10)
 	}
-	if f.Model != "" || f.Status != "" || f.Path != "" { // request-only filters leave events out
+	if f.Model != "" || f.Status != "" || f.Path != "" || f.FinalOnly { // request-only filters leave events out
 		ef.Kinds = nil
 	}
 	wantEvents := len(ef.Kinds) > 0
@@ -270,6 +307,31 @@ func (s *Server) getLog(w http.ResponseWriter, r *http.Request) {
 		attempts = append(attempts, map[string]any{"seq": a.Seq, "key_id": kid, "key_name": a.KeyName,
 			"status": a.Status, "error": a.Error, "action": a.Action, "ttfb_ms": a.TTFBMs,
 			"latency_ms": a.LatencyMs, "started_at": msTime(a.StartedAt)})
+	}
+	// The rows of the same client request (its upstream attempts), when
+	// there are several; a single attempt has none.
+	chain := []map[string]any{}
+	if l.AttemptTotal > 1 {
+		rows, err := s.DB.LogChain(r.Context(), l.RequestID)
+		if err != nil {
+			s.internalErr(w, err)
+			return
+		}
+		for _, c := range rows {
+			chain = append(chain, chainEntryJSON(c))
+		}
+	}
+	out["chain"] = chain
+	if l.ReqBodyFrom != 0 && l.ReqBodyFrom != l.ID {
+		out["request_body_from"] = l.ReqBodyFrom
+	} else {
+		out["request_body_from"] = nil
+	}
+	var extra map[string]any
+	if l.Extra != "" && json.Unmarshal([]byte(l.Extra), &extra) == nil {
+		out["extra"] = extra
+	} else {
+		out["extra"] = nil
 	}
 	out["query"] = l.Query
 	out["user_agent"] = l.UserAgent

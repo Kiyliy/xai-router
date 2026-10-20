@@ -333,6 +333,11 @@ type logRow struct {
 	Status           int     `json:"status"`
 	Stream           bool    `json:"stream"`
 	Attempts         int     `json:"attempts"`
+	AttemptIndex     int     `json:"attempt_index"`
+	AttemptTotal     int     `json:"attempt_total"`
+	AttemptState     string  `json:"attempt_state"`
+	RequestID        string  `json:"request_id"`
+	Level            string  `json:"level"`
 	KeyName          string  `json:"key_name"`
 	PromptTokens     int64   `json:"prompt_tokens"`
 	CompletionTokens int64   `json:"completion_tokens"`
@@ -347,8 +352,16 @@ type logRow struct {
 	LatencyMs        int64   `json:"latency_ms"`
 }
 
-// waitLogs polls until at least n logs exist and returns them newest first.
+// waitLogs polls until at least n client requests are logged and returns
+// their final rows (attempts=final), newest first.
 func (e *env) waitLogs(n int) []logRow {
+	e.t.Helper()
+	return e.waitRows(n, "attempts=final")
+}
+
+// waitRows polls until at least n log rows match the filter and returns
+// them newest first.
+func (e *env) waitRows(n int, filter string) []logRow {
 	e.t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -356,7 +369,7 @@ func (e *env) waitLogs(n int) []logRow {
 			Data  []logRow
 			Total int
 		}
-		e.api("GET", "/api/v1/logs?page_size=100", nil, 200, &page)
+		e.api("GET", "/api/v1/logs?page_size=100&"+filter, nil, 200, &page)
 		if page.Total >= n {
 			return page.Data
 		}
@@ -375,29 +388,39 @@ func TestFailoverAcrossKeys(t *testing.T) {
 	e.proxy("POST", "/v1/chat/completions", map[string]any{"model": "grok-build-0.1",
 		"messages": []map[string]string{{"role": "user", "content": "hi"}}}, 200, &resp)
 
-	logs := e.waitLogs(1)
-	l := logs[0]
-	if l.Status != 200 || l.Attempts != 4 || l.KeyName != "k4" {
+	// v0.6.0: one log row per upstream attempt, sharing the request id.
+	rows := e.waitRows(4, "")
+	l := rows[0]
+	if l.Status != 200 || l.Attempts != 1 || l.KeyName != "k4" || l.AttemptIndex != 4 || l.AttemptTotal != 4 ||
+		l.AttemptState != "final" || l.Level != "info" {
 		t.Fatalf("log: %+v", l)
 	}
 	if l.CostUSD != 0.0004496 || l.CostSource != "upstream" {
 		t.Fatalf("cost: %+v", l)
 	}
+	for i, r := range rows[1:] {
+		if r.RequestID != l.RequestID || r.AttemptState != "retried" || r.AttemptIndex != 3-i || r.Level != "warn" ||
+			r.CostUSD != 0 || r.CostSource != "none" {
+			t.Fatalf("retried row %d: %+v", i, r)
+		}
+	}
 	var detail struct {
-		UpstreamAttempts []struct {
-			KeyName string `json:"key_name"`
-			Action  string
-			Status  int
-		} `json:"upstream_attempts"`
+		UpstreamAttempts []any `json:"upstream_attempts"`
+		Chain            []struct {
+			KeyName      string `json:"key_name"`
+			Action       string
+			Status       int
+			AttemptIndex int `json:"attempt_index"`
+		}
 	}
 	e.api("GET", fmt.Sprintf("/api/v1/logs/%d", l.ID), nil, 200, &detail)
 	got := []string{}
-	for _, a := range detail.UpstreamAttempts {
-		got = append(got, fmt.Sprintf("%s:%d:%s", a.KeyName, a.Status, a.Action))
+	for _, a := range detail.Chain {
+		got = append(got, fmt.Sprintf("%d:%s:%d:%s", a.AttemptIndex, a.KeyName, a.Status, a.Action))
 	}
-	want := "k1:429:cooldown k2:400:verify k3:500:retry k4:200:success"
-	if strings.Join(got, " ") != want {
-		t.Fatalf("attempts = %s\nwant      %s", strings.Join(got, " "), want)
+	want := "1:k1:429:cooldown 2:k2:400:verify 3:k3:500:retry 4:k4:200:success"
+	if strings.Join(got, " ") != want || len(detail.UpstreamAttempts) != 0 {
+		t.Fatalf("chain = %s\nwant    %s", strings.Join(got, " "), want)
 	}
 	// Key states are visible in the admin API.
 	var keys struct {
@@ -424,19 +447,20 @@ func TestFailoverAcrossKeys(t *testing.T) {
 	if states["k1"] != "cooldown" || states["k2"] != "disabled" || states["k4"] != "active" {
 		t.Fatalf("key states: %v", states)
 	}
-	// Stats are per client request: one request, one success.
+	// Acceptance F5: stats count log rows. Three retries then a success are
+	// four requests, one success and three failures.
 	var ov struct {
-		Requests, Success int
-		SuccessRate       float64 `json:"success_rate"`
+		Requests, Success, Errors int
+		SuccessRate               float64 `json:"success_rate"`
 	}
 	e.api("GET", "/api/v1/stats/overview", nil, 200, &ov)
-	if ov.Requests != 1 || ov.Success != 1 || ov.SuccessRate != 1 {
+	if ov.Requests != 4 || ov.Success != 1 || ov.Errors != 3 || ov.SuccessRate != 0.25 {
 		t.Fatalf("overview: %+v", ov)
 	}
 	// Second request skips the cooling and disabled keys entirely.
 	e.proxy("POST", "/v1/chat/completions", map[string]any{"model": "grok-build-0.1", "messages": []any{}}, 200, nil)
-	if l := e.waitLogs(2)[0]; l.Attempts > 2 {
-		t.Fatalf("second request made %d attempts", l.Attempts)
+	if l := e.waitLogs(2)[0]; l.AttemptTotal > 2 {
+		t.Fatalf("second request made %d attempts", l.AttemptTotal)
 	}
 }
 
@@ -839,8 +863,8 @@ func TestHostileModelNameCannotHurtPool(t *testing.T) {
 		}
 	}
 	for _, l := range e.waitLogs(5) {
-		if l.Attempts > 2 {
-			t.Fatalf("hostile request tried %d keys", l.Attempts)
+		if l.AttemptTotal > 2 {
+			t.Fatalf("hostile request tried %d keys", l.AttemptTotal)
 		}
 	}
 }

@@ -189,7 +189,9 @@ func (hs *harness) waitLogs(n int) []*store.Log {
 		if err := hs.h.Logs.Flush(ctx); err != nil {
 			hs.t.Fatal(err)
 		}
-		list, total, err := hs.db.ListLogs(ctx, store.LogFilter{Limit: 1000})
+		// One per client request: its final row, with its upstream
+		// attempts (the rows of its chain) as Attempts.
+		list, total, err := hs.db.ListLogs(ctx, store.LogFilter{Limit: 1000, FinalOnly: true})
 		if err != nil {
 			hs.t.Fatal(err)
 		}
@@ -199,6 +201,17 @@ func (hs *harness) waitLogs(n int) []*store.Log {
 				l, err := hs.db.GetLog(ctx, list[i].ID)
 				if err != nil {
 					hs.t.Fatal(err)
+				}
+				if !l.WS && len(l.Attempts) == 0 && l.AttemptAction != "" {
+					chain, err := hs.db.LogChain(ctx, l.RequestID)
+					if err != nil {
+						hs.t.Fatal(err)
+					}
+					for _, c := range chain {
+						l.Attempts = append(l.Attempts, store.Attempt{Seq: c.AttemptIndex, KeyID: c.KeyID,
+							KeyName: c.KeyName, Status: c.Status, Error: c.Error, Action: c.AttemptAction,
+							TTFBMs: c.TTFBMs, LatencyMs: c.LatencyMs, StartedAt: c.CreatedAt})
+					}
 				}
 				out = append(out, l)
 			}

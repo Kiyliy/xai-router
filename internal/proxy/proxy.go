@@ -290,6 +290,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		lastErr = uerr
+		st.keepAttempt(uerr)
 		if r.Context().Err() != nil {
 			st.log.Status, st.log.Error = 499, "client closed request"
 			return
@@ -307,6 +308,33 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		st.fail(w, errf(http.StatusServiceUnavailable, "no_upstream_keys", "no upstream API keys are available"))
 	}
+}
+
+// keepAttempt keeps what a failed attempt answered for its own log row (it
+// becomes a "retried" row when another attempt follows): the status it
+// stands for, the response headers and body, and a cost the upstream may
+// have reported in the error.
+func (st *state) keepAttempt(ue *upstreamError) {
+	n := len(st.attempts)
+	if ue == nil || n == 0 {
+		return
+	}
+	a := &st.attempts[n-1]
+	a.LogStatus = ue.status
+	if u, _ := billing.ParseBody(ue.body); u.HasCost && u.CostTicks > 0 {
+		a.CostTicks = u.CostTicks
+	}
+	if !st.s.LogEnabled || !st.s.LogBodies {
+		return
+	}
+	if ue.header != nil {
+		a.RespHeaders = reqlog.HeadersJSON(ue.header)
+	}
+	body := ue.body
+	if len(body) == 0 {
+		body = errorJSON("upstream_error", ue.err) // what the client would have been sent
+	}
+	a.RespBody, _ = reqlog.SanitizeBody(body, st.s.LogResponseBodyMaxBytes())
 }
 
 // upstreamError is a failed attempt whose response may be returned to the
@@ -524,8 +552,12 @@ var clientGoneDrain = 60 * time.Second
 //
 // Token-billed streams are held back until their first generated content (at
 // most firstByteHold): an upstream that answers 200 and then only reports an
-// error (resource-exhausted while overloaded) is then retried on the next key
-// like an HTTP error, as nothing has reached the client yet. Once anything
+// error (resource-exhausted while overloaded) is then retried on the next key,
+// as nothing has reached the client yet. The pool classifies such an error
+// like the HTTP status it matches (see streamErrorStatus): a capacity error
+// counts as a 429 "at capacity", which by design does not cool the key down
+// (the whole model is short of capacity, not the key); the key's own rate
+// limit does. Once anything
 // was sent, the error event is passed through and the request is logged as
 // failed (see streamErrorLogStatus).
 func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.CancelCauseFunc, w http.ResponseWriter,
@@ -767,6 +799,14 @@ func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.Cance
 		errMsg = msg
 		if st.log.Status != 499 {
 			st.log.Status = streamErrorLogStatus
+		}
+		if ss.Final || ss.Output {
+			// Content (or usage) arrived before the error: billed below.
+			// The error and the status the client saw stay in extra.
+			extra, _ := json.Marshal(map[string]any{"stream_error": map[string]any{
+				"code": ss.Err.Code, "type": ss.Err.Type, "message": ss.Err.Message,
+				"client_status": resp.StatusCode, "after_content": true}})
+			st.log.Extra = string(extra)
 		}
 	}
 	if errMsg != "" {
@@ -1095,7 +1135,13 @@ func (st *state) finish(r *http.Request) {
 		ttl := time.Duration(s.TaskBindingTTLHours) * time.Hour
 		st.res.Hold(st.jobID, l.CostTicks, ttl)
 	} else {
-		st.res.SettleReleasing(st.releaseJob, l.CostTicks-st.preCharged)
+		// Retried attempts normally cost nothing; one the upstream reported
+		// a cost for is billed on its own row, within the same settlement.
+		var retried int64
+		for i := 0; i+1 < len(st.attempts); i++ {
+			retried += st.attempts[i].CostTicks
+		}
+		st.res.SettleReleasing(st.releaseJob, l.CostTicks+retried-st.preCharged)
 	}
 	if l.Status == 0 {
 		l.Status = 499

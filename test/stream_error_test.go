@@ -36,12 +36,18 @@ func TestInStreamErrorLoggedAsFailure(t *testing.T) {
 		!strings.Contains(l.Error, "HTTP 200 sent") || l.CostUSD != 0 || l.CostSource != "upstream_error" {
 		t.Fatalf("log: %+v", l)
 	}
+	// The 200 the client saw is in the detail's extra.
 	var detail struct {
-		UpstreamAttempts []struct{ Status int } `json:"upstream_attempts"`
+		Extra struct {
+			StreamError struct {
+				ClientStatus int    `json:"client_status"`
+				Code         string `json:"code"`
+			} `json:"stream_error"`
+		}
 	}
 	e.api("GET", fmt.Sprintf("/api/v1/logs/%d", l.ID), nil, 200, &detail)
-	if len(detail.UpstreamAttempts) != 1 || detail.UpstreamAttempts[0].Status != 200 {
-		t.Fatalf("attempts: %+v", detail.UpstreamAttempts)
+	if detail.Extra.StreamError.ClientStatus != 200 || detail.Extra.StreamError.Code == "" {
+		t.Fatalf("extra: %+v", detail.Extra)
 	}
 	var ov struct{ Requests, Success, Errors int }
 	e.api("GET", "/api/v1/stats/overview", nil, 200, &ov)
@@ -58,7 +64,14 @@ func TestInStreamErrorRetriedOnNextKey(t *testing.T) {
 		t.Fatalf("client body %q", b)
 	}
 	l := e.waitLogs(1)[0]
-	if l.Status != 200 || l.Attempts != 2 || l.KeyName != "k2" || l.Error != "" {
+	if l.Status != 200 || l.AttemptTotal != 2 || l.KeyName != "k2" || l.Error != "" {
 		t.Fatalf("log: %+v", l)
+	}
+	// The abandoned stream is a retried row of its own: failed (429, the
+	// status its capacity error stands for), on the first key, free.
+	r := e.waitRows(2, "")[1]
+	if r.AttemptState != "retried" || r.KeyName != "k1" || r.Status != 429 || r.CostUSD != 0 || r.Level != "warn" ||
+		!strings.Contains(r.Error, "before any byte was sent") {
+		t.Fatalf("retried row: %+v", r)
 	}
 }

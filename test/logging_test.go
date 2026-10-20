@@ -21,6 +21,7 @@ type fullLog struct {
 	Error            string
 	Stream           bool
 	Attempts         int
+	AttemptTotal     int     `json:"attempt_total"`
 	TokenName        string  `json:"token_name"`
 	KeyName          string  `json:"key_name"`
 	PromptTokens     int64   `json:"prompt_tokens"`
@@ -36,14 +37,14 @@ type fullLog struct {
 	ClientIP         string  `json:"client_ip"`
 }
 
-// logFor returns the detail of the newest log whose request id matches the
-// X-Request-Id the gateway returned.
+// logFor returns the detail of the final log row of the request whose id
+// matches the X-Request-Id the gateway returned (one per client request).
 func (e *env) logFor(reqID string) fullLog {
 	e.t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		var page struct{ Data []fullLog }
-		e.api("GET", "/api/v1/logs?q="+reqID, nil, 200, &page)
+		e.api("GET", "/api/v1/logs?attempts=final&q="+reqID, nil, 200, &page)
 		if len(page.Data) == 1 {
 			var d fullLog
 			e.api("GET", fmt.Sprintf("/api/v1/logs/%d", page.Data[0].ID), nil, 200, &d)
@@ -92,7 +93,9 @@ func TestEveryOutcomeIsLogged(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		resp, body := e.send(e.client, chat, nil)
 		l := e.logFor(resp.Header.Get("X-Request-Id"))
-		if l.Status != 200 || l.Attempts != 2 || l.KeyName != "k2" || l.TokenName != "client" ||
+		// The final row of a retried request: its request body is the one
+		// stored on the first row.
+		if l.Status != 200 || l.AttemptTotal != 2 || l.KeyName != "k2" || l.TokenName != "client" ||
 			usageOf(l) != mockUsage || l.CostSource != "upstream" || l.ResponseBody != string(body) ||
 			l.RequestBody != chat || l.ClientIP == "" {
 			t.Fatalf("log %+v", l)
@@ -124,7 +127,7 @@ func TestEveryOutcomeIsLogged(t *testing.T) {
 		e2 := newEnv(t, "xai-a-500", "xai-b-500")
 		resp, _ := e2.send(e2.client, chat, nil)
 		l := e2.logFor(resp.Header.Get("X-Request-Id"))
-		if resp.StatusCode != 500 || l.Status != 500 || l.Attempts != 2 || l.CostUSD != 0 {
+		if resp.StatusCode != 500 || l.Status != 500 || l.AttemptTotal != 2 || l.CostUSD != 0 {
 			t.Fatalf("status %d log %+v", resp.StatusCode, l)
 		}
 	})
@@ -149,7 +152,7 @@ func TestEveryOutcomeIsLogged(t *testing.T) {
 			resp, body := e.send(c.token, c.body, nil)
 			l := e.logFor(resp.Header.Get("X-Request-Id"))
 			if resp.StatusCode != c.status || l.Status != c.status || !strings.Contains(string(body), c.code) ||
-				l.Error == "" || l.Attempts != 0 || l.CostUSD != 0 || !strings.Contains(l.Error, c.logErr) {
+				l.Error == "" || l.Attempts != 0 || l.AttemptTotal != 1 || l.CostUSD != 0 || !strings.Contains(l.Error, c.logErr) {
 				t.Errorf("%s: status %d log %+v body %.120s", c.name, resp.StatusCode, l, body)
 			}
 		}

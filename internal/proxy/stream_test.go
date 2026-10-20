@@ -287,7 +287,7 @@ func TestNonStreamBodyReadErrorNoFailover(t *testing.T) {
 			t.Fatalf("%s: got %d %s", c.path, resp.StatusCode, b)
 		}
 		l := hs.lastLog(i + 1)
-		if len(l.Attempts) != 1 || !strings.Contains(l.Attempts[0].Error, "reading upstream body") ||
+		if len(l.Attempts) != 1 || l.Attempts[0].Action != "return" || !strings.Contains(l.Error, "interrupted after 200 headers") ||
 			l.KeyID != keys[0].ID || l.Status != 502 || l.CostSource != "estimated" || l.CostTicks <= 0 {
 			t.Fatalf("%s: log %+v attempts %+v", c.path, l, l.Attempts)
 		}

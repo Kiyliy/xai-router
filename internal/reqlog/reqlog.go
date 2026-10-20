@@ -84,7 +84,11 @@ func NewWriter(db *store.DB, settings *config.Holder, log *slog.Logger, queue in
 }
 
 func bodySize(l *store.Log) int64 {
-	return int64(len(l.ReqBody) + len(l.RespBody) + len(l.RespText) + len(l.ReasoningText) + len(l.ReqHeaders) + len(l.RespHeaders))
+	n := len(l.ReqBody) + len(l.RespBody) + len(l.RespText) + len(l.ReasoningText) + len(l.ReqHeaders) + len(l.RespHeaders)
+	for _, a := range l.Attempts { // retried attempts are rows of their own
+		n += len(a.RespBody) + len(a.RespHeaders)
+	}
+	return int64(n)
 }
 
 func sizeOf(logs []*store.Log) int64 {
@@ -101,6 +105,15 @@ func stripBodies(l *store.Log) {
 		l.RespBody, l.RespText, l.ReasoningText = "", "", ""
 		l.ReqHeaders, l.RespHeaders = "{}", "{}"
 		l.Truncated = true
+		dropAttemptBodies(l)
+	}
+}
+
+// dropAttemptBodies removes the responses kept for the rows of retried
+// attempts.
+func dropAttemptBodies(l *store.Log) {
+	for i := range l.Attempts {
+		l.Attempts[i].RespBody, l.Attempts[i].RespHeaders = "", ""
 	}
 }
 
@@ -115,6 +128,7 @@ func (w *Writer) compact(l *store.Log) int64 {
 	l.ReqHeaders, l.ReqBody, l.RespHeaders, l.RespBody, l.RespText, l.ReasoningText = "", "", "", "", "", ""
 	l.Query, l.UserAgent, l.Extra, l.PriceSnapshot = "", "", "", ""
 	l.Error = truncate(l.Error, 200)
+	dropAttemptBodies(l)
 	for i := range l.Attempts {
 		l.Attempts[i].Error = truncate(l.Attempts[i].Error, 200)
 	}
@@ -492,6 +506,11 @@ func capLog(l *store.Log) {
 	l.Error = truncate(l.Error, maxErrorBytes)
 	l.ReqHeaders = capHeaders(l.ReqHeaders)
 	l.RespHeaders = capHeaders(l.RespHeaders)
+	for i := range l.Attempts {
+		a := &l.Attempts[i]
+		a.Error = truncate(a.Error, maxErrorBytes)
+		a.RespHeaders = capHeaders(a.RespHeaders)
+	}
 }
 
 // capHeaders bounds a headers JSON object: long values are cut and, past

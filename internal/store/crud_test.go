@@ -46,7 +46,7 @@ func TestMigrationsIdempotentAndMeta(t *testing.T) {
 	}
 	defer db.Close()
 	var v int
-	if err := db.W.QueryRowContext(ctx, `SELECT v FROM schema_version`).Scan(&v); err != nil || v != len(migrations) {
+	if err := db.W.QueryRowContext(ctx, `SELECT v FROM schema_version`).Scan(&v); err != nil || v != SchemaVersion() {
 		t.Fatalf("schema version %d %v", v, err)
 	}
 	if got, _ := db.GetMeta(ctx, "a"); got != "2" {

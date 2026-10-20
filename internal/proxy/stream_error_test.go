@@ -35,8 +35,14 @@ func checkStreamFailed(t *testing.T, hs *harness, l *store.Log, wantInError stri
 		t.Fatalf("status %d success=%v; want a failed request", l.Status, l.Success())
 	}
 	mustContain(t, "error", l.Error, "upstream error in stream (HTTP 200 sent)", wantInError)
-	if len(l.Attempts) == 0 || l.Attempts[len(l.Attempts)-1].Status != 200 {
-		t.Fatalf("attempts should keep the 200 the client saw: %+v", l.Attempts)
+	// The 200 the client saw is kept in extra.
+	var extra struct {
+		StreamError struct {
+			ClientStatus int `json:"client_status"`
+		} `json:"stream_error"`
+	}
+	if json.Unmarshal([]byte(l.Extra), &extra) != nil || extra.StreamError.ClientStatus != 200 {
+		t.Fatalf("extra should keep the 200 the client saw: %s", l.Extra)
 	}
 	// Counted by the "problems" filter and as an error in the stats.
 	list, _, err := hs.db.ListLogs(context.Background(), store.LogFilter{Problems: true, Limit: 100})
@@ -213,8 +219,10 @@ func TestStreamErrorBeforeFirstByteRetries(t *testing.T) {
 			if len(l.Attempts) != 2 {
 				t.Fatalf("attempts: %+v", l.Attempts)
 			}
+			// The retried attempt is its own row, failed with the status its
+			// in-stream error stands for.
 			a := l.Attempts[0]
-			if a.Status != 200 || a.Action != c.action || !strings.Contains(a.Error, "before any byte was sent") {
+			if a.Status < 400 || a.Action != c.action || !strings.Contains(a.Error, "before any byte was sent") {
 				t.Fatalf("first attempt: %+v", a)
 			}
 			if st := hs.pool.State(keys[0].ID); st.CooldownUntil.IsZero() == c.cooldown {

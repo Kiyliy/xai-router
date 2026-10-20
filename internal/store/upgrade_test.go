@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"testing"
+	"time"
 )
 
 // A database created by v0.1.0 (schema v1) upgrades in place without losing
@@ -43,8 +45,8 @@ func TestUpgradeFromV010Schema(t *testing.T) {
 			t.Fatalf("open #%d: %v", i+1, err)
 		}
 		var v int
-		if err := db.R.QueryRowContext(ctx, `SELECT v FROM schema_version`).Scan(&v); err != nil || v != len(migrations) {
-			t.Fatalf("schema version %d (%v), want %d", v, err, len(migrations))
+		if err := db.R.QueryRowContext(ctx, `SELECT v FROM schema_version`).Scan(&v); err != nil || v != SchemaVersion() {
+			t.Fatalf("schema version %d (%v), want %d", v, err, SchemaVersion())
 		}
 		k, err := db.GetKey(ctx, 1)
 		if err != nil || k.Name != "old" || k.Key != "xai-old" {
@@ -63,6 +65,12 @@ func TestUpgradeFromV010Schema(t *testing.T) {
 		}
 		if pw, _ := db.GetMeta(ctx, "admin_password"); pw == "" {
 			t.Fatal("admin password lost")
+		}
+		if l, err := db.GetLog(ctx, logs[0].ID); err != nil || l.AttemptState() != "single" || !l.AttemptFinal {
+			t.Fatalf("old row after v10: %+v %v", l, err)
+		}
+		if since, _ := db.GetMeta(ctx, MetaStatsBasisSince); since == "" {
+			t.Fatal("no stats-basis cutover recorded for a database with history")
 		}
 		db.Close()
 	}
@@ -246,5 +254,77 @@ func TestUpgradeFromV040ResetFolding(t *testing.T) {
 	_ = db.R.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('tokens') WHERE name IN ('reset_ticks', 'used_reset_at')`).Scan(&cols)
 	if cols != 0 {
 		t.Fatal("reset columns still present")
+	}
+}
+
+// v0.5.x (schema v9) to v10 (v0.6.0): request_logs gains the attempt
+// columns; every existing row is a single final attempt, keeps its nested
+// attempts (log_attempts), and stats are not recomputed. The upgrade time
+// is kept as the stats-basis cutover. The migration tolerates columns that
+// already exist, and opening again changes nothing.
+func TestUpgradeFromV9ToV10(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "xai-router.db")
+	raw, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?_pragma=journal_mode(WAL)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmts := []string{`CREATE TABLE schema_version (v INTEGER NOT NULL)`}
+	stmts = append(stmts, migrations[:9]...)
+	stmts = append(stmts, `INSERT INTO schema_version (v) VALUES (9)`,
+		`INSERT INTO request_logs (request_id, created_at, method, path, status, attempts, cost_ticks)
+		 VALUES ('r1', 1000, 'POST', '/v1/chat/completions', 200, 2, 250)`,
+		`INSERT INTO log_attempts (log_id, seq, status, action, started_at) VALUES (1, 1, 500, 'retry', 1000), (1, 2, 200, 'success', 1001)`,
+		`INSERT INTO stats_dim (dim, hour, id, requests, success, cost_ticks) VALUES ('all', 0, '', 1, 1, 250)`,
+		// A column a previous, interrupted attempt may have left behind.
+		`ALTER TABLE request_logs ADD COLUMN attempt_index INTEGER NOT NULL DEFAULT 1`)
+	for _, s := range stmts {
+		if _, err := raw.ExecContext(ctx, s); err != nil {
+			t.Fatalf("%s: %v", s, err)
+		}
+	}
+	raw.Close()
+
+	var since string
+	for i := 0; i < 2; i++ {
+		db, err := Open(path)
+		if err != nil {
+			t.Fatalf("open #%d: %v", i+1, err)
+		}
+		var v int
+		_ = db.R.QueryRowContext(ctx, `SELECT v FROM schema_version`).Scan(&v)
+		if v != SchemaVersion() || v != 10 {
+			t.Fatalf("schema version %d", v)
+		}
+		l, err := db.GetLog(ctx, 1)
+		if err != nil || l.AttemptIndex != 1 || l.AttemptTotal != 1 || !l.AttemptFinal || l.AttemptAction != "" ||
+			l.AttemptState() != "single" || len(l.Attempts) != 2 || l.CostTicks != 250 {
+			t.Fatalf("historical row: %+v %v", l, err)
+		}
+		if _, n, _ := db.ListLogs(ctx, LogFilter{FinalOnly: true, Limit: 10}); n != 1 {
+			t.Fatalf("historical rows are final: %d", n)
+		}
+		if a, _ := db.StatsTotal(ctx, 0); a.Requests != 1 || a.CostTicks != 250 {
+			t.Fatalf("stats changed: %+v", a)
+		}
+		got, _ := db.GetMeta(ctx, MetaStatsBasisSince)
+		if ms, err := strconv.ParseInt(got, 10, 64); err != nil || ms < time.Now().Add(-time.Minute).UnixMilli() {
+			t.Fatalf("stats basis %q", got)
+		}
+		if i == 1 && got != since {
+			t.Fatalf("cutover moved on reopen: %s -> %s", since, got)
+		}
+		since = got
+		db.Close()
+	}
+
+	// A new database has always counted rows: no cutover.
+	fresh, err := Open(filepath.Join(t.TempDir(), "new.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fresh.Close()
+	if got, _ := fresh.GetMeta(ctx, MetaStatsBasisSince); got != "" {
+		t.Fatalf("fresh database has a cutover: %q", got)
 	}
 }

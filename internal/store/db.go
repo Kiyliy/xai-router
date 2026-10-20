@@ -455,6 +455,60 @@ ALTER TABLE request_logs ADD COLUMN price_snapshot TEXT NOT NULL DEFAULT '';
 `,
 }
 
+// codeMigrations follow the SQL migrations (v10 onwards). Each checks what
+// it changes first, so that it is safe on a database it was already partly
+// applied to.
+var codeMigrations = []func(ctx context.Context, tx *sql.Tx) error{migrateV10}
+
+// MetaStatsBasisSince is the meta key holding the time (unix ms) the stats
+// started counting log rows instead of client requests (the v10 upgrade).
+// It is absent on a database that always counted rows.
+const MetaStatsBasisSince = "stats_basis_since"
+
+// migrateV10 (v0.6.0): every upstream attempt of a client request is its
+// own request_logs row. The rows of one client request share request_id;
+// attempt_index (1-based) and attempt_total place a row in its chain,
+// attempt_final marks the row that holds the outcome (and the usage and
+// cost), attempt_action is what the pool did after the attempt. Existing
+// rows are single final attempts (the defaults). Stats count rows from now
+// on: when there are stats from before, the cutover time is kept in meta.
+func migrateV10(ctx context.Context, tx *sql.Tx) error {
+	have := map[string]bool{}
+	rows, err := tx.QueryContext(ctx, `SELECT name FROM pragma_table_info('request_logs')`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			rows.Close()
+			return err
+		}
+		have[n] = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, c := range [][2]string{
+		{"attempt_index", "INTEGER NOT NULL DEFAULT 1"},
+		{"attempt_total", "INTEGER NOT NULL DEFAULT 1"},
+		{"attempt_final", "INTEGER NOT NULL DEFAULT 1"},
+		{"attempt_action", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if have[c[0]] {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE request_logs ADD COLUMN `+c[0]+` `+c[1]); err != nil {
+			return err
+		}
+	}
+	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO meta (k, v)
+SELECT ?, CAST(CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) AS TEXT)
+WHERE EXISTS (SELECT 1 FROM stats_dim) OR EXISTS (SELECT 1 FROM request_logs)`, MetaStatsBasisSince)
+	return err
+}
+
 func (db *DB) migrate(ctx context.Context) error {
 	if _, err := db.W.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_version (v INTEGER NOT NULL)`); err != nil {
 		return err
@@ -468,18 +522,24 @@ func (db *DB) migrate(ctx context.Context) error {
 	} else if err != nil {
 		return err
 	}
-	if v > len(migrations) {
+	latest := SchemaVersion()
+	if v > latest {
 		// An older binary on a newer database would misread it (for example
 		// treat soft-deleted tokens as live): refuse instead.
 		return fmt.Errorf("database schema v%d is newer than this version of xai-router supports (v%d); upgrade xai-router",
-			v, len(migrations))
+			v, latest)
 	}
-	for i := v; i < len(migrations); i++ {
+	for i := v; i < latest; i++ {
 		tx, err := db.W.BeginTx(ctx, nil)
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, migrations[i]); err != nil {
+		if i < len(migrations) {
+			_, err = tx.ExecContext(ctx, migrations[i])
+		} else {
+			err = codeMigrations[i-len(migrations)](ctx, tx)
+		}
+		if err != nil {
 			tx.Rollback()
 			return fmt.Errorf("migration %d: %w", i+1, err)
 		}
@@ -491,9 +551,9 @@ func (db *DB) migrate(ctx context.Context) error {
 			return err
 		}
 	}
-	if v < len(migrations) && len(migrations) >= 9 { // the events table exists from v9
+	if v < latest { // the events table exists from v9
 		_ = db.AddEvent(ctx, &Event{Kind: EventSystem, Action: "system.migrate", Actor: "system", ActorName: "system",
-			TargetType: "database", Detail: map[string]any{"from_version": v, "to_version": len(migrations)}})
+			TargetType: "database", Detail: map[string]any{"from_version": v, "to_version": latest}})
 	}
 	return nil
 }
@@ -529,4 +589,4 @@ func isUnique(err error) bool {
 }
 
 // SchemaVersion is the schema version this binary migrates to.
-func SchemaVersion() int { return len(migrations) }
+func SchemaVersion() int { return len(migrations) + len(codeMigrations) }

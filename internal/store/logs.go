@@ -17,13 +17,25 @@ type Attempt struct {
 	KeyName   string
 	Status    int // 0 = network error
 	Error     string
-	Action    string // success, retry, return, cooldown, disable
+	Action    string // success, retry, return, cooldown, disable, verify
 	TTFBMs    int64
 	LatencyMs int64
 	StartedAt int64
+
+	// The detail of an attempt that was retried, for its own log row (see
+	// rowsOf). LogStatus is the status that row records: the HTTP status the
+	// failure stands for (an in-stream error after a 200 is its matching
+	// error status, a network error 502 or 504); 0 = Status.
+	LogStatus   int
+	RespHeaders string
+	RespBody    string
+	CostTicks   int64 // what the upstream reported this failed attempt cost (normally 0)
 }
 
-// Log is one client request.
+// Log is one request_logs row. A client request is written as one Log:
+// InsertLogs stores each of its upstream attempts as its own row (see
+// rowsOf), the Log itself becoming the final one. Read back, a Log is one
+// row.
 type Log struct {
 	ID               int64
 	RequestID        string
@@ -59,24 +71,51 @@ type Log struct {
 	UpstreamID       string
 	Truncated        bool
 
-	// Detail, stored in request_log_bodies / log_attempts.
+	// Detail, stored in request_log_bodies (and in log_attempts for
+	// WebSocket sessions and rows written before v0.6.0).
 	ReqHeaders    string
 	ReqBody       string
 	RespHeaders   string
 	RespBody      string
 	RespText      string
 	ReasoningText string
-	Attempts      []Attempt
-	AttemptCount  int // filled when reading
-	HasBodies     bool
-	WS            bool
-	Extra         string // JSON with endpoint-specific details (WebSocket session stats)
+	// Attempts are the upstream attempts of the client request, in order.
+	// For an HTTP request each becomes its own row (the last one is this
+	// Log); a WebSocket session stays one row with its dial attempts nested.
+	// Read back, they are the nested attempts of a pre-v0.6.0 row or a
+	// WebSocket session.
+	Attempts     []Attempt
+	AttemptCount int // filled when reading: the attempts column
+	HasBodies    bool
+	WS           bool
+	Extra        string // JSON with endpoint-specific details (WebSocket session stats, stream errors)
 	// NoRecord applies the usage accounting (key/token counters, hourly
 	// stats) without storing the log row itself (logging disabled).
 	NoRecord bool
+
+	// Filled when reading: the row's place among the rows sharing its
+	// request_id. Rows before v0.6.0 and single attempts are 1 of 1.
+	AttemptIndex  int
+	AttemptTotal  int
+	AttemptFinal  bool
+	AttemptAction string // what the pool did after this row's attempt ("" before v0.6.0)
+	// ReqBodyFrom is the row the request body was read from when it is not
+	// this one (GetLog: the body is stored on the first row of a chain).
+	ReqBodyFrom int64
 }
 
-// Success reports whether the request counts as successful.
+// AttemptState is "single" (the only attempt), "final" (the last of
+// several) or "retried" (an earlier attempt that failed and was retried).
+func (l *Log) AttemptState() string {
+	switch {
+	case l.AttemptTotal <= 1:
+		return "single"
+	case l.AttemptFinal:
+		return "final"
+	}
+	return "retried"
+}
+
 // Success reports whether the request counts as successful: any 2xx/3xx
 // response, or 101 for an established WebSocket session.
 func (l *Log) Success() bool {
@@ -93,8 +132,127 @@ func nullID(id int64) any {
 	return id
 }
 
-// InsertLogs writes a batch of logs in a single transaction together with the
-// derived counters: key and token usage and the hourly aggregates.
+// keyUse is what one row adds to an upstream key's counters.
+type keyUse struct {
+	keyID   int64
+	isErr   bool
+	lastErr string
+	cost    int64
+	at      int64
+}
+
+// logRow is one request_logs row of a client request.
+type logRow struct {
+	l        *Log // the row (a copy, except for a single row)
+	index    int
+	total    int
+	action   string
+	attempts int       // the attempts column
+	nested   []Attempt // written to log_attempts (WebSocket sessions)
+	keys     []keyUse
+}
+
+// failedAttempt reports whether an attempt's action counts as a key error.
+func failedAttempt(action string) bool { return action != "success" && action != "return" }
+
+// rowsOf expands a client request into its rows. An HTTP request with n
+// upstream attempts is n rows sharing the request id: attempts 1..n-1 are
+// "retried" rows built from l.Attempts (their own key, status, error, timing
+// and response; no usage, and cost 0 unless the upstream reported one), and
+// the last is l itself, timed from the start of its attempt and carrying the
+// usage and cost. The request body is kept on the first row only. A
+// WebSocket session, or a request without attempts, is a single row as
+// before v0.6.0. l is not modified, so a failed batch can be expanded again.
+func rowsOf(l *Log) []logRow {
+	n := len(l.Attempts)
+	if l.WS || n == 0 {
+		r := logRow{l: l, index: 1, total: 1, attempts: n, nested: l.Attempts}
+		if n > 0 {
+			r.action = l.Attempts[n-1].Action
+		}
+		// Each dial attempt counts on its key; the session's cost goes to
+		// the key that served it.
+		for _, a := range l.Attempts {
+			if a.KeyID == 0 {
+				continue
+			}
+			u := keyUse{keyID: a.KeyID, at: a.StartedAt}
+			if failedAttempt(a.Action) {
+				u.isErr, u.lastErr = true, a.Error
+			}
+			if a.Action == "success" || (a.Action == "return" && a.KeyID == l.KeyID) {
+				u.cost = l.CostTicks
+			}
+			r.keys = append(r.keys, u)
+		}
+		return []logRow{r}
+	}
+	use := func(row *Log, a Attempt) []keyUse {
+		if row.KeyID == 0 {
+			return nil
+		}
+		u := keyUse{keyID: row.KeyID, cost: row.CostTicks, at: row.CreatedAt}
+		if failedAttempt(a.Action) {
+			u.isErr, u.lastErr = true, a.Error
+		}
+		return []keyUse{u}
+	}
+	rows := make([]logRow, 0, n)
+	for i, a := range l.Attempts[:n-1] {
+		start := a.StartedAt
+		if start == 0 {
+			start = l.CreatedAt
+		}
+		status := a.LogStatus
+		if status == 0 {
+			status = a.Status
+		}
+		if status == 0 {
+			status = http.StatusBadGateway
+		}
+		r := &Log{RequestID: l.RequestID, CreatedAt: start, Method: l.Method, Path: l.Path, Query: l.Query,
+			Model: l.Model, Stream: l.Stream, Status: status, Error: a.Error, ClientIP: l.ClientIP,
+			UserAgent: l.UserAgent, TokenID: l.TokenID, TokenName: l.TokenName, TokenPrefix: l.TokenPrefix,
+			KeyID: a.KeyID, KeyName: a.KeyName, TTFBMs: a.TTFBMs, LatencyMs: a.LatencyMs, CostTicks: a.CostTicks,
+			CostSource: "none", HasBodies: l.HasBodies, NoRecord: l.NoRecord}
+		if a.CostTicks > 0 {
+			r.CostSource = "upstream"
+		}
+		if r.HasBodies {
+			r.ReqHeaders, r.RespHeaders, r.RespBody = l.ReqHeaders, a.RespHeaders, a.RespBody
+			if r.RespHeaders == "" {
+				r.RespHeaders = "{}"
+			}
+			if i == 0 {
+				r.ReqBody, r.Truncated = l.ReqBody, l.Truncated
+			}
+		}
+		rows = append(rows, logRow{l: r, index: i + 1, total: n, action: a.Action, attempts: 1, keys: use(r, a)})
+	}
+	last := l.Attempts[n-1]
+	f := *l
+	f.Attempts = nil
+	if n > 1 {
+		f.ReqBody = ""
+	}
+	if last.StartedAt > l.CreatedAt && n > 1 {
+		off := last.StartedAt - l.CreatedAt
+		f.CreatedAt = last.StartedAt
+		f.LatencyMs = max(l.LatencyMs-off, 0)
+		if f.TTFBMs > 0 {
+			f.TTFBMs = max(l.TTFBMs-off, 0)
+		}
+	}
+	if f.KeyID == 0 {
+		f.KeyID, f.KeyName = last.KeyID, last.KeyName
+	}
+	rows = append(rows, logRow{l: &f, index: n, total: n, action: last.Action, attempts: 1, keys: use(&f, last)})
+	return rows
+}
+
+// InsertLogs writes a batch of client requests (each as one or more rows,
+// see rowsOf) in a single transaction together with the derived counters:
+// key and token usage and the hourly aggregates, all counted per row.
 func (db *DB) InsertLogs(ctx context.Context, logs []*Log) error {
 	tx, err := db.W.BeginTx(ctx, nil)
 	if err != nil {
@@ -105,8 +263,9 @@ func (db *DB) InsertLogs(ctx context.Context, logs []*Log) error {
 	insLog, err := tx.PrepareContext(ctx, `INSERT INTO request_logs (request_id, created_at, method, path, query, model,
 stream, status, error, client_ip, user_agent, token_id, token_name, key_id, key_name, attempts, ttfb_ms, latency_ms,
 prompt_tokens, completion_tokens, cached_tokens, reasoning_tokens, image_tokens, total_tokens, images, video_seconds,
-cost_ticks, cost_source, upstream_id, truncated, ws, extra, token_prefix, cache_write_tokens, price_snapshot)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+cost_ticks, cost_source, upstream_id, truncated, ws, extra, token_prefix, cache_write_tokens, price_snapshot,
+attempt_index, attempt_total, attempt_final, attempt_action)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
@@ -148,56 +307,51 @@ cost_ticks = cost_ticks + excluded.cost_ticks, latency_ms_sum = latency_ms_sum +
 	}
 	defer upStats.Close()
 
-	for _, l := range logs {
-		if l.NoRecord {
-			if err := accountOnly(ctx, l, updKey, updToken, upStats); err != nil {
+	for _, cl := range logs {
+		for _, r := range rowsOf(cl) {
+			l := r.l
+			if !cl.NoRecord {
+				res, err := insLog.ExecContext(ctx, l.RequestID, l.CreatedAt, l.Method, l.Path, l.Query, l.Model,
+					boolInt(l.Stream), l.Status, l.Error, l.ClientIP, l.UserAgent, nullID(l.TokenID), l.TokenName,
+					nullID(l.KeyID), l.KeyName, r.attempts, l.TTFBMs, l.LatencyMs, l.PromptTokens, l.CompletionTokens,
+					l.CachedTokens, l.ReasoningTokens, l.ImageTokens, l.TotalTokens, l.Images, l.VideoSeconds, l.CostTicks,
+					l.CostSource, l.UpstreamID, boolInt(l.Truncated), boolInt(l.WS), l.Extra, l.TokenPrefix,
+					l.CacheWriteTokens, l.PriceSnapshot, r.index, r.total, boolInt(r.index == r.total), r.action)
+				if err != nil {
+					return err
+				}
+				id, _ := res.LastInsertId()
+				if r.index == r.total {
+					cl.ID = id // the row holding the client request's outcome
+				}
+				if l.HasBodies {
+					if _, err := insBody.ExecContext(ctx, id, l.ReqHeaders, l.ReqBody, l.RespHeaders, l.RespBody, l.RespText,
+						l.ReasoningText); err != nil {
+						return err
+					}
+				}
+				for _, a := range r.nested {
+					if _, err := insAtt.ExecContext(ctx, id, a.Seq, nullID(a.KeyID), a.KeyName, a.Status, a.Error, a.Action,
+						a.TTFBMs, a.LatencyMs, a.StartedAt); err != nil {
+						return err
+					}
+				}
+			}
+			if err := account(ctx, r, updKey, updToken, upStats); err != nil {
 				return err
 			}
-			continue
-		}
-		res, err := insLog.ExecContext(ctx, l.RequestID, l.CreatedAt, l.Method, l.Path, l.Query, l.Model, boolInt(l.Stream),
-			l.Status, l.Error, l.ClientIP, l.UserAgent, nullID(l.TokenID), l.TokenName, nullID(l.KeyID), l.KeyName,
-			len(l.Attempts), l.TTFBMs, l.LatencyMs, l.PromptTokens, l.CompletionTokens, l.CachedTokens, l.ReasoningTokens,
-			l.ImageTokens, l.TotalTokens, l.Images, l.VideoSeconds, l.CostTicks, l.CostSource, l.UpstreamID,
-			boolInt(l.Truncated), boolInt(l.WS), l.Extra, l.TokenPrefix, l.CacheWriteTokens, l.PriceSnapshot)
-		if err != nil {
-			return err
-		}
-		l.ID, _ = res.LastInsertId()
-		if l.HasBodies {
-			if _, err := insBody.ExecContext(ctx, l.ID, l.ReqHeaders, l.ReqBody, l.RespHeaders, l.RespBody, l.RespText,
-				l.ReasoningText); err != nil {
-				return err
-			}
-		}
-		for _, a := range l.Attempts {
-			if _, err := insAtt.ExecContext(ctx, l.ID, a.Seq, nullID(a.KeyID), a.KeyName, a.Status, a.Error, a.Action,
-				a.TTFBMs, a.LatencyMs, a.StartedAt); err != nil {
-				return err
-			}
-		}
-		if err := accountOnly(ctx, l, updKey, updToken, upStats); err != nil {
-			return err
 		}
 	}
 	return tx.Commit()
 }
 
-// accountOnly applies a log's usage to key and token counters and the hourly
-// aggregates.
-func accountOnly(ctx context.Context, l *Log, updKey, updToken, upStats *sql.Stmt) error {
-	for _, a := range l.Attempts {
-		if a.KeyID == 0 {
-			continue
-		}
-		isErr, lastErr, cost := 0, "", int64(0)
-		if a.Action != "success" && a.Action != "return" {
-			isErr, lastErr = 1, a.Error
-		}
-		if a.Action == "success" || (a.Action == "return" && a.KeyID == l.KeyID) {
-			cost = l.CostTicks
-		}
-		if _, err := updKey.ExecContext(ctx, 1, isErr, cost, a.StartedAt, lastErr, lastErr, a.KeyID); err != nil {
+// account applies one row's usage to the key and token counters and the
+// hourly aggregates: each row is a request in the stats (under its own key)
+// and on its token, and an attempt on its key.
+func account(ctx context.Context, r logRow, updKey, updToken, upStats *sql.Stmt) error {
+	l := r.l
+	for _, u := range r.keys {
+		if _, err := updKey.ExecContext(ctx, 1, boolInt(u.isErr), u.cost, u.at, u.lastErr, u.lastErr, u.keyID); err != nil {
 			return err
 		}
 	}
@@ -231,6 +385,9 @@ type LogFilter struct {
 	Path     string
 	Q        string
 	Problems bool // only warnings and errors (status not 2xx/3xx/101)
+	// FinalOnly keeps the last row of each client request (attempts=final):
+	// retried attempts are left out.
+	FinalOnly bool
 	// BeforeAt/BeforeID restrict to logs strictly older than this position
 	// in (created_at DESC, id DESC) order: cursor paging (with Offset 0).
 	BeforeAt, BeforeID int64
@@ -251,6 +408,9 @@ func (f LogFilter) where() (string, []any) {
 	}
 	if f.BeforeAt > 0 {
 		w, a = append(w, "(created_at < ? OR (created_at = ? AND id < ?))"), append(a, f.BeforeAt, f.BeforeAt, f.BeforeID)
+	}
+	if f.FinalOnly {
+		w = append(w, "attempt_final = 1")
 	}
 	if f.Problems && f.Status == "" {
 		w = append(w, successSQL+" = 0")
@@ -307,23 +467,25 @@ func escapeLike(s string) string {
 const logCols = `id, request_id, created_at, method, path, query, model, stream, status, error, client_ip, user_agent,
 COALESCE(token_id,0), token_name, COALESCE(key_id,0), key_name, attempts, ttfb_ms, latency_ms, prompt_tokens,
 completion_tokens, cached_tokens, reasoning_tokens, image_tokens, total_tokens, images, video_seconds, cost_ticks,
-cost_source, upstream_id, truncated, ws, extra, token_prefix, cache_write_tokens, price_snapshot`
+cost_source, upstream_id, truncated, ws, extra, token_prefix, cache_write_tokens, price_snapshot, attempt_index,
+attempt_total, attempt_final, attempt_action`
 
 func scanLog(s interface{ Scan(...any) error }) (*Log, error) {
 	var l Log
-	var stream, trunc, ws int
+	var stream, trunc, ws, final int
 	var cw sql.NullInt64
 	err := s.Scan(&l.ID, &l.RequestID, &l.CreatedAt, &l.Method, &l.Path, &l.Query, &l.Model, &stream, &l.Status,
 		&l.Error, &l.ClientIP, &l.UserAgent, &l.TokenID, &l.TokenName, &l.KeyID, &l.KeyName, &l.AttemptCount, &l.TTFBMs,
 		&l.LatencyMs, &l.PromptTokens, &l.CompletionTokens, &l.CachedTokens, &l.ReasoningTokens, &l.ImageTokens,
-		&l.TotalTokens, &l.Images, &l.VideoSeconds, &l.CostTicks, &l.CostSource, &l.UpstreamID, &trunc, &ws, &l.Extra, &l.TokenPrefix, &cw, &l.PriceSnapshot)
+		&l.TotalTokens, &l.Images, &l.VideoSeconds, &l.CostTicks, &l.CostSource, &l.UpstreamID, &trunc, &ws, &l.Extra, &l.TokenPrefix, &cw, &l.PriceSnapshot,
+		&l.AttemptIndex, &l.AttemptTotal, &final, &l.AttemptAction)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	l.Stream, l.Truncated, l.WS = stream == 1, trunc == 1, ws == 1
+	l.Stream, l.Truncated, l.WS, l.AttemptFinal = stream == 1, trunc == 1, ws == 1, final == 1
 	if cw.Valid {
 		l.CacheWriteTokens = &cw.Int64
 	}
@@ -607,6 +769,23 @@ FROM request_log_bodies WHERE log_id = ?`, id).Scan(&l.ReqHeaders, &l.ReqBody, &
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
+	if l.AttemptIndex > 1 {
+		// The request body is stored on the first row of the chain only.
+		var from int64
+		var body sql.NullString
+		err := db.R.QueryRowContext(ctx, `SELECT l.id, b.req_body FROM request_logs l
+LEFT JOIN request_log_bodies b ON b.log_id = l.id WHERE l.request_id = ? AND l.attempt_index = 1
+ORDER BY l.id LIMIT 1`, l.RequestID).Scan(&from, &body)
+		switch {
+		case err == nil:
+			l.ReqBodyFrom = from
+			if body.Valid {
+				l.ReqBody = body.String
+			}
+		case !errors.Is(err, sql.ErrNoRows): // the first row may have been purged
+			return nil, err
+		}
+	}
 	rows, err := db.R.QueryContext(ctx, `SELECT seq, COALESCE(key_id,0), key_name, status, error, action, ttfb_ms,
 latency_ms, started_at FROM log_attempts WHERE log_id = ? ORDER BY seq`, id)
 	if err != nil {
@@ -622,6 +801,26 @@ latency_ms, started_at FROM log_attempts WHERE log_id = ? ORDER BY seq`, id)
 		l.Attempts = append(l.Attempts, a)
 	}
 	return l, rows.Err()
+}
+
+// LogChain returns the rows of the client request requestID (all its
+// upstream attempts), in attempt order. It is an index lookup on request_id.
+func (db *DB) LogChain(ctx context.Context, requestID string) ([]*Log, error) {
+	rows, err := db.R.QueryContext(ctx, `SELECT `+logCols+` FROM request_logs WHERE request_id = ?
+ORDER BY attempt_index, created_at, id`, requestID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Log
+	for rows.Next() {
+		l, err := scanLog(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
 }
 
 // DeleteLogsBefore deletes logs created before t (unix ms). Aggregated

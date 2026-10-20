@@ -336,6 +336,14 @@ func (s *Server) systemInfo(w http.ResponseWriter, r *http.Request) {
 		"db_free_bytes": ls.FreeBytes, "db_auto_vacuum": ls.AutoVacuum,
 		"go_heap_bytes": ms.HeapAlloc, "go_sys_bytes": ms.Sys, "goroutines": runtime.NumGoroutine(),
 	}
+	// Stats count log rows (each upstream attempt) since the v0.6.0 upgrade;
+	// before it they counted client requests. null: always rows.
+	out["stats_basis_since"] = nil
+	if v, _ := s.DB.GetMeta(r.Context(), store.MetaStatsBasisSince); v != "" {
+		if ms, err := strconv.ParseInt(v, 10, 64); err == nil && ms > 0 {
+			out["stats_basis_since"] = time.UnixMilli(ms).UTC()
+		}
+	}
 	// The volume holding the database: logs fill disks long before SQLite
 	// runs out of write capacity.
 	warnAt := s.Settings.Get().DiskWarnPercent
