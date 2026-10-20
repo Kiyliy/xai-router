@@ -6,6 +6,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -95,5 +96,49 @@ func TestEveryAdminRouteRequiresAuth(t *testing.T) {
 				t.Errorf("%s with %q: status %d, want 401", r.Pattern, cred, resp.StatusCode)
 			}
 		}
+	}
+}
+
+// The fields of log rows, log details (with a retry chain) and the system
+// info are documented in openapi.yaml, and so is the attempts filter.
+func TestOpenAPIDocumentsLogFields(t *testing.T) {
+	e := newEnv(t, "xai-a-500", "xai-b-ok")
+	e.proxy("POST", "/v1/chat/completions", map[string]any{"model": "grok-build-0.1", "messages": []any{}}, 200, nil)
+	e.waitRows(2, "")
+	raw, err := os.ReadFile("../web/static/openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := string(raw)
+	documented := func(where, field string) {
+		t.Helper()
+		if !regexp.MustCompile(`(?m)^\s+` + regexp.QuoteMeta(field) + `:`).MatchString(spec) {
+			t.Errorf("%s field %q is not in openapi.yaml", where, field)
+		}
+	}
+	var page struct{ Data []map[string]any }
+	e.api("GET", "/api/v1/logs?attempts=final", nil, 200, &page)
+	for k := range page.Data[0] {
+		documented("log row", k)
+	}
+	var detail map[string]any
+	e.api("GET", "/api/v1/logs/"+strconv.FormatInt(int64(page.Data[0]["id"].(float64)), 10), nil, 200, &detail)
+	for k := range detail {
+		documented("log detail", k)
+	}
+	chain, _ := detail["chain"].([]any)
+	if len(chain) != 2 {
+		t.Fatalf("chain: %v", detail["chain"])
+	}
+	for k := range chain[0].(map[string]any) {
+		documented("chain entry", k)
+	}
+	var info map[string]any
+	e.api("GET", "/api/v1/system/info", nil, 200, &info)
+	for k := range info {
+		documented("system info", k)
+	}
+	if !strings.Contains(spec, "{ name: attempts, in: query") {
+		t.Error("the attempts filter is not documented")
 	}
 }

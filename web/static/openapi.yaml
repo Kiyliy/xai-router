@@ -514,6 +514,7 @@ paths:
         - { name: key_id, in: query, schema: { type: integer } }
         - { name: token_id, in: query, schema: { type: integer } }
         - { name: path, in: query, schema: { type: string }, description: Path prefix }
+        - { name: attempts, in: query, schema: { type: string, enum: [all, final], default: all }, description: "Requests: all = one row per upstream attempt (v0.6.0); final = only the last row of each client request (retried attempts left out; leaves events out)" }
         - { name: q, in: query, schema: { type: string }, description: Matches request id, upstream id or error text }
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
@@ -552,7 +553,7 @@ paths:
     parameters: [ { $ref: "#/components/parameters/Id" } ]
     get:
       tags: [Logs]
-      summary: Get one log with request/response bodies and all upstream attempts
+      summary: Get one log row with request/response bodies and its retry chain
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/LogDetail" } } } }
         "404": { $ref: "#/components/responses/Error" }
@@ -702,6 +703,7 @@ paths:
                   log_dropped: { type: integer }
                   needs_password_change: { type: boolean }
                   log_count: { type: integer, description: Approximate number of stored logs }
+                  stats_basis_since: { type: string, format: date-time, nullable: true, description: "When the stats started counting log rows (each upstream attempt, v0.6.0 upgrade). Before it they counted client requests. null on a database that always counted rows." }
                   oldest_log_at: { type: string, format: date-time, nullable: true }
                   newest_log_at: { type: string, format: date-time, nullable: true }
                   db_free_bytes: { type: integer, description: Free space inside the database file (reclaimable with compact) }
@@ -970,16 +972,21 @@ components:
       type: object
       properties:
         type: { type: string, enum: [request] }
-        level: { type: string, enum: [info, warn, error], description: "From the status: 2xx/3xx/101 info, 4xx and 499 warn, 5xx or no status error" }
+        level: { type: string, enum: [info, warn, error], description: "A retried attempt is warn and the failed final row of a retried request error; otherwise from the status: 2xx/3xx/101 info, 4xx and 499 warn, 5xx or no status error" }
+        attempt_index: { type: integer, description: "This row's attempt, 1-based. Since v0.6.0 every upstream attempt of a client request is its own row; the rows share request_id" }
+        attempt_total: { type: integer, description: "Attempts of the client request (1 for older rows, WebSocket sessions, async polls and gateway refusals)" }
+        attempt_final: { type: boolean, description: "The last attempt, which holds the request's outcome, usage and cost" }
+        attempt_state: { type: string, enum: [single, final, retried], description: "single = the only attempt (always for rows before v0.6.0); final = the last of several; retried = an earlier attempt that failed and was retried" }
+        started_at: { type: string, format: date-time, description: "When this row's attempt started" }
         cache_write_tokens: { type: integer, nullable: true, description: "Only when the upstream reports it (Messages: cache_creation_input_tokens); xAI does not bill cache writes" }
         id: { type: integer }
         request_id: { type: string }
-        created_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time, description: "The list order (newest first by created_at, then id). A single attempt: when the request started. The rows of a retry chain share the end of the client request, so a chain lists together (final row on top) and the events it caused sort below it" }
         method: { type: string }
         path: { type: string }
         model: { type: string }
         stream: { type: boolean }
-        status: { type: integer, description: Final status returned to the client (499 = client went away) }
+        status: { type: integer, description: "This row's status: the final row's is the one returned to the client (499 = client went away); a retried row's is the status its failure stands for" }
         error: { type: string }
         client_ip: { type: string }
         token_id: { type: integer, nullable: true }
@@ -987,7 +994,7 @@ components:
         token_prefix: { type: string, description: "Prefix of the client token (sk-xr-…), empty if deleted" }
         key_id: { type: integer, nullable: true }
         key_name: { type: string }
-        attempts: { type: integer }
+        attempts: { type: integer, description: "Upstream attempts this row stands for: 1 for an attempt row, 0 for a refusal; older rows and WebSocket sessions: all attempts of the request" }
         ttfb_ms: { type: integer }
         latency_ms: { type: integer }
         prompt_tokens: { type: integer }
@@ -999,7 +1006,7 @@ components:
         images: { type: integer }
         video_seconds: { type: number }
         cost_usd: { type: number }
-        cost_source: { type: string, enum: [upstream, computed, none] }
+        cost_source: { type: string, enum: [upstream, computed, estimated, upstream_error, none] }
         websocket: { type: boolean, description: The request was a WebSocket session (status 101) }
     LogDetail:
       allOf:
@@ -1010,7 +1017,33 @@ components:
             user_agent: { type: string }
             upstream_id: { type: string }
             request_headers: { type: object, additionalProperties: { type: string } }
-            request_body: { type: string }
+            request_body: { type: string, description: "Always filled in: the body is stored on the first row of a retry chain and read from there for the others" }
+            request_body_from: { type: integer, nullable: true, description: "The row request_body was read from, when it is not this one" }
+            chain:
+              type: array
+              description: "All rows with this request_id in attempt order (this one included); empty for a single attempt"
+              items:
+                type: object
+                properties:
+                  id: { type: integer }
+                  attempt_index: { type: integer }
+                  attempt_total: { type: integer }
+                  attempt_state: { type: string, enum: [single, final, retried] }
+                  key_id: { type: integer, nullable: true }
+                  key_name: { type: string }
+                  status: { type: integer }
+                  error: { type: string }
+                  action: { type: string, enum: [success, retry, return, cooldown, disable, verify], description: What the pool did after this attempt }
+                  ttfb_ms: { type: integer }
+                  latency_ms: { type: integer }
+                  created_at: { type: string, format: date-time, description: The list order (shared by the chain) }
+                  started_at: { type: string, format: date-time, description: When the attempt started }
+                  cost_usd: { type: number }
+            extra:
+              type: object
+              nullable: true
+              additionalProperties: true
+              description: "Endpoint-specific details: the WebSocket session stats, or stream_error for a stream that answered 200 and then failed in-stream (code, type, message, client_status = the status the client saw; estimated_cost_ticks and estimated_prompt_tokens when it was not billed; after_content = true when content had been sent and was billed)"
             response_headers: { type: object, additionalProperties: { type: string } }
             response_body: { type: string, description: Raw body; for streams this is the raw SSE }
             response_text: { type: string, description: For streams, the assembled assistant text }
@@ -1037,6 +1070,7 @@ components:
                 logged_messages: { type: integer }
             upstream_attempts:
               type: array
+              description: "Nested attempts of rows written before v0.6.0 and of WebSocket sessions (their dial attempts); empty for newer rows, whose attempts are rows of their own (see chain)"
               items:
                 type: object
                 properties:
