@@ -157,6 +157,7 @@ export function eventSentence(e) {
     }
     case 'system.compact': return d.error ? t('ev.s.compactFail') : t('ev.s.compact', { f: fmtBytes(res.freed_bytes || 0) });
     case 'system.start': return t('ev.s.start', { v: d.version || '—', s: d.schema_version ?? '—' });
+    case 'system.stop': return t('ev.s.stop', { v: d.version || '—' });
     case 'system.migrate': return t('ev.s.migrate', { a: d.from_version ?? '—', b: d.to_version ?? '—' });
     case 'auth.login': return t('ev.s.login');
     case 'auth.login_failed': {
