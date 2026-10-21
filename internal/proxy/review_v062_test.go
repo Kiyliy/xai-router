@@ -164,3 +164,76 @@ func TestStreamOutcomeReportedOnce(t *testing.T) {
 		}
 	})
 }
+
+// A usage-only chat chunk that also carries an error is not dropped when
+// the client did not ask for usage: the client gets the error without the
+// usage, as it gets any other in-stream error. Logging and billing still
+// use the usage.
+func TestStrippedUsageChunkKeepsError(t *testing.T) {
+	ev := `data: {"id":"c1","model":"grok-4.5","choices":[],"error":{"message":"` + capacityMsg +
+		`","type":"server_error","code":"resource-exhausted"},"usage":{"prompt_tokens":100,"completion_tokens":0,"total_tokens":100,"cost_in_usd_ticks":9000}}` + "\n\n"
+	for _, c := range []struct {
+		name   string
+		events []string
+	}{
+		{"before content", []string{ev, doneEvent}},
+		{"after content", []string{`data: {"id":"c1","choices":[{"delta":{"content":"Hi"}}]}` + "\n\n", ev, doneEvent}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			hs := newHarness(t, nil)
+			keyedUps(hs, sseReply(c.events...), sseReply(chatStream))
+			resp, b := hs.do(http.MethodPost, "/v1/chat/completions",
+				`{"model":"grok-4.5","stream":true,"stream_options":{"include_usage":false},"messages":[]}`)
+			if resp.StatusCode != 200 || !strings.Contains(b, capacityMsg) || !strings.Contains(b, `"code":"resource-exhausted"`) ||
+				strings.Contains(b, `"usage"`) || !strings.HasSuffix(b, doneEvent) {
+				t.Fatalf("client got %d %q", resp.StatusCode, b)
+			}
+			l := hs.lastLog(1)
+			checkStreamFailed(t, hs, l, capacityMsg)
+			if l.CostTicks != 9000 || l.CostSource != "upstream" || l.PromptTokens != 100 {
+				t.Fatalf("billing: cost %d source %s prompt %d", l.CostTicks, l.CostSource, l.PromptTokens)
+			}
+		})
+	}
+}
+
+// Usage is stripped only from chat streams: on the Responses and Messages
+// APIs an error event that carries usage reaches the client unchanged.
+func TestErrorWithUsageUnchangedOnOtherAPIs(t *testing.T) {
+	failed := "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_e\",\"status\":\"failed\"," +
+		"\"error\":{\"code\":\"resource-exhausted\",\"message\":\"" + capacityMsg + "\"},\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n"
+	for _, c := range []struct {
+		name, path, body, event string
+		lead                    []string
+	}{
+		{"responses", "/v1/responses", `{"model":"grok-4.5","stream":true,"input":"hi"}`, failed, []string{respCreated}},
+		{"messages", "/v1/messages", `{"model":"grok-4.5","stream":true,"max_tokens":10}`, msgErrEvent, []string{msgStart}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			hs := newHarness(t, nil)
+			keyedUps(hs, sseReply(append(c.lead, c.event)...))
+			resp, b := hs.do(http.MethodPost, c.path, c.body)
+			if resp.StatusCode != 200 || !strings.Contains(b, c.event) {
+				t.Fatalf("client got %d %q", resp.StatusCode, b)
+			}
+		})
+	}
+}
+
+func TestStripUsageChunk(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{`data: {"id":"c","choices":[],"usage":{"prompt_tokens":1}}` + "\n\n", ""},
+		{`data: {"id":"c","choices":[{"delta":{}}],"usage":{"prompt_tokens":1}}` + "\n\n",
+			`data: {"id":"c","choices":[{"delta":{}}],"usage":{"prompt_tokens":1}}` + "\n\n"},
+		{`data: {"choices":[],"error":{"message":"boom"},"usage":{"prompt_tokens":1}}` + "\r\n\r\n",
+			`data: {"choices":[],"error":{"message":"boom"}}` + "\n\n"},
+		{"event: chunk\n" + `data: {"choices":[],"code":"internal","error":"boom","usage":{"prompt_tokens":1}}` + "\n\n",
+			"event: chunk\n" + `data: {"choices":[],"code":"internal","error":"boom"}` + "\n\n"},
+		{`data: {"choices":[],"error":null,"usage":{"prompt_tokens":1}}` + "\n\n", ""},
+		{"data: [DONE]\n\n", "data: [DONE]\n\n"},
+	} {
+		if got := string(stripUsageChunk([]byte(c.in))); got != c.want {
+			t.Errorf("%q: got %q want %q", c.in, got, c.want)
+		}
+	}
+}

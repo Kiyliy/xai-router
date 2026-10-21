@@ -223,7 +223,9 @@ func (f *messagesFixer) fixBlock(block []byte) []byte {
 // for usage so the stream can be billed, but such a client must not see a
 // chunk it did not ask for (some clients index choices[0]). Usage carried
 // inside a content chunk is left in place; clients ignore the extra field.
-// Like messagesFixer it works on whole events and buffers at most one.
+// A usage-only chunk that also carries an error is forwarded without its
+// usage: the client must still see the error, as it sees any other
+// in-stream error. Like messagesFixer it works on whole events and buffers at most one.
 type usageStripper struct {
 	buf []byte
 }
@@ -240,9 +242,7 @@ func (u *usageStripper) Feed(b []byte) []byte {
 		if end < 0 {
 			break
 		}
-		if block := u.buf[:end+sep]; !usageOnlyChunk(block) {
-			out = append(out, block...)
-		}
+		out = append(out, stripUsageChunk(u.buf[:end+sep])...)
 		u.buf = u.buf[end+sep:]
 	}
 	return out
@@ -252,31 +252,53 @@ func (u *usageStripper) Feed(b []byte) []byte {
 func (u *usageStripper) Flush() []byte {
 	out := u.buf
 	u.buf = nil
-	if usageOnlyChunk(out) {
-		return nil
-	}
-	return out
+	return stripUsageChunk(out)
 }
 
-// usageOnlyChunk reports whether an SSE event is a chat chunk with an empty
-// choices array and a usage object.
-func usageOnlyChunk(block []byte) bool {
+// stripUsageChunk returns an SSE event as the client should get it: nil
+// for a chat chunk with an empty choices array and a usage object, the
+// same chunk without its usage when it also carries an error, and any other
+// event unchanged.
+func stripUsageChunk(block []byte) []byte {
 	var data []byte
+	var other [][]byte // the event's lines other than data
 	for _, line := range bytes.Split(block, []byte("\n")) {
 		line = bytes.TrimRight(line, "\r")
 		if v, ok := bytes.CutPrefix(line, []byte("data:")); ok {
 			data = append(data, bytes.TrimPrefix(v, []byte(" "))...)
+		} else if len(line) > 0 {
+			other = append(other, line)
 		}
 	}
 	if len(data) == 0 || data[0] != '{' {
-		return false
+		return block
 	}
 	var ev struct {
 		Choices *[]json.RawMessage `json:"choices"`
 		Usage   json.RawMessage    `json:"usage"`
+		Error   json.RawMessage    `json:"error"`
 	}
 	if json.Unmarshal(data, &ev) != nil {
-		return false
+		return block
 	}
-	return ev.Choices != nil && len(*ev.Choices) == 0 && len(ev.Usage) > 0 && string(ev.Usage) != "null"
+	if ev.Choices == nil || len(*ev.Choices) != 0 || len(ev.Usage) == 0 || string(ev.Usage) == "null" {
+		return block
+	}
+	if len(ev.Error) == 0 || string(ev.Error) == "null" {
+		return nil
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(data, &fields) != nil {
+		return block
+	}
+	delete(fields, "usage")
+	kept, err := json.Marshal(fields)
+	if err != nil {
+		return block
+	}
+	var out []byte
+	for _, line := range other {
+		out = append(append(out, line...), '\n')
+	}
+	return append(append(append(out, "data: "...), kept...), "\n\n"...)
 }
