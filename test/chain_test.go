@@ -82,6 +82,37 @@ func TestRetryChainsReconcile(t *testing.T) {
 		}
 	})
 
+	t.Run("all attempts failed with a reported cost", func(t *testing.T) {
+		// Review v0.6.2 A1: the final attempt's cost is billed on the final
+		// row, once, like the retried attempt's on its own row.
+		e := newEnv(t, "xai-a-500cost", "xai-b-500cost")
+		resp, _ := e.send(e.client, `{"model":"grok-build-0.1","messages":[]}`, nil)
+		if resp.StatusCode != 500 {
+			t.Fatal(resp.Status)
+		}
+		rows := check(t, e, 2, 0, 2)
+		for i, r := range rows {
+			if ticks(r.CostUSD) != 1230000 || r.CostSource != "upstream" {
+				t.Fatalf("row %d: %+v", i, r)
+			}
+		}
+		if rows[0].AttemptState != "final" || rows[1].AttemptState != "retried" {
+			t.Fatalf("rows: %+v", rows)
+		}
+		if kc := keyCosts(e); kc["k1"] != 1230000 || kc["k2"] != 1230000 {
+			t.Fatalf("key costs: %v", kc)
+		}
+		var tp struct {
+			Data []struct {
+				UsedUSD float64 `json:"used_usd"`
+			}
+		}
+		e.api("GET", "/api/v1/tokens?page_size=200", nil, 200, &tp)
+		if len(tp.Data) != 1 || ticks(tp.Data[0].UsedUSD) != 2460000 {
+			t.Fatalf("token used: %+v, want 2460000 ticks", tp.Data)
+		}
+	})
+
 	t.Run("error after partial content", func(t *testing.T) {
 		e := newEnv(t, "xai-a-partialerr", "xai-b-ok")
 		b := e.proxy("POST", "/v1/chat/completions", stream, 200, nil)

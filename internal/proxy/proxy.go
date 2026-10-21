@@ -300,7 +300,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case lastErr != nil:
 		if n := len(st.attempts); n > 0 {
 			st.log.KeyID, st.log.KeyName = st.attempts[n-1].KeyID, st.attempts[n-1].KeyName
+			// The last attempt is the final row: a cost it reported is
+			// billed there (below), not as a retried attempt.
+			st.attempts[n-1].CostTicks = 0
 		}
+		st.billUpstreamError(lastErr)
 		st.writeUpstreamError(w, lastErr)
 	case busy > 0:
 		st.fail(w, errf(http.StatusTooManyRequests, "upstream_keys_busy",
@@ -313,7 +317,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // keepAttempt keeps what a failed attempt answered for its own log row (it
 // becomes a "retried" row when another attempt follows): the status it
 // stands for, the response headers and body, and a cost the upstream may
-// have reported in the error.
+// have reported in the error. Only the cost is kept: a retried row the
+// upstream billed shows cost source "upstream" with no tokens or price
+// snapshot behind it (store.Attempt has no usage fields). The final row is
+// billed from the full usage instead (billUpstreamError).
 func (st *state) keepAttempt(ue *upstreamError) {
 	n := len(st.attempts)
 	if ue == nil || n == 0 {
@@ -335,6 +342,19 @@ func (st *state) keepAttempt(ue *upstreamError) {
 		body = errorJSON("upstream_error", ue.err) // what the client would have been sent
 	}
 	a.RespBody, _ = reqlog.SanitizeBody(body, st.s.LogResponseBodyMaxBytes())
+}
+
+// billUpstreamError bills the final failed attempt with the usage the
+// upstream reported in its error response, when that usage carries a cost:
+// the upstream billed the attempt, so it is charged (once, on the final
+// row, with cost source "upstream"). An error without a cost stays free.
+func (st *state) billUpstreamError(ue *upstreamError) {
+	if ue == nil {
+		return
+	}
+	if u, _ := billing.ParseBody(ue.body); u.HasCost && u.CostTicks > 0 {
+		st.applyUsage(u)
+	}
 }
 
 // upstreamError is a failed attempt whose response may be returned to the
@@ -442,15 +462,20 @@ func (st *state) attempt(w http.ResponseWriter, r *http.Request, lease *pool.Lea
 		st.log.KeyID, st.log.KeyName = k.ID, k.Name
 		ue := &upstreamError{status: resp.StatusCode, header: resp.Header, body: errBody, err: v.Reason}
 		if !v.Retry {
+			st.billUpstreamError(ue)
 			st.writeUpstreamError(w, ue)
 			return true, nil
 		}
 		return false, ue
 	}
 
-	st.h.Pool.Report(k.ID, pool.Outcome{Status: resp.StatusCode})
-	st.log.KeyID, st.log.KeyName = k.ID, k.Name
 	isSSE := strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
+	if !isSSE || !estimatedPaths[st.log.Path] {
+		// A token-billed stream reports its own outcome (see streamBody):
+		// its 200 is not a success until content or a clean end arrives.
+		st.h.Pool.Report(k.ID, pool.Outcome{Status: resp.StatusCode})
+	}
+	st.log.KeyID, st.log.KeyName = k.ID, k.Name
 	st.log.RespHeaders = reqlog.HeadersJSON(resp.Header)
 	st.log.Status = resp.StatusCode
 	if isSSE {
@@ -559,7 +584,16 @@ var clientGoneDrain = 60 * time.Second
 // (the whole model is short of capacity, not the key); the key's own rate
 // limit does. Once anything
 // was sent, the error event is passed through and the request is logged as
-// failed (see streamErrorLogStatus).
+// failed (see streamErrorLogStatus). So is an error that arrives with usage
+// carrying a cost before any content: the upstream billed that attempt, so
+// it is never failed over (a billed attempt is not retried).
+//
+// A token-billed stream tells the pool its outcome itself: success once
+// content arrives or the stream ends cleanly, else only the classified
+// in-stream error. Reporting the 200 headers as a success first would reset
+// the key's failure count, breaker and cooldown before every in-stream
+// error, and the breaker would never open for a key whose streams keep
+// failing that way.
 func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.CancelCauseFunc, w http.ResponseWriter,
 	resp *http.Response, keyID int64, canRetry bool) streamResult {
 	s := st.s
@@ -672,7 +706,17 @@ func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.Cance
 		strip = &usageStripper{}
 	}
 	var res streamResult
-	reported := false
+	reported, succeeded := false, false
+	// reportSuccess tells the pool the attempt succeeded, once, unless its
+	// in-stream error was reported (token-billed streams only; the others
+	// were reported with their headers).
+	reportSuccess := func() {
+		if !tokenStream || reported || succeeded {
+			return
+		}
+		succeeded = true
+		st.h.Pool.Report(keyID, pool.Outcome{Status: resp.StatusCode})
+	}
 	// report tells the pool about the in-stream error as if the upstream
 	// had answered it with the matching HTTP status (cooldown, breaker).
 	report := func() pool.Verdict {
@@ -695,7 +739,10 @@ func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.Cance
 		case ss.Err != nil && !ss.Output:
 			v := report()
 			res.action = v.Action
-			if v.Retry && canRetry {
+			// Usage with a cost came with the error: the upstream billed
+			// the attempt, which is then final, like an error after content.
+			billed := ss.Usage.HasCost && ss.Usage.CostTicks > 0
+			if v.Retry && canRetry && !billed {
 				wmu.Lock()
 				if !committed {
 					finished = true // the hold timer must not commit any more
@@ -748,6 +795,9 @@ func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.Cance
 			if tokenStream && decide() {
 				return res // retried on the next key; nothing reached the client
 			}
+			if ss.Output {
+				reportSuccess() // content arrived: an error after it is reported too
+			}
 		}
 		if err != nil {
 			if fixer != nil {
@@ -786,10 +836,15 @@ func (st *state) streamBody(ctx, clientCtx context.Context, cancel context.Cance
 		}
 	}
 	streamFailed := tokenStream && ss.Err != nil
+	switch {
+	case streamFailed && !reported:
+		res.action = report().Action
+	case !streamFailed && (errMsg == "" || ss.Output):
+		// Ended cleanly (or after content): the attempt succeeded. A stream
+		// cut short before any content reports nothing either way.
+		reportSuccess()
+	}
 	if streamFailed {
-		if !reported {
-			res.action = report().Action
-		}
 		// The client saw 200 and then the error event; the log records the
 		// request as failed so it counts in failure stats and filters.
 		msg := fmt.Sprintf("upstream error in stream (HTTP %d sent): %s", resp.StatusCode, ss.Err)
