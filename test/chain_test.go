@@ -237,4 +237,24 @@ func TestChainContiguousWithEvents(t *testing.T) {
 	if want := "attempt3 attempt2 attempt1 key.cooldown"; strings.Join(got, " ") != want {
 		t.Fatalf("cursor order %v, want %s", got, want)
 	}
+	// Final results only: the retried rows go, every event stays (pm-spec
+	// 10.9 #3, review B-L6).
+	var fin struct{ Data []row }
+	e.api("GET", "/api/v1/logs?type=request,system&attempts=final&page_size=50", nil, 200, &fin)
+	events := func(rows []row) (n int) {
+		for _, r := range rows {
+			if r.Type != "request" {
+				n++
+			}
+		}
+		return n
+	}
+	if len(fin.Data) != len(page.Data)-2 || events(fin.Data) != events(page.Data) || events(fin.Data) == 0 {
+		t.Fatalf("attempts=final: %d rows (%d events), all: %d rows (%d events)", len(fin.Data), events(fin.Data), len(page.Data), events(page.Data))
+	}
+	for _, r := range fin.Data {
+		if r.Type == "request" && r.AttemptIndex != 3 {
+			t.Fatalf("attempts=final kept a retried row: %+v", r)
+		}
+	}
 }

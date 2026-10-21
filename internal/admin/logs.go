@@ -154,7 +154,9 @@ func (s *Server) listLogs(w http.ResponseWriter, r *http.Request) {
 	case f.TokenID != 0:
 		ef.TargetType, ef.TargetID = "token", strconv.FormatInt(f.TokenID, 10)
 	}
-	if f.Model != "" || f.Status != "" || f.Path != "" || f.FinalOnly { // request-only filters leave events out
+	// Request-only filters leave events out. attempts=final is not one: it
+	// only drops retried request rows (pm-spec 10.9 #3, review B-L6).
+	if f.Model != "" || f.Status != "" || f.Path != "" {
 		ef.Kinds = nil
 	}
 	wantEvents := len(ef.Kinds) > 0

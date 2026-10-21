@@ -514,7 +514,7 @@ paths:
         - { name: key_id, in: query, schema: { type: integer } }
         - { name: token_id, in: query, schema: { type: integer } }
         - { name: path, in: query, schema: { type: string }, description: Path prefix }
-        - { name: attempts, in: query, schema: { type: string, enum: [all, final], default: all }, description: "Requests: all = one row per upstream attempt (v0.6.0); final = only the last row of each client request (retried attempts left out; leaves events out)" }
+        - { name: attempts, in: query, schema: { type: string, enum: [all, final], default: all }, description: "Requests: all = one row per upstream attempt (v0.6.0); final = only the last row of each client request (retried attempts left out; audit and system events are unaffected)" }
         - { name: q, in: query, schema: { type: string }, description: Matches request id, upstream id or error text }
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
