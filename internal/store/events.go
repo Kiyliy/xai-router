@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 )
 
@@ -210,4 +211,15 @@ target_id, target_name, target_hint, ip, request_id, detail FROM events WHERE id
 		e.Detail = map[string]any{}
 	}
 	return &e, nil
+}
+
+// KeyDisabledBy reports whether the key was auto-disabled because of the
+// request, at or after since (unix ms): the background check of a
+// suspected dead key records the request that raised the suspicion.
+func (db *DB) KeyDisabledBy(ctx context.Context, keyID int64, requestID string, since int64) (bool, error) {
+	var n int
+	err := db.R.QueryRowContext(ctx, `SELECT COUNT(*) FROM events INDEXED BY idx_events_target
+WHERE target_type = 'key' AND target_id = ? AND created_at >= ? AND action = 'key.auto_disable' AND request_id = ?`,
+		strconv.FormatInt(keyID, 10), since, requestID).Scan(&n)
+	return n > 0, err
 }

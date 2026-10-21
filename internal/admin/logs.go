@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Kiyliy/xai-router/internal/pool"
 	"github.com/Kiyliy/xai-router/internal/store"
 )
 
@@ -325,6 +326,39 @@ func (s *Server) getLog(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	out["chain"] = chain
+	// A suspected dead key is checked in the background. The row is
+	// written as "disable" when that check finished first; when it finished
+	// later, its key.auto_disable event (which names this request) tells
+	// the same, so the detail can say "已自动禁用" (pm-spec 6.11).
+	disabled := map[int64]bool{}
+	resolve := func(action any, keyID any, since int64) any {
+		kid, _ := keyID.(int64)
+		if action != pool.ActionVerify || kid == 0 {
+			return action
+		}
+		ok, seen := disabled[kid]
+		if !seen {
+			ok, _ = s.DB.KeyDisabledBy(r.Context(), kid, l.RequestID, since)
+			disabled[kid] = ok
+		}
+		if ok {
+			return pool.ActionDisable
+		}
+		return action
+	}
+	// The check runs after the attempt started; the request id makes the
+	// match exact, the time only bounds the index scan.
+	since := l.CreatedAt - 3600_000
+	if l.StartedAt > 0 {
+		since = min(since, l.StartedAt-60_000)
+	}
+	for _, c := range chain {
+		c["action"] = resolve(c["action"], c["key_id"], since)
+	}
+	out["attempt_action"] = resolve(out["attempt_action"], out["key_id"], since)
+	for _, a := range attempts {
+		a["action"] = resolve(a["action"], a["key_id"], since)
+	}
 	if l.ReqBodyFrom != 0 && l.ReqBodyFrom != l.ID {
 		out["request_body_from"] = l.ReqBodyFrom
 	} else {
