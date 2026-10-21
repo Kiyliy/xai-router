@@ -261,3 +261,37 @@ func TestVerifyBeforeDisable(t *testing.T) {
 		t.Fatalf("auto-disable events %+v", evs)
 	}
 }
+
+// A restored key is verified again on its next suspicious error, not only
+// once a minute has passed since the last check (pm-spec 6.12).
+func TestRestoredKeyVerifiedAgain(t *testing.T) {
+	p, _ := newPool(t, &store.Key{Key: "a"}, &store.Key{Key: "b"})
+	calls := make(chan int64, 4)
+	p.Verify = func(_ context.Context, k *store.Key) (bool, string) {
+		calls <- k.ID
+		return true, "verified: invalid"
+	}
+	body := `{"error":"Incorrect API key provided"}`
+	waitDisabled := func() {
+		t.Helper()
+		select {
+		case <-calls:
+		case <-time.After(2 * time.Second):
+			t.Fatal("key not verified")
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		for !p.State(1).AutoDisabled && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if !p.State(1).AutoDisabled {
+			t.Fatalf("key not disabled: %+v", p.State(1))
+		}
+	}
+	p.Report(1, Outcome{Status: 400, Body: body, RequestID: "req-1"})
+	waitDisabled()
+	if err := p.ResetKey(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	p.Report(1, Outcome{Status: 400, Body: body, RequestID: "req-2"})
+	waitDisabled()
+}

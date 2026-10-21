@@ -586,6 +586,9 @@ func (p *Pool) ResetKey(ctx context.Context, id int64) error {
 		e.consecFails, e.breakerUntil, e.cooldownUntil = 0, time.Time{}, time.Time{}
 		e.key.AutoDisabled, e.key.StatusReason, e.key.CooldownUntil = false, "", 0
 	}
+	// A restored key is checked again on its next suspicious error, not
+	// only a minute after the last check (pm-spec 6.12).
+	delete(p.verifying, id)
 	p.mu.Unlock()
 	return p.db.SetKeyState(ctx, id, false, "", 0)
 }
