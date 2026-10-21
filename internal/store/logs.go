@@ -756,17 +756,22 @@ AND hour >= ? AND hour <= ?`, dim, id, from, to).Scan(&est)
 	if err != nil {
 		return 0, false
 	}
-	if f.FinalOnly && est > 0 {
-		// The rollups count every row; leave out the retried rows' share,
-		// counted on their small partial index.
-		var all, retried int64
-		_ = db.R.QueryRowContext(ctx, `SELECT COALESCE(SUM(requests),0) FROM stats_dim WHERE dim = 'all' AND id = ''
-AND hour >= ? AND hour <= ?`, from, to).Scan(&all)
-		_ = db.R.QueryRowContext(ctx, `SELECT COUNT(*) FROM request_logs INDEXED BY idx_logs_retried
-WHERE attempt_final = 0 AND created_at >= ? AND created_at <= ?`, from, to).Scan(&retried)
-		if all > 0 && retried > 0 {
-			est = est * max(all-retried, 0) / all
+	if f.FinalOnly && est > 0 && col != "success" {
+		// The rollups count every row. A retried row is never a success
+		// and always an error, so final-only totals are the rollup minus
+		// the retried rows, counted on their small partial index. Within
+		// one model, key or token that count would need a lookup per
+		// retried row; leave those to the bounded exact count (review
+		// v0.6.2 B-M1).
+		if dim != "all" {
+			return 0, false
 		}
+		var retried int64
+		if err := db.R.QueryRowContext(ctx, `SELECT COUNT(*) FROM request_logs INDEXED BY idx_logs_retried
+WHERE attempt_final = 0 AND created_at >= ? AND created_at <= ?`, from, to).Scan(&retried); err != nil {
+			return 0, false
+		}
+		est = max(est-retried, 0)
 	}
 	// The id range of the remaining logs bounds every estimate (logs are
 	// deleted oldest first), and is the estimate for an unfiltered list:
