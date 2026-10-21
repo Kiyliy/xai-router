@@ -763,3 +763,46 @@ func TestFailoverPastSharedKeyError(t *testing.T) {
 		t.Fatalf("attempts: %+v", l.Attempts)
 	}
 }
+
+// A suspected dead key that the background check disabled before the
+// request finished is logged as "disable", so the log can say it was
+// disabled automatically; one still being checked stays "verify"
+// (pm-spec 6.11).
+func TestVerifiedDeadKeyLoggedAsDisabled(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		dead bool
+		want string
+	}{{"disabled", true, pool.ActionDisable}, {"healthy", false, pool.ActionVerify}} {
+		t.Run(c.name, func(t *testing.T) {
+			hs := newHarness(t, nil)
+			checked := make(chan struct{})
+			hs.pool.Verify = func(context.Context, *store.Key) (bool, string) {
+				defer close(checked)
+				return c.dead, "HTTP 400: Incorrect API key provided"
+			}
+			var suspect int64
+			// The healthy key answers once the check has run (and, for a dead
+			// key, disabled it), as a slower upstream would.
+			_, keys := keyedUps(hs, jsonReply(400, `{"error":"Incorrect API key provided"}`),
+				func(w http.ResponseWriter, r *http.Request) {
+					select {
+					case <-checked:
+					case <-time.After(5 * time.Second):
+					}
+					for i := 0; c.dead && i < 200 && !hs.pool.State(suspect).AutoDisabled; i++ {
+						time.Sleep(5 * time.Millisecond)
+					}
+					jsonReply(200, chatOK)(w, r)
+				})
+			suspect = keys[0].ID
+			if resp, _ := hs.do(http.MethodPost, "/v1/chat/completions", `{"model":"grok-4.5","messages":[]}`); resp.StatusCode != 200 {
+				t.Fatal(resp.Status)
+			}
+			l := hs.lastLog(1)
+			if len(l.Attempts) != 2 || l.Attempts[0].KeyID != keys[0].ID || l.Attempts[0].Action != c.want {
+				t.Fatalf("attempts: %+v", l.Attempts)
+			}
+		})
+	}
+}

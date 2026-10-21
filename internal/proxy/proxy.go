@@ -1181,6 +1181,15 @@ func (st *state) finish(r *http.Request) {
 	l := st.log
 	l.LatencyMs = time.Since(st.start).Milliseconds()
 	l.EndAt = time.Now().UnixMilli()
+	// A suspected dead key is verified in the background, usually within
+	// a few hundred ms: if that has already disabled it, record what
+	// happened so the log can say "已自动禁用" (pm-spec 6.11). A
+	// verification still running leaves "verify", which says nothing.
+	for i := range st.attempts {
+		if a := &st.attempts[i]; a.Action == pool.ActionVerify && a.KeyID != 0 && st.h.Pool.State(a.KeyID).AutoDisabled {
+			a.Action = pool.ActionDisable
+		}
+	}
 	l.Attempts = st.attempts
 	if l.CostSource == "" {
 		l.CostSource = "none"
