@@ -99,6 +99,31 @@ func TestStreamErrorWithCostNotRetried(t *testing.T) {
 	}
 }
 
+// The Responses version of A2 (QA re-check of v0.6.3, N1): a response.failed
+// before any output whose usage carries the upstream's cost is the final
+// row and is billed that cost, not $0.
+func TestResponsesFailedWithCostBilled(t *testing.T) {
+	ev := "event: response.failed\ndata: " + `{"type":"response.failed","response":{"id":"r1","model":"grok-4.5","status":"failed",` +
+		`"error":{"code":"server_error","message":"` + capacityMsg + `"},` +
+		`"usage":{"input_tokens":100,"output_tokens":0,"total_tokens":100,"cost_in_usd_ticks":9000}}}` + "\n\n"
+	hs := newHarness(t, nil)
+	ups, keys := keyedUps(hs, sseReply(ev), sseReply(chatStream))
+	resp, b := hs.do(http.MethodPost, "/v1/responses", `{"model":"grok-4.5","stream":true,"input":"hi"}`)
+	if resp.StatusCode != 200 || !strings.Contains(b, "response.failed") {
+		t.Fatalf("client got %d %q", resp.StatusCode, b)
+	}
+	if n := len(ups[1].requests()); n != 0 {
+		t.Fatalf("a billed attempt was failed over (%d requests to the next key)", n)
+	}
+	l := hs.lastLog(1)
+	if len(l.Attempts) != 1 || l.KeyID != keys[0].ID || l.CostTicks != 9000 || l.CostSource != "upstream" || l.PromptTokens != 100 {
+		t.Fatalf("log: attempts %d key %d status %d cost %d source %s prompt %d", len(l.Attempts), l.KeyID, l.Status, l.CostTicks, l.CostSource, l.PromptTokens)
+	}
+	if used := tokenUsed(t, hs); used != 9000 {
+		t.Fatalf("token used %d, want 9000", used)
+	}
+}
+
 // A3: a key whose streams answer 200 and then fail with a 5xx-class
 // in-stream error opens its breaker after BreakerThreshold attempts, as the
 // same error answered as an HTTP 500 does. The 200 headers no longer count

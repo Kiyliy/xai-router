@@ -433,8 +433,10 @@ func (s *StreamState) AddEvent(eventName string, data []byte) {
 				s.Usage.Merge(u)
 				// Only a completed (or incomplete: output limit reached)
 				// response closes the stream's billing; usage on any other
-				// event (e.g. response.failed) is completed with an estimate.
-				if typ == "response.completed" || typ == "response.incomplete" || typ == "response.done" {
+				// event (e.g. response.failed) is completed with an estimate,
+				// unless it carries the upstream's own cost, which is what
+				// it billed (review v0.6.3 N1).
+				if typ == "response.completed" || typ == "response.incomplete" || typ == "response.done" || u.HasCost {
 					s.Final = true
 				}
 			}
